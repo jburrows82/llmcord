@@ -27,6 +27,12 @@ permissions:
 # Make sure to enable the "YouTube Data API v3" for your project.
 youtube_api_key: 
 
+# Reddit API settings:
+# Create a 'script' app on Reddit: https://www.reddit.com/prefs/apps
+reddit_client_id: 
+reddit_client_secret: 
+reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
+
 # LLM settings:
 
 providers:

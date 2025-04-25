@@ -50,6 +50,13 @@ Or run a local model with:
 - Handles multiple YouTube URLs within the same message.
 - **Requires a YouTube Data API v3 key** configured in `config.yaml`.
 
+### Reddit Content Extraction
+- Include Reddit submission URLs directly in your query (e.g., `https://www.reddit.com/r/.../comments/.../`).
+- The bot automatically extracts the submission's **title**, **self-text** (if any), and up to **10 top-level comments** using `asyncpraw`.
+- This extracted information is appended to your original query before being sent to the LLM, providing context for summarization, analysis, or question-answering based on the Reddit post.
+- Handles multiple Reddit URLs within the same message concurrently.
+- **Requires Reddit API credentials** (client ID, client secret, user agent) configured in `config.yaml`. You can obtain these by creating a 'script' app on Reddit's [app preferences page](https://www.reddit.com/prefs/apps).
+
 ### Gemini Grounding with Sources
 - When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
 - If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
@@ -98,6 +105,14 @@ Or run a local model with:
 
 ### LLM settings:
 
+### Reddit API settings:
+
+| Setting | Description |
+| --- | --- |
+| **reddit_client_id** | **Required for Reddit URL processing.** Your Reddit script app's client ID. |
+| **reddit_client_secret** | **Required for Reddit URL processing.** Your Reddit script app's client secret. |
+| **reddit_user_agent** | **Required for Reddit URL processing.** A unique user agent string (e.g., `discord:my-llm-bot:v1.0 (by u/your_reddit_username)`). |
+
 | Setting | Description |
 | --- | --- |
 | **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and optional `api_key`. For Google Gemini, just provide the `api_key`. Popular providers (`openai`, `google`, `ollama`, etc.) are already included.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.** |
@@ -109,7 +124,7 @@ Or run a local model with:
    ```bash
    python -m pip install -U -r requirements.txt
    ```
-   *(Note: This now includes `youtube-transcript-api` and `google-api-python-client`)*
+   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, and `asyncpraw`)*
 
 4. Run the bot:
 
@@ -132,6 +147,8 @@ Or run a local model with:
 - Gemini safety settings are currently hardcoded to `BLOCK_NONE` for all categories.
 
 - YouTube Data API has usage quotas. Fetching details and comments for many videos may consume your quota quickly. Check the [Google Cloud Console](https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas) for details.
+
+- Reddit API also has rate limits. Processing many Reddit URLs quickly might lead to temporary throttling.
 
 - PRs are welcome :)
 

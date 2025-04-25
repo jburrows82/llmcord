@@ -8,6 +8,7 @@ import io
 import re
 import urllib.parse
 
+import asyncpraw
 import discord
 from discord import ui
 import httpx
@@ -17,6 +18,7 @@ from google import genai as google_genai
 from google.genai import types as google_types
 from googleapiclient.discovery import build as build_google_api_client
 from googleapiclient.errors import HttpError
+from asyncprawcore.exceptions import NotFound, Redirect
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 import yaml
 
@@ -51,6 +53,9 @@ MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
 # YouTube URL regex
 YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))')
 
+# Reddit URL regex (captures submission ID)
+REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/([a-zA-Z0-9]+))')
+
 ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
 
 def get_config(filename="config.yaml"):
@@ -60,6 +65,9 @@ def get_config(filename="config.yaml"):
 
 cfg = get_config()
 youtube_api_key = cfg.get("youtube_api_key")
+reddit_client_id = cfg.get("reddit_client_id")
+reddit_client_secret = cfg.get("reddit_client_secret")
+reddit_user_agent = cfg.get("reddit_user_agent")
 
 if client_id := cfg["client_id"]:
     logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
@@ -174,6 +182,11 @@ def extract_youtube_urls(text: str) -> List[str]:
     """Extracts YouTube video URLs from text."""
     return [match[0] for match in YOUTUBE_URL_PATTERN.findall(text)]
 
+def extract_reddit_urls(text: str) -> List[Tuple[str, str]]:
+    """Extracts Reddit submission URLs and their IDs from text."""
+    # Returns list of tuples: (full_url, submission_id)
+    return [(match[0], match[1]) for match in REDDIT_URL_PATTERN.findall(text)]
+
 def extract_video_id(url: str) -> Optional[str]:
     """Extracts the video ID from a YouTube URL."""
     match = YOUTUBE_URL_PATTERN.search(url)
@@ -257,6 +270,78 @@ async def get_youtube_video_details(video_id: str, api_key: str) -> Tuple[Option
         logging.exception(f"Unexpected error fetching YouTube details for {video_id}")
         return None, f"An unexpected error occurred: {e}"
 
+async def get_reddit_content(urls_with_ids: List[Tuple[str, str]], client_id: str, client_secret: str, user_agent: str) -> Tuple[str, List[str]]:
+    """Fetches content from multiple Reddit submission URLs concurrently."""
+    if not all([client_id, client_secret, user_agent]):
+        return "", ["Reddit API credentials not configured."]
+
+    content_parts = []
+    errors = []
+
+    # Initialize asyncpraw.Reddit instance
+    # Using read_only=True as we only need to fetch data
+    reddit = asyncpraw.Reddit(
+        client_id=client_id,
+        client_secret=client_secret,
+        user_agent=user_agent,
+        read_only=True, # Set to True for read-only operations
+    )
+
+    async def fetch_single_submission(url: str, submission_id: str, index: int):
+        nonlocal content_parts, errors
+        try:
+            # Use await for asyncpraw methods
+            submission = await reddit.submission(id=submission_id) # No need for fetch=True, load() handles it
+            await submission.load() # Ensure submission data and comments are loaded
+
+            title = submission.title
+            selftext = submission.selftext
+
+            # Fetch top comments (limit to 10 for brevity)
+            top_comments_text = []
+            comment_limit = 10
+            # Ensure comments are loaded before iterating
+            await submission.comments.replace_more(limit=0) # Load top-level comments only
+
+            # Iterate through the loaded comments
+            comment_count = 0
+            for top_level_comment in submission.comments.list():
+                 if comment_count >= comment_limit:
+                     break
+                 # Check if comment body exists and is not deleted/removed
+                 if hasattr(top_level_comment, 'body') and top_level_comment.body and top_level_comment.body not in ('[deleted]', '[removed]'):
+                     # Limit comment length and replace newlines for cleaner output
+                     comment_body_cleaned = top_level_comment.body.replace('\n', ' ').replace('\r', '')
+                     top_comments_text.append(f"    - {comment_body_cleaned[:150]}...")
+                     comment_count += 1
+
+
+            content_str = f"\nreddit url {index+1}: {url}\n"
+            content_str += f"reddit url {index+1} content:\n"
+            content_str += f"  title: {title}\n"
+            if selftext:
+                content_str += f"  content: {selftext[:1000]}...\n" # Limit selftext length
+            if top_comments_text:
+                content_str += f"  top comments:\n" + "\n".join(top_comments_text) + "\n"
+            content_parts.append((index, content_str)) # Store index for sorting
+        except (NotFound, Redirect):
+            errors.append(f"Reddit submission not found or invalid URL {index+1}: {url}")
+        except Exception as e:
+            logging.exception(f"Error fetching Reddit content for {url}")
+            errors.append(f"Error fetching Reddit URL {index+1}: {type(e).__name__}")
+
+    tasks = [fetch_single_submission(url, sub_id, i) for i, (url, sub_id) in enumerate(urls_with_ids)]
+    await asyncio.gather(*tasks)
+
+    # Close the Reddit session when done
+    await reddit.close()
+
+    # Sort content parts by index to maintain order
+    content_parts.sort(key=lambda x: x[0])
+
+    return "".join([part[1] for part in content_parts]), errors
+
+
 @discord_client.event
 async def on_message(new_msg):
     global msg_nodes, last_task_time
@@ -292,7 +377,10 @@ async def on_message(new_msg):
     provider_slash_model = cfg["model"]
     provider, model = provider_slash_model.split("/", 1)
     global youtube_api_key # Use the global key loaded earlier
+    global reddit_client_id, reddit_client_secret, reddit_user_agent # Use global Reddit creds
     base_url = cfg["providers"][provider].get("base_url") # May be None for google
+    # Reload API key in case config changed
+    youtube_api_key = cfg.get("youtube_api_key")
     api_key = cfg["providers"][provider].get("api_key")
 
     is_gemini = provider == "google"
@@ -328,7 +416,9 @@ async def on_message(new_msg):
     # --- YouTube URL Processing ---
     youtube_urls = extract_youtube_urls(new_msg.content)
     youtube_content_to_append = ""
+    youtube_data_tasks = []
     youtube_fetch_errors = []
+    user_warnings = set() # Initialize user_warnings here
 
     if youtube_urls:
         youtube_data_tasks = []
@@ -367,9 +457,25 @@ async def on_message(new_msg):
 
         youtube_data_tasks = [fetch_and_format_youtube_data(url, i) for i, url in enumerate(unique_urls)]
 
+    # --- Reddit URL Processing ---
+    reddit_urls_with_ids = extract_reddit_urls(new_msg.content)
+    reddit_content_to_append = ""
+    reddit_data_task = None
+    reddit_fetch_errors = []
+
+    if reddit_urls_with_ids:
+        # Reload Reddit creds in case config changed
+        reddit_client_id = cfg.get("reddit_client_id")
+        reddit_client_secret = cfg.get("reddit_client_secret")
+        reddit_user_agent = cfg.get("reddit_user_agent")
+        if not all([reddit_client_id, reddit_client_secret, reddit_user_agent]):
+            user_warnings.add("⚠️ Reddit API credentials not configured")
+        else:
+            reddit_data_task = asyncio.create_task(get_reddit_content(reddit_urls_with_ids, reddit_client_id, reddit_client_secret, reddit_user_agent))
+
     # Build message chain and set user warnings
     history = [] # Renamed from messages to avoid confusion with discord.Message
-    user_warnings = set()
+    # user_warnings = set() # Moved initialization up
     curr_msg = new_msg
 
     while curr_msg != None and len(history) < max_messages:
@@ -467,7 +573,7 @@ async def on_message(new_msg):
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(history)}):\n{new_msg.content}")
 
-    # --- Await YouTube data fetching and format ---
+    # --- Await External Content Fetching and Format ---
     if youtube_urls:
         youtube_results = await asyncio.gather(*youtube_data_tasks)
         formatted_youtube_content = []
@@ -478,10 +584,20 @@ async def on_message(new_msg):
                 youtube_fetch_errors.extend(errors)
 
         if formatted_youtube_content:
-            youtube_content_to_append = "Answer the user's query based on the following:\n" + "".join(formatted_youtube_content)
+            youtube_content_to_append = "".join(formatted_youtube_content) # Append later with header
 
         if youtube_fetch_errors:
             user_warnings.add(f"⚠️ Could not fetch all YouTube data ({len(youtube_fetch_errors)} errors)")
+
+    if reddit_data_task:
+        reddit_content_to_append, reddit_fetch_errors = await reddit_data_task
+        if reddit_fetch_errors:
+            user_warnings.add(f"⚠️ Could not fetch all Reddit data ({len(reddit_fetch_errors)} errors)")
+
+    # Combine external content
+    context_to_append = ""
+    if youtube_content_to_append or reddit_content_to_append:
+        context_to_append = "Answer the user's query based on the following:\n" + youtube_content_to_append + reddit_content_to_append
 
     # Prepare API call arguments
     system_prompt_text = None
@@ -496,18 +612,18 @@ async def on_message(new_msg):
     api_config = None # Initialize config object
     api_content_kwargs = {}
 
-    # --- Prepend YouTube content to the history/query ---
+    # --- Prepend YouTube/Reddit content to the history/query ---
     # We'll prepend it as a separate user message before the actual user query
     # This keeps the structure clean and aligns with the example format.
     history_for_llm = history[::-1] # Reverse history for correct order
 
-    if youtube_content_to_append:
+    if context_to_append:
         # Modify the *first* user message in the reversed history to include the context
         # Or, if the history starts with assistant, insert a new user message
-        if history_for_llm and history_for_llm[0]['role'] == ('user' if not is_gemini else 'user'):
+        if history_for_llm and history_for_llm[0].get('role') == ('user' if not is_gemini else 'user'):
              # Prepend to the text part of the first user message
              first_user_msg_content = history_for_llm[0].get('content', '') if not is_gemini else history_for_llm[0].get('parts', [])
-             prepended_content = youtube_content_to_append + "\n\nUser's query:\n"
+             prepended_content = context_to_append + "\n\nUser's query:\n" # Use combined context
              if isinstance(first_user_msg_content, str): # OpenAI string content
                  history_for_llm[0]['content'] = prepended_content + first_user_msg_content
              elif isinstance(first_user_msg_content, list): # OpenAI/Gemini list content
@@ -535,9 +651,9 @@ async def on_message(new_msg):
             # If history is empty or starts with assistant, insert a new user message
             new_user_message_role = 'user' if not is_gemini else 'user'
             if is_gemini:
-                 history_for_llm.insert(0, google_types.Content(role=new_user_message_role, parts=[google_types.Part.from_text(text=youtube_content_to_append)]))
+                 history_for_llm.insert(0, {'role': new_user_message_role, 'parts': [google_types.Part.from_text(text=context_to_append)]}) # Use combined context
             else:
-                 history_for_llm.insert(0, {'role': new_user_message_role, 'content': youtube_content_to_append})
+                 history_for_llm.insert(0, {'role': new_user_message_role, 'content': context_to_append}) # Use combined context
 
     if is_gemini:
         # Convert potentially modified history to Gemini format
