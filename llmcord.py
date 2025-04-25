@@ -3,15 +3,21 @@ from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime as dt
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict, Any, Tuple
 import io
+import re
+import urllib.parse
 
 import discord
 from discord import ui
 import httpx
 from openai import AsyncOpenAI
 from google import genai as google_genai
+# Corrected import: removed generative_models
 from google.genai import types as google_types
+from googleapiclient.discovery import build as build_google_api_client
+from googleapiclient.errors import HttpError
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 import yaml
 
 logging.basicConfig(
@@ -42,6 +48,10 @@ MAX_EMBED_FIELDS = 25
 # Define Discord's embed description limit (leaving space for indicator)
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
 
+# YouTube URL regex
+YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))')
+
+ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
 
 def get_config(filename="config.yaml"):
     with open(filename, "r") as file:
@@ -49,6 +59,7 @@ def get_config(filename="config.yaml"):
 
 
 cfg = get_config()
+youtube_api_key = cfg.get("youtube_api_key")
 
 if client_id := cfg["client_id"]:
     logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
@@ -159,6 +170,93 @@ class SourcesView(ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+def extract_youtube_urls(text: str) -> List[str]:
+    """Extracts YouTube video URLs from text."""
+    return [match[0] for match in YOUTUBE_URL_PATTERN.findall(text)]
+
+def extract_video_id(url: str) -> Optional[str]:
+    """Extracts the video ID from a YouTube URL."""
+    match = YOUTUBE_URL_PATTERN.search(url)
+    return match.group(2) if match else None
+
+async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Fetches the transcript for a video ID using youtube-transcript-api."""
+    try:
+        # Run synchronous library call in a separate thread
+        transcript_list = await asyncio.to_thread(ytt_api.list_transcripts, video_id)
+        # Prioritize manual transcripts, fallback to generated, prefer English
+        transcript = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(['en'])
+        except NoTranscriptFound:
+            try:
+                transcript = transcript_list.find_generated_transcript(['en'])
+            except NoTranscriptFound:
+                 # Try finding *any* transcript if English isn't available
+                 transcript = next(iter(transcript_list), None)
+
+        if transcript:
+            fetched_transcript = await asyncio.to_thread(transcript.fetch)
+            # --- FIX: Use attribute access (.text) instead of dictionary access (['text']) ---
+            full_transcript = " ".join([entry.text for entry in fetched_transcript])
+            return full_transcript, None
+        else:
+            return None, "No suitable transcript found."
+    except TranscriptsDisabled:
+        return None, "Transcripts are disabled for this video."
+    except NoTranscriptFound:
+        return None, "No transcript found for this video."
+    except Exception as e:
+        # Log the actual exception type and message for better debugging
+        logging.error(f"Error fetching transcript for {video_id}: {type(e).__name__}: {e}")
+        return None, f"An error occurred while fetching the transcript: {type(e).__name__}"
+
+
+async def get_youtube_video_details(video_id: str, api_key: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Fetches video title, description, channel name, and comments using YouTube Data API."""
+    if not api_key:
+        return None, "YouTube API key not configured."
+
+    try:
+        # Use asyncio.to_thread for the synchronous googleapiclient calls
+        youtube = await asyncio.to_thread(build_google_api_client, 'youtube', 'v3', developerKey=api_key)
+
+        # Get video details (snippet)
+        video_request = youtube.videos().list(part="snippet", id=video_id)
+        video_response = await asyncio.to_thread(video_request.execute)
+
+        if not video_response.get("items"):
+            return None, "Video not found or unavailable."
+
+        snippet = video_response["items"][0]["snippet"]
+        details = {
+            "title": snippet.get("title"),
+            "description": snippet.get("description"),
+            "channel_name": snippet.get("channelTitle"),
+        }
+
+        # Get top comments (commentThreads)
+        comment_request = youtube.commentThreads().list(part="snippet", videoId=video_id, order="relevance", maxResults=50, textFormat="plainText")
+        comment_response = await asyncio.to_thread(comment_request.execute)
+        details["comments"] = [item["snippet"]["topLevelComment"]["snippet"]["textDisplay"] for item in comment_response.get("items", [])]
+
+        return details, None
+    except HttpError as e:
+        error_reason = e.reason if hasattr(e, 'reason') else str(e)
+        logging.error(f"YouTube Data API error for {video_id}: {error_reason}")
+        if e.resp.status == 403:
+             if "quotaExceeded" in str(e):
+                 return None, "YouTube API quota exceeded."
+             else:
+                 return None, f"YouTube API permission error: {error_reason}"
+        elif e.resp.status == 404:
+            return None, "Video not found via YouTube API."
+        else:
+            return None, f"YouTube Data API HTTP error: {error_reason}"
+    except Exception as e:
+        logging.exception(f"Unexpected error fetching YouTube details for {video_id}")
+        return None, f"An unexpected error occurred: {e}"
+
 @discord_client.event
 async def on_message(new_msg):
     global msg_nodes, last_task_time
@@ -193,6 +291,7 @@ async def on_message(new_msg):
 
     provider_slash_model = cfg["model"]
     provider, model = provider_slash_model.split("/", 1)
+    global youtube_api_key # Use the global key loaded earlier
     base_url = cfg["providers"][provider].get("base_url") # May be None for google
     api_key = cfg["providers"][provider].get("api_key")
 
@@ -225,6 +324,48 @@ async def on_message(new_msg):
     # Use the Discord embed description limit for splitting logic if using embeds
     # Otherwise, use the standard message limit
     split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
+
+    # --- YouTube URL Processing ---
+    youtube_urls = extract_youtube_urls(new_msg.content)
+    youtube_content_to_append = ""
+    youtube_fetch_errors = []
+
+    if youtube_urls:
+        youtube_data_tasks = []
+        processed_urls = set()
+        unique_urls = []
+        for url in youtube_urls:
+            if url not in processed_urls:
+                unique_urls.append(url)
+                processed_urls.add(url)
+
+        async def fetch_and_format_youtube_data(url: str, index: int):
+            video_id = extract_video_id(url)
+            if not video_id:
+                return None, f"Could not extract video ID from URL {index+1}: {url}"
+
+            # Fetch transcript and details concurrently
+            transcript_task = asyncio.create_task(get_transcript(video_id))
+            details_task = asyncio.create_task(get_youtube_video_details(video_id, youtube_api_key))
+
+            transcript, transcript_error = await transcript_task
+            details, details_error = await details_task
+
+            errors = [err for err in [transcript_error, details_error] if err]
+
+            content_str = f"\nyoutube url {index+1}: {url}\n"
+            content_str += f"youtube url {index+1} content:\n"
+            if details:
+                content_str += f"  title: {details.get('title', 'N/A')}\n"
+                content_str += f"  channel: {details.get('channel_name', 'N/A')}\n"
+                content_str += f"  description: {details.get('description', 'N/A')[:500]}...\n" # Limit description length
+            if transcript:
+                content_str += f"  transcription: {transcript[:1000]}...\n" # Limit transcript length
+            if details and details.get("comments"):
+                content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}..." for c in details['comments'][:10]]) + "\n" # Limit comments
+            return content_str, errors
+
+        youtube_data_tasks = [fetch_and_format_youtube_data(url, i) for i, url in enumerate(unique_urls)]
 
     # Build message chain and set user warnings
     history = [] # Renamed from messages to avoid confusion with discord.Message
@@ -326,6 +467,22 @@ async def on_message(new_msg):
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(history)}):\n{new_msg.content}")
 
+    # --- Await YouTube data fetching and format ---
+    if youtube_urls:
+        youtube_results = await asyncio.gather(*youtube_data_tasks)
+        formatted_youtube_content = []
+        for content_str, errors in youtube_results:
+            if content_str:
+                formatted_youtube_content.append(content_str)
+            if errors:
+                youtube_fetch_errors.extend(errors)
+
+        if formatted_youtube_content:
+            youtube_content_to_append = "Answer the user's query based on the following:\n" + "".join(formatted_youtube_content)
+
+        if youtube_fetch_errors:
+            user_warnings.add(f"⚠️ Could not fetch all YouTube data ({len(youtube_fetch_errors)} errors)")
+
     # Prepare API call arguments
     system_prompt_text = None
     if system_prompt := cfg["system_prompt"]:
@@ -339,10 +496,53 @@ async def on_message(new_msg):
     api_config = None # Initialize config object
     api_content_kwargs = {}
 
+    # --- Prepend YouTube content to the history/query ---
+    # We'll prepend it as a separate user message before the actual user query
+    # This keeps the structure clean and aligns with the example format.
+    history_for_llm = history[::-1] # Reverse history for correct order
+
+    if youtube_content_to_append:
+        # Modify the *first* user message in the reversed history to include the context
+        # Or, if the history starts with assistant, insert a new user message
+        if history_for_llm and history_for_llm[0]['role'] == ('user' if not is_gemini else 'user'):
+             # Prepend to the text part of the first user message
+             first_user_msg_content = history_for_llm[0].get('content', '') if not is_gemini else history_for_llm[0].get('parts', [])
+             prepended_content = youtube_content_to_append + "\n\nUser's query:\n"
+             if isinstance(first_user_msg_content, str): # OpenAI string content
+                 history_for_llm[0]['content'] = prepended_content + first_user_msg_content
+             elif isinstance(first_user_msg_content, list): # OpenAI/Gemini list content
+                 # Find the first text part or create one
+                 text_part_found = False
+                 for part in first_user_msg_content:
+                     if isinstance(part, dict) and part.get('type') == 'text': # OpenAI text part
+                         part['text'] = prepended_content + part.get('text', '')
+                         text_part_found = True
+                         break
+                     # Corrected check using google_types.Part
+                     elif isinstance(part, google_types.Part) and hasattr(part, 'text') and part.text is not None: # Gemini text part
+                         part.text = prepended_content + part.text
+                         text_part_found = True
+                         break
+                 if not text_part_found: # If no text part exists (e.g., image-only message), insert one
+                     if is_gemini:
+                         history_for_llm[0]['parts'].insert(0, google_types.Part.from_text(text=prepended_content))
+                     else:
+                         # Ensure 'content' is a list before inserting
+                         if not isinstance(history_for_llm[0]['content'], list):
+                             history_for_llm[0]['content'] = [] # Initialize as list if it wasn't
+                         history_for_llm[0]['content'].insert(0, {'type': 'text', 'text': prepended_content})
+        else:
+            # If history is empty or starts with assistant, insert a new user message
+            new_user_message_role = 'user' if not is_gemini else 'user'
+            if is_gemini:
+                 history_for_llm.insert(0, google_types.Content(role=new_user_message_role, parts=[google_types.Part.from_text(text=youtube_content_to_append)]))
+            else:
+                 history_for_llm.insert(0, {'role': new_user_message_role, 'content': youtube_content_to_append})
+
     if is_gemini:
-        # Convert OpenAI format history to Gemini format
+        # Convert potentially modified history to Gemini format
         gemini_contents = []
-        for msg in history[::-1]: # Reverse history for Gemini
+        for msg in history_for_llm: # Use the potentially modified history
             role = msg["role"] # Already mapped user/model
             parts = msg["parts"]
             gemini_contents.append(google_types.Content(role=role, parts=parts))
@@ -373,8 +573,8 @@ async def on_message(new_msg):
              api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
 
     else:
-        # Add system prompt for OpenAI if it exists
-        openai_messages = history[::-1] # Reverse history for OpenAI
+        # Use the potentially modified history for OpenAI
+        openai_messages = history_for_llm
         if system_prompt_text:
             openai_messages.insert(0, dict(role="system", content=system_prompt_text)) # Insert system prompt at the beginning
 

@@ -43,6 +43,13 @@ Or run a local model with:
 
 ...Or use any other OpenAI compatible API server.
 
+### YouTube Content Extraction
+- Include YouTube URLs directly in your query.
+- The bot automatically extracts the video's **title**, **description**, **channel name**, **transcript** (using `youtube-transcript-api`), and up to **50 top comments** (using YouTube Data API v3).
+- This extracted information is appended to your original query before being sent to the LLM, providing rich context for summarization, analysis, or question-answering based on the video content.
+- Handles multiple YouTube URLs within the same message.
+- **Requires a YouTube Data API v3 key** configured in `config.yaml`.
+
 ### Gemini Grounding with Sources
 - When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
 - If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
@@ -55,10 +62,10 @@ Or run a local model with:
 - User identity aware (OpenAI API and xAI API only)
 - Streamed responses (turns green when complete, automatically splits into separate messages when too long)
 - Hot reloading config (you can change settings without restarting the bot)
-- Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded)
+- Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~600 lines of code
+- 1 Python file, ~700 lines of code
 
 ## Instructions
 
@@ -83,6 +90,12 @@ Or run a local model with:
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
 | **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
 
+### YouTube Data API v3 settings:
+
+| Setting | Description |
+| --- | --- |
+| **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` and do not require this key. |
+
 ### LLM settings:
 
 | Setting | Description |
@@ -96,6 +109,7 @@ Or run a local model with:
    ```bash
    python -m pip install -U -r requirements.txt
    ```
+   *(Note: This now includes `youtube-transcript-api` and `google-api-python-client`)*
 
 4. Run the bot:
 
@@ -116,6 +130,8 @@ Or run a local model with:
 - Only models from OpenAI API and xAI API are "user identity aware" because only they support the "name" parameter in the message object. Hopefully more providers support this in the future.
 
 - Gemini safety settings are currently hardcoded to `BLOCK_NONE` for all categories.
+
+- YouTube Data API has usage quotas. Fetching details and comments for many videos may consume your quota quickly. Check the [Google Cloud Console](https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas) for details.
 
 - PRs are welcome :)
 

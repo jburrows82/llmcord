@@ -22,6 +22,10 @@ permissions:
     allowed_ids: []
     blocked_ids: []
 
+# YouTube Data API v3 settings:
+# Get an API key from Google Cloud Console: https://console.cloud.google.com/apis/credentials
+# Make sure to enable the "YouTube Data API v3" for your project.
+youtube_api_key: 
 
 # LLM settings:
 
@@ -68,4 +72,4 @@ extra_api_parameters:
   # top_k: 40
 
 system_prompt: |
-  You are a helful assistant.
+  You are a helpful assistant.
