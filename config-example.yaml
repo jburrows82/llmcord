@@ -1,8 +1,8 @@
 # Discord settings:
 
-bot_token: 
-client_id: 
-status_message: 
+bot_token:
+client_id:
+status_message:
 
 max_text: 100000
 max_images: 5
@@ -25,36 +25,40 @@ permissions:
 # YouTube Data API v3 settings:
 # Get an API key from Google Cloud Console: https://console.cloud.google.com/apis/credentials
 # Make sure to enable the "YouTube Data API v3" for your project.
-youtube_api_key: 
+youtube_api_key:
 
 # Reddit API settings:
 # Create a 'script' app on Reddit: https://www.reddit.com/prefs/apps
-reddit_client_id: 
-reddit_client_secret: 
+reddit_client_id:
+reddit_client_secret:
 reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
+
+# SerpAPI settings:
+# Get an API key from SerpApi: https://serpapi.com/manage-api-key
+serpapi_api_key:
 
 # LLM settings:
 
 providers:
   openai:
     base_url: https://api.openai.com/v1
-    api_key: 
+    api_key:
   x-ai:
     base_url: https://api.x.ai/v1
-    api_key: 
+    api_key:
   google:
     # For google-genai, base_url is not used. API key is configured directly.
     # Add your Google API Key here.
-    api_key: 
+    api_key:
   mistral:
     base_url: https://api.mistral.ai/v1
-    api_key: 
+    api_key:
   groq:
     base_url: https://api.groq.com/openai/v1
-    api_key: 
+    api_key:
   openrouter:
     base_url: https://openrouter.ai/api/v1
-    api_key: 
+    api_key:
   ollama:
     base_url: http://localhost:11434/v1
   lmstudio:

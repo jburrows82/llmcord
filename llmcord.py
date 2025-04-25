@@ -7,6 +7,7 @@ from typing import Literal, Optional, List, Dict, Any, Tuple, Union
 import io
 import re # Import re module
 import urllib.parse
+import json # Import json for formatting SerpAPI results
 
 import asyncpraw
 import discord
@@ -19,6 +20,8 @@ from googleapiclient.discovery import build as build_google_api_client
 from googleapiclient.errors import HttpError
 from asyncprawcore.exceptions import NotFound, Redirect, Forbidden, RequestException as AsyncPrawRequestException
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from serpapi import GoogleSearch # Import SerpAPI client
+from serpapi.serp_api_client_exception import SerpApiClientException # Import SerpAPI exception
 import yaml
 from bs4 import BeautifulSoup # Added for general URL scraping
 
@@ -50,6 +53,7 @@ MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
 MAX_URL_CONTENT_LENGTH = 100000 # Limit for scraped web content per URL
+MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image
 
 # --- URL Regex Patterns ---
 # General URL pattern (simplified, might need refinement for edge cases)
@@ -60,6 +64,9 @@ YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=
 REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/([a-zA-Z0-9]+))')
 # Pattern to detect "at ai" as whole words, case-insensitive
 AT_AI_PATTERN = re.compile(r'\bat ai\b', re.IGNORECASE)
+# Google Lens keyword pattern (case-insensitive, requires space after)
+GOOGLE_LENS_KEYWORD = "googlelens"
+GOOGLE_LENS_PATTERN = re.compile(rf'^{GOOGLE_LENS_KEYWORD}\s+', re.IGNORECASE)
 
 # --- Initialization ---
 ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
@@ -80,6 +87,7 @@ youtube_api_key = cfg.get("youtube_api_key")
 reddit_client_id = cfg.get("reddit_client_id")
 reddit_client_secret = cfg.get("reddit_client_secret")
 reddit_user_agent = cfg.get("reddit_user_agent")
+serpapi_api_key = cfg.get("serpapi_api_key") # Load SerpAPI key
 
 if not cfg.get("bot_token"):
     logging.error("CRITICAL: bot_token is not set in config.yaml")
@@ -115,9 +123,9 @@ class MsgNode:
 @dataclass
 class UrlFetchResult:
     url: str
-    content: Optional[Union[str, Dict[str, Any]]] # str for general, dict for YT/Reddit
+    content: Optional[Union[str, Dict[str, Any]]] # str for general/lens, dict for YT/Reddit
     error: Optional[str] = None
-    type: Literal["youtube", "reddit", "general"] = "general"
+    type: Literal["youtube", "reddit", "general", "google_lens"] = "general" # Added google_lens
     original_index: int = -1 # To preserve order
 
 # --- Discord UI ---
@@ -525,11 +533,62 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
         logging.exception(f"Unexpected error fetching general URL {url}")
         return UrlFetchResult(url=url, error=f"Unexpected error: {type(e).__name__}", type="general", original_index=index)
 
+async def fetch_google_lens_data(image_url: str, index: int, api_key: str) -> UrlFetchResult:
+    """Fetches Google Lens results for a single image URL using SerpAPI."""
+    if not api_key:
+        return UrlFetchResult(url=image_url, error="SerpAPI key not configured.", type="google_lens", original_index=index)
+
+    params = {
+        "engine": "google_lens",
+        "url": image_url,
+        "api_key": api_key,
+        "safe": "off", # Optional: adjust safety filter if needed
+    }
+
+    try:
+        search = GoogleSearch(params)
+        # Run the synchronous get_dict in a separate thread
+        results = await asyncio.to_thread(search.get_dict)
+
+        # Check for top-level errors from SerpAPI
+        if "error" in results:
+            logging.warning(f"SerpAPI error for image {index+1} ({image_url[:50]}...): {results['error']}")
+            return UrlFetchResult(url=image_url, error=f"SerpAPI error: {results['error']}", type="google_lens", original_index=index)
+
+        # Extract visual matches
+        visual_matches = results.get("visual_matches", [])
+        if not visual_matches:
+            return UrlFetchResult(url=image_url, content="No visual matches found.", type="google_lens", original_index=index)
+
+        # Format the results concisely
+        formatted_results = []
+        for i, match in enumerate(visual_matches[:MAX_SERPAPI_RESULTS_DISPLAY]):
+            title = match.get("title", "N/A")
+            link = match.get("link", "#")
+            source = match.get("source", "")
+            result_line = f"- [{title}]({link})"
+            if source:
+                result_line += f" (Source: {source})"
+            formatted_results.append(result_line)
+
+        content_str = "\n".join(formatted_results)
+        if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
+            content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+
+        return UrlFetchResult(url=image_url, content=content_str, type="google_lens", original_index=index)
+
+    except SerpApiClientException as e:
+        logging.warning(f"SerpAPI client exception for image {index+1} ({image_url[:50]}...): {e}")
+        return UrlFetchResult(url=image_url, error=f"SerpAPI client error: {e}", type="google_lens", original_index=index)
+    except Exception as e:
+        logging.exception(f"Unexpected error fetching Google Lens data for image {index+1} ({image_url[:50]}...)")
+        return UrlFetchResult(url=image_url, error=f"Unexpected error: {type(e).__name__}", type="google_lens", original_index=index)
+
 
 # --- Discord Event Handler ---
 @discord_client.event
 async def on_message(new_msg):
-    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent
+    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent, serpapi_api_key
 
     # --- Basic Checks and Trigger ---
     if new_msg.author.bot:
@@ -542,18 +601,19 @@ async def on_message(new_msg):
     should_process = False
     mentions_bot = False # Initialize
     contains_at_ai = False # Initialize
+    original_content_for_processing = new_msg.content # Keep original for keyword check
 
     if is_dm:
         if allow_dms:
             should_process = True
             # Check if user explicitly mentioned bot or "at ai" in DM to start new chain
             mentions_bot = discord_client.user in new_msg.mentions
-            contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
+            contains_at_ai = AT_AI_PATTERN.search(original_content_for_processing) is not None
         else:
             return # Block DMs if not allowed
     else: # In a channel
         mentions_bot = discord_client.user in new_msg.mentions
-        contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
+        contains_at_ai = AT_AI_PATTERN.search(original_content_for_processing) is not None
         if mentions_bot or contains_at_ai:
             should_process = True
 
@@ -566,6 +626,7 @@ async def on_message(new_msg):
     reddit_client_id = cfg.get("reddit_client_id")
     reddit_client_secret = cfg.get("reddit_client_secret")
     reddit_user_agent = cfg.get("reddit_user_agent")
+    serpapi_api_key = cfg.get("serpapi_api_key") # Reload SerpAPI key
 
     # --- Permissions Check ---
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
@@ -624,12 +685,39 @@ async def on_message(new_msg):
     use_plain_responses = cfg.get("use_plain_responses", False)
     split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
 
-    # --- URL Extraction and Categorization ---
+    # --- Clean Content and Check for Google Lens ---
+    cleaned_content = original_content_for_processing # Start with the original content
+    if not is_dm and discord_client.user.mentioned_in(new_msg):
+        cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
+    cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content) # Remove "at ai"
+    cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip() # Consolidate spaces
+
+    use_google_lens = False
+    image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
+
+    if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
+        use_google_lens = True
+        # Remove the keyword itself from the content going to the LLM
+        cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
+        logging.info(f"Google Lens keyword detected for message {new_msg.id}")
+        if not serpapi_api_key:
+             logging.warning("Google Lens requested but serpapi_api_key is not configured.")
+             # Optionally add a user warning here if desired
+             # user_warnings.add("⚠️ Google Lens requested but SerpAPI key is missing.")
+
+
+    # --- URL Extraction and Task Creation ---
     user_warnings = set()
-    all_urls_with_indices = extract_urls_with_indices(new_msg.content)
+    all_urls_with_indices = extract_urls_with_indices(cleaned_content) # Use cleaned content for URL extraction now
     fetch_tasks = []
     processed_urls = set() # Avoid processing duplicates
 
+    # Add Google Lens tasks first if applicable
+    if use_google_lens and serpapi_api_key:
+        for i, attachment in enumerate(image_attachments):
+            fetch_tasks.append(fetch_google_lens_data(attachment.url, i, serpapi_api_key))
+
+    # Add other URL tasks
     for url, index in all_urls_with_indices:
         if url in processed_urls:
             continue
@@ -659,28 +747,25 @@ async def on_message(new_msg):
         async with curr_node.lock:
             # Populate node if it's empty (first time seeing this message)
             if curr_node.text is None:
-                # Get original content for cleaning
-                original_content = curr_msg.content
-                cleaned_content = original_content
+                # Use the already cleaned content for the *new* message
+                content_to_store = cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
 
-                # Clean mentions from all messages (for consistency with original logic)
+                # Further clean mentions/at ai from older messages if needed (redundant if cleaned above, but safe)
                 is_dm_current = curr_msg.channel.type == discord.ChannelType.private
                 if not is_dm_current and discord_client.user.mentioned_in(curr_msg):
-                     cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
+                     content_to_store = content_to_store.replace(discord_client.user.mention, '').strip()
+                if curr_msg.id != new_msg.id: # Only remove "at ai" from older messages if it wasn't the trigger
+                    content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
+                    content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
 
-                # Remove "at ai" ONLY from the new message that triggered the bot
-                if curr_msg.id == new_msg.id:
-                     # Replace "at ai" (case-insensitive, whole word) with a single space
-                     cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content)
-                     # Replace multiple spaces (possibly resulting from removal) with a single space
-                     cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip()
 
-                # Process attachments
-                good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
+                # Process attachments (only for the current message node being processed)
+                current_attachments = curr_msg.attachments
+                good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
                 attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
 
                 # Combine text content using the cleaned content
-                text_parts = [cleaned_content] if cleaned_content else []
+                text_parts = [content_to_store] if content_to_store else []
                 text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
                 text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
                 text_parts.extend(filter(None, (getattr(embed.footer, 'text', None) for embed in curr_msg.embeds)))
@@ -704,7 +789,8 @@ async def on_message(new_msg):
 
                 curr_node.text = "\n".join(filter(None, text_parts))
 
-                # Process image attachments
+                # Process image attachments (only store if not using Google Lens for this message, or if needed by LLM anyway)
+                # Store image data regardless, LLM might still need it even if Lens was used.
                 image_parts = []
                 for att, resp in zip(good_attachments, attachment_responses):
                     if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
@@ -719,7 +805,7 @@ async def on_message(new_msg):
                 curr_node.images = image_parts
                 curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
                 curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-                curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(curr_msg.attachments) > len(good_attachments))
+                curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
 
                 # Find parent message
                 try:
@@ -729,7 +815,7 @@ async def on_message(new_msg):
                     if curr_msg.id == new_msg.id:
                         mentions_bot_in_current = mentions_bot
                         contains_at_ai_in_current = contains_at_ai
-                    else: # Recalculate for older messages in the chain if needed (though unlikely needed here)
+                    else: # Recalculate for older messages in the chain if needed
                         mentions_bot_in_current = discord_client.user.mentioned_in(curr_msg)
                         contains_at_ai_in_current = AT_AI_PATTERN.search(curr_msg.content) is not None
 
@@ -822,7 +908,7 @@ async def on_message(new_msg):
             # Move to the parent message for the next iteration
             curr_msg = curr_node.parent_msg
 
-    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}):\n{new_msg.content}")
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}):\n{new_msg.content}")
 
     # --- Fetch External Content Concurrently ---
     url_fetch_results = []
@@ -844,53 +930,74 @@ async def on_message(new_msg):
 
 
     # --- Format External Content ---
-    context_to_append = ""
+    google_lens_context_to_append = ""
+    other_url_context_to_append = ""
+
     if url_fetch_results:
-        # Sort results by their original position in the message
+        # Sort results by their original position in the message/attachments
         url_fetch_results.sort(key=lambda r: r.original_index)
 
-        formatted_parts = []
-        url_counter = 1
+        google_lens_parts = []
+        other_url_parts = []
+        other_url_counter = 1
+
         for result in url_fetch_results:
             if result.content: # Only include successful fetches
-                content_str = f"\nurl {url_counter}: {result.url}\n"
-                content_str += f"url {url_counter} content:\n"
-                if result.type == "youtube":
-                    content_str += f"  title: {result.content.get('title', 'N/A')}\n"
-                    content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
-                    desc = result.content.get('description', 'N/A')
-                    content_str += f"  description: {desc[:500]}{'...' if len(desc) > 500 else ''}\n"
-                    transcript = result.content.get('transcript')
-                    if transcript:
-                        content_str += f"  transcript: {transcript[:MAX_URL_CONTENT_LENGTH]}{'...' if len(transcript) > MAX_URL_CONTENT_LENGTH else ''}\n"
-                    comments = result.content.get("comments")
-                    if comments:
-                        content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                elif result.type == "reddit":
-                    content_str += f"  title: {result.content.get('title', 'N/A')}\n"
-                    selftext = result.content.get('selftext')
-                    if selftext:
-                        content_str += f"  content: {selftext[:MAX_URL_CONTENT_LENGTH]}{'...' if len(selftext) > MAX_URL_CONTENT_LENGTH else ''}\n"
-                    comments = result.content.get("comments")
-                    if comments:
-                        content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                elif result.type == "general":
-                    # Content is already limited string
-                    content_str += f"  {result.content}\n"
+                if result.type == "google_lens":
+                    # Use original_index + 1 as the image number
+                    header = f"SerpAPI's Google Lens API results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + result.content)
+                else:
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if result.type == "youtube":
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
+                        desc = result.content.get('description', 'N/A')
+                        content_str += f"  description: {desc[:500]}{'...' if len(desc) > 500 else ''}\n"
+                        transcript = result.content.get('transcript')
+                        if transcript:
+                            content_str += f"  transcript: {transcript[:MAX_URL_CONTENT_LENGTH]}{'...' if len(transcript) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                    elif result.type == "reddit":
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        selftext = result.content.get('selftext')
+                        if selftext:
+                            content_str += f"  content: {selftext[:MAX_URL_CONTENT_LENGTH]}{'...' if len(selftext) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                    elif result.type == "general":
+                        # Content is already limited string
+                        content_str += f"  {result.content}\n"
 
-                formatted_parts.append(content_str)
-                url_counter += 1
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
 
-        if formatted_parts:
-            context_to_append = "Answer the user's query based on the following:\n" + "".join(formatted_parts)
+        if google_lens_parts:
+            google_lens_context_to_append = "\n\n".join(google_lens_parts) # Join with double newline
+
+        if other_url_parts:
+            other_url_context_to_append = "".join(other_url_parts)
+
+    # Combine context parts
+    combined_context = ""
+    if google_lens_context_to_append or other_url_context_to_append:
+        combined_context = "Answer the user's query based on the following:\n\n"
+        if google_lens_context_to_append:
+            combined_context += google_lens_context_to_append + "\n\n" # Add separator if both exist
+        if other_url_context_to_append:
+            combined_context += other_url_context_to_append
 
 
     # --- Prepare API Call ---
     history_for_llm = history[::-1] # Reverse history for correct chronological order
 
-    # Prepend external content context if available
-    if context_to_append:
-        context_header = context_to_append + "\n\nUser's query:\n" # Use the formatted context
+    # Prepend combined external content context if available
+    if combined_context:
+        context_header = combined_context + "\n\nUser's query:\n" # Use the formatted context
         if history_for_llm and history_for_llm[0]['role'] == 'user':
             first_user_msg = history_for_llm[0]
             if is_gemini:

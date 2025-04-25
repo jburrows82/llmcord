@@ -64,6 +64,15 @@ Or run a local model with:
 - Handles multiple URLs within the same message concurrently.
 - Basic error handling included (timeouts, non-HTML content, fetch errors).
 
+### SerpAPI Google Lens Integration
+- Trigger image analysis by starting your query with `googlelens` (case-insensitive) after mentioning the bot or using `at ai` (e.g., `@BotName googlelens what is this?` or `at ai googlelens identify this object`).
+- Requires image(s) to be attached to the message.
+- The bot uses the attached image(s) as input for SerpAPI's Google Lens API.
+- Fetches visual matches and related content for each image concurrently.
+- Appends the formatted SerpAPI results to your original query before sending it to the LLM, providing visual context for analysis or identification.
+- Handles multiple image attachments in a single query.
+- **Requires a SerpAPI API key** configured in `config.yaml`.
+
 ### Gemini Grounding with Sources
 - When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
 - If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
@@ -118,6 +127,12 @@ Or run a local model with:
 | **reddit_client_secret** | **Required for Reddit URL processing.** Your Reddit script app's client secret. |
 | **reddit_user_agent** | **Required for Reddit URL processing.** A unique user agent string (e.g., `discord:my-llm-bot:v1.0 (by u/your_reddit_username)`). |
 
+### SerpAPI settings:
+
+| Setting | Description |
+| --- | --- |
+| **serpapi_api_key** | **Required for Google Lens image processing.** Get an API key from [SerpApi](https://serpapi.com/manage-api-key). This key is used to query the Google Lens API via SerpAPI. |
+
 ### LLM settings:
 
 | Setting | Description |
@@ -131,7 +146,7 @@ Or run a local model with:
    ```bash
    python -m pip install -U -r requirements.txt
    ```
-   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, and `beautifulsoup4`)*
+   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, and `google-search-results`)*
 
 4. Run the bot:
 
@@ -158,6 +173,8 @@ Or run a local model with:
 - Reddit API also has rate limits. Processing many Reddit URLs quickly might lead to temporary throttling.
 
 - General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements.
+
+- SerpAPI Google Lens usage counts towards your SerpAPI plan's search credits.
 
 - PRs are welcome :)
 
