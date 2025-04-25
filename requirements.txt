@@ -6,3 +6,4 @@ pyyaml
 youtube-transcript-api
 google-api-python-client
 asyncpraw
+beautifulsoup4

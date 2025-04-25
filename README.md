@@ -45,9 +45,9 @@ Or run a local model with:
 
 ### YouTube Content Extraction
 - Include YouTube URLs directly in your query.
-- The bot automatically extracts the video's **title**, **description**, **channel name**, **transcript** (using `youtube-transcript-api`), and up to **50 top comments** (using YouTube Data API v3).
+- The bot automatically extracts the video's **title**, **description**, **channel name**, **transcript** (using `youtube-transcript-api`), and up to **10 top comments** (using YouTube Data API v3).
 - This extracted information is appended to your original query before being sent to the LLM, providing rich context for summarization, analysis, or question-answering based on the video content.
-- Handles multiple YouTube URLs within the same message.
+- Handles multiple YouTube URLs within the same message concurrently.
 - **Requires a YouTube Data API v3 key** configured in `config.yaml`.
 
 ### Reddit Content Extraction
@@ -56,6 +56,13 @@ Or run a local model with:
 - This extracted information is appended to your original query before being sent to the LLM, providing context for summarization, analysis, or question-answering based on the Reddit post.
 - Handles multiple Reddit URLs within the same message concurrently.
 - **Requires Reddit API credentials** (client ID, client secret, user agent) configured in `config.yaml`. You can obtain these by creating a 'script' app on Reddit's [app preferences page](https://www.reddit.com/prefs/apps).
+
+### General URL Content Extraction
+- Include most HTTP/HTTPS URLs directly in your query (excluding YouTube and Reddit, which have specialized handling).
+- The bot automatically fetches the content of the URL using `httpx` and parses the main textual content using `BeautifulSoup4`.
+- Extracted text (limited length) is appended to your original query before being sent to the LLM, providing context for summarization, analysis, or question-answering based on the web page content.
+- Handles multiple URLs within the same message concurrently.
+- Basic error handling included (timeouts, non-HTML content, fetch errors).
 
 ### Gemini Grounding with Sources
 - When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
@@ -72,7 +79,7 @@ Or run a local model with:
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~700 lines of code
+- 1 Python file, ~1000 lines of code
 
 ## Instructions
 
@@ -103,8 +110,6 @@ Or run a local model with:
 | --- | --- |
 | **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` and do not require this key. |
 
-### LLM settings:
-
 ### Reddit API settings:
 
 | Setting | Description |
@@ -112,6 +117,8 @@ Or run a local model with:
 | **reddit_client_id** | **Required for Reddit URL processing.** Your Reddit script app's client ID. |
 | **reddit_client_secret** | **Required for Reddit URL processing.** Your Reddit script app's client secret. |
 | **reddit_user_agent** | **Required for Reddit URL processing.** A unique user agent string (e.g., `discord:my-llm-bot:v1.0 (by u/your_reddit_username)`). |
+
+### LLM settings:
 
 | Setting | Description |
 | --- | --- |
@@ -124,7 +131,7 @@ Or run a local model with:
    ```bash
    python -m pip install -U -r requirements.txt
    ```
-   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, and `asyncpraw`)*
+   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, and `beautifulsoup4`)*
 
 4. Run the bot:
 
@@ -149,6 +156,8 @@ Or run a local model with:
 - YouTube Data API has usage quotas. Fetching details and comments for many videos may consume your quota quickly. Check the [Google Cloud Console](https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas) for details.
 
 - Reddit API also has rate limits. Processing many Reddit URLs quickly might lead to temporary throttling.
+
+- General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements.
 
 - PRs are welcome :)
 
