@@ -15,16 +15,16 @@ llmcord transforms Discord into a collaborative LLM frontend. It works with prac
 ## Features
 
 ### Reply-based chat system
-Just @ the bot to start a conversation and reply to continue. Build conversations with reply chains!
+Just @ the bot **or include the phrase `at ai` (case-insensitive) anywhere in your message** to start a conversation. Reply to the bot's response to continue the chat. The bot mention (`@BotName` or `at ai`) is automatically removed before the query is sent to the LLM (e.g., `hello at ai` becomes `hello`). Build conversations with reply chains!
 
 You can:
 - Branch conversations endlessly
 - Continue other people's conversations
-- @ the bot while replying to ANY message to include it in the conversation
+- @ the bot **or include `at ai`** while replying to ANY message to include it in the conversation
 
 Additionally:
-- When DMing the bot, conversations continue automatically (no reply required). To start a fresh conversation, just @ the bot. You can still reply to continue from anywhere.
-- You can branch conversations into [threads](https://support.discord.com/hc/en-us/articles/4403205878423-Threads-FAQ). Just create a thread from any message and @ the bot inside to continue.
+- When DMing the bot, conversations continue automatically (no reply required). To start a fresh conversation, just @ the bot **or include `at ai`**. You can still reply to continue from anywhere.
+- You can branch conversations into [threads](https://support.discord.com/hc/en-us/articles/4403205878423-Threads-FAQ). Just create a thread from any message and @ the bot **or include `at ai`** inside to continue.
 - Back-to-back messages from the same user are automatically chained together. Just reply to the latest one and the bot will see all of them.
 
 ### Choose any LLM

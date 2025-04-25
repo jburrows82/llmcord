@@ -5,7 +5,7 @@ from datetime import datetime as dt
 import logging
 from typing import Literal, Optional, List, Dict, Any, Tuple, Union
 import io
-import re
+import re # Import re module
 import urllib.parse
 
 import asyncpraw
@@ -58,6 +58,8 @@ GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
 YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))')
 # Reddit URL regex (captures full URL and submission ID)
 REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/([a-zA-Z0-9]+))')
+# Pattern to detect "at ai" as whole words, case-insensitive
+AT_AI_PATTERN = re.compile(r'\bat ai\b', re.IGNORECASE)
 
 # --- Initialization ---
 ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
@@ -429,6 +431,7 @@ async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id:
         for top_level_comment in submission.comments.list():
             if comment_count >= comment_limit:
                 break
+            # Check if comment exists and is not deleted/removed before accessing body
             if hasattr(top_level_comment, 'body') and top_level_comment.body and top_level_comment.body not in ('[deleted]', '[removed]'):
                 comment_body_cleaned = top_level_comment.body.replace('\n', ' ').replace('\r', '')
                 top_comments_text.append(comment_body_cleaned)
@@ -528,22 +531,45 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
 async def on_message(new_msg):
     global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent
 
-    # --- Basic Checks and Permissions ---
-    is_dm = new_msg.channel.type == discord.ChannelType.private
-    if (not is_dm and discord_client.user not in new_msg.mentions) or new_msg.author.bot:
+    # --- Basic Checks and Trigger ---
+    if new_msg.author.bot:
         return
 
-    # Reload config in case it changed
+    is_dm = new_msg.channel.type == discord.ChannelType.private
+    allow_dms = cfg.get("allow_dms", True)
+
+    # Determine if the bot should process this message
+    should_process = False
+    mentions_bot = False # Initialize
+    contains_at_ai = False # Initialize
+
+    if is_dm:
+        if allow_dms:
+            should_process = True
+            # Check if user explicitly mentioned bot or "at ai" in DM to start new chain
+            mentions_bot = discord_client.user in new_msg.mentions
+            contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
+        else:
+            return # Block DMs if not allowed
+    else: # In a channel
+        mentions_bot = discord_client.user in new_msg.mentions
+        contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
+        if mentions_bot or contains_at_ai:
+            should_process = True
+
+    if not should_process:
+        return
+
+    # --- Reload config ---
     cfg = get_config()
     youtube_api_key = cfg.get("youtube_api_key")
     reddit_client_id = cfg.get("reddit_client_id")
     reddit_client_secret = cfg.get("reddit_client_secret")
     reddit_user_agent = cfg.get("reddit_user_agent")
 
-    # Permissions Check
+    # --- Permissions Check ---
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
-    allow_dms = cfg.get("allow_dms", True) # Default to True if missing
     permissions = cfg.get("permissions", {}) # Default to empty dict
     user_perms = permissions.get("users", {"allowed_ids": [], "blocked_ids": []})
     role_perms = permissions.get("roles", {"allowed_ids": [], "blocked_ids": []})
@@ -553,15 +579,17 @@ async def on_message(new_msg):
     allowed_role_ids, blocked_role_ids = role_perms.get("allowed_ids", []), role_perms.get("blocked_ids", [])
     allowed_channel_ids, blocked_channel_ids = channel_perms.get("allowed_ids", []), channel_perms.get("blocked_ids", [])
 
-    allow_all_users = not allowed_user_ids if is_dm else not allowed_user_ids and not allowed_role_ids
+    # Determine if user is allowed (handles DM case implicitly via role_ids being empty)
+    allow_all_users = not allowed_user_ids and not allowed_role_ids
     is_good_user = allow_all_users or new_msg.author.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
     is_bad_user = not is_good_user or new_msg.author.id in blocked_user_ids or any(id in blocked_role_ids for id in role_ids)
 
+    # Determine if channel is allowed (handles DM case via allow_dms check earlier)
     allow_all_channels = not allowed_channel_ids
-    is_good_channel = allow_dms if is_dm else allow_all_channels or any(id in allowed_channel_ids for id in channel_ids)
+    is_good_channel = allow_dms if is_dm else (allow_all_channels or any(id in allowed_channel_ids for id in channel_ids))
     is_bad_channel = not is_good_channel or any(id in blocked_channel_ids for id in channel_ids)
 
-    if is_bad_user or is_bad_channel:
+    if is_bad_user or (not is_dm and is_bad_channel): # Apply channel block only if not DM
         logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
         return
 
@@ -631,16 +659,27 @@ async def on_message(new_msg):
         async with curr_node.lock:
             # Populate node if it's empty (first time seeing this message)
             if curr_node.text is None:
-                # Clean content (remove bot mention)
-                cleaned_content = curr_msg.content
-                if not is_dm and discord_client.user.mentioned_in(curr_msg):
-                    cleaned_content = cleaned_content.replace(discord_client.user.mention, '').lstrip()
+                # Get original content for cleaning
+                original_content = curr_msg.content
+                cleaned_content = original_content
+
+                # Clean mentions from all messages (for consistency with original logic)
+                is_dm_current = curr_msg.channel.type == discord.ChannelType.private
+                if not is_dm_current and discord_client.user.mentioned_in(curr_msg):
+                     cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
+
+                # Remove "at ai" ONLY from the new message that triggered the bot
+                if curr_msg.id == new_msg.id:
+                     # Replace "at ai" (case-insensitive, whole word) with a single space
+                     cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content)
+                     # Replace multiple spaces (possibly resulting from removal) with a single space
+                     cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip()
 
                 # Process attachments
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
                 attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
 
-                # Combine text content
+                # Combine text content using the cleaned content
                 text_parts = [cleaned_content] if cleaned_content else []
                 text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
                 text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
@@ -685,38 +724,48 @@ async def on_message(new_msg):
                 # Find parent message
                 try:
                     parent_msg_obj = None
-                    # 1. Check reference
+                    # Check if the current message explicitly triggers the bot (mention or "at ai")
+                    # Use the variables calculated at the start of on_message if curr_msg is new_msg
+                    if curr_msg.id == new_msg.id:
+                        mentions_bot_in_current = mentions_bot
+                        contains_at_ai_in_current = contains_at_ai
+                    else: # Recalculate for older messages in the chain if needed (though unlikely needed here)
+                        mentions_bot_in_current = discord_client.user.mentioned_in(curr_msg)
+                        contains_at_ai_in_current = AT_AI_PATTERN.search(curr_msg.content) is not None
+
+                    is_explicit_trigger = mentions_bot_in_current or contains_at_ai_in_current
+
+                    # 1. Check reference (Explicit Reply always takes precedence)
                     if curr_msg.reference and curr_msg.reference.message_id:
                         try:
                             parent_msg_obj = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(curr_msg.reference.message_id)
                         except (discord.NotFound, discord.HTTPException) as e:
                             logging.warning(f"Could not fetch referenced message {curr_msg.reference.message_id}: {e}")
                             curr_node.fetch_parent_failed = True
-                    # 2. Check if it's a reply-less message in a DM or from the same user consecutively
-                    elif (is_dm and curr_msg.author != discord_client.user) or \
-                         (not is_dm and discord_client.user.mention not in curr_msg.content):
-                         prev_msg_in_channel = None
-                         try:
-                             # Use history instead of list comprehension for efficiency
-                             async for m in new_msg.channel.history(before=curr_msg, limit=1):
-                                 prev_msg_in_channel = m
-                                 break # Get only the most recent one
-                         except (discord.Forbidden, discord.HTTPException) as e:
-                             logging.warning(f"Could not fetch history in channel {new_msg.channel.id}: {e}")
-
-                         if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
-                             # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
-                             if (is_dm and prev_msg_in_channel.author == discord_client.user) or \
-                                (not is_dm and prev_msg_in_channel.author == curr_msg.author):
-                                 parent_msg_obj = prev_msg_in_channel
-                    # 3. Check if it's the start of a thread
-                    elif curr_msg.channel.type == discord.ChannelType.public_thread:
+                    # 2. Check if it's the start of a thread (and not a reply within the thread)
+                    elif curr_msg.channel.type == discord.ChannelType.public_thread and not curr_msg.reference:
                          try:
                              # The starter message is the parent
                              parent_msg_obj = curr_msg.channel.starter_message or await curr_msg.channel.parent.fetch_message(curr_msg.channel.id)
                          except (discord.NotFound, discord.HTTPException, AttributeError) as e:
                              logging.warning(f"Could not fetch thread starter message for thread {curr_msg.channel.id}: {e}")
                              curr_node.fetch_parent_failed = True
+                    # 3. Check for automatic chaining ONLY IF not explicitly triggered by mention/@ai
+                    elif not is_explicit_trigger:
+                         prev_msg_in_channel = None
+                         try:
+                             # Use history instead of list comprehension for efficiency
+                             async for m in curr_msg.channel.history(before=curr_msg, limit=1):
+                                 prev_msg_in_channel = m
+                                 break # Get only the most recent one
+                         except (discord.Forbidden, discord.HTTPException) as e:
+                             logging.warning(f"Could not fetch history in channel {curr_msg.channel.id}: {e}")
+
+                         if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
+                             # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
+                             if (is_dm_current and prev_msg_in_channel.author == discord_client.user) or \
+                                (not is_dm_current and prev_msg_in_channel.author == curr_msg.author):
+                                 parent_msg_obj = prev_msg_in_channel
 
                     curr_node.parent_msg = parent_msg_obj
 
