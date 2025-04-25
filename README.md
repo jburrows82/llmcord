@@ -30,6 +30,7 @@ Additionally:
 ### Choose any LLM
 llmcord supports remote models from:
 - [OpenAI API](https://platform.openai.com/docs/models)
+- [Google Gemini API](https://ai.google.dev/docs) (via `google-genai`)
 - [xAI API](https://docs.x.ai/docs/models)
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
@@ -42,8 +43,13 @@ Or run a local model with:
 
 ...Or use any other OpenAI compatible API server.
 
+### Gemini Grounding with Sources
+- When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
+- If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
+- Clicking "Show Sources" reveals the search queries the model used and the web sources it consulted to generate the response.
+
 ### And more:
-- Supports image attachments when using a vision model (like gpt-4.1, claude-3, llama-4, etc.)
+- Supports image attachments when using a vision model (like gpt-4.1, claude-3, gemini-flash, llama-4, etc.)
 - Supports text file attachments (.txt, .py, .c, etc.)
 - Customizable personality (aka system prompt)
 - User identity aware (OpenAI API and xAI API only)
@@ -52,7 +58,7 @@ Or run a local model with:
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~200 lines of code
+- 1 Python file, ~600 lines of code
 
 ## Instructions
 
@@ -73,7 +79,7 @@ Or run a local model with:
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br />(Default: `100,000`) |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model.**<br />(Default: `5`) |
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br />(Default: `25`) |
-| **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses and warning messages.**<br />(Default: `false`) |
+| **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
 | **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
 
@@ -81,16 +87,20 @@ Or run a local model with:
 
 | Setting | Description |
 | --- | --- |
-| **providers** | Add the LLM providers you want to use, each with a `base_url` and optional `api_key` entry. Popular providers (`openai`, `ollama`, etc.) are already included.<br />**Only supports OpenAI compatible APIs.** |
-| **model** | Set to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`ollama/llama3.3`<br />-`openrouter/anthropic/claude-3.7-sonnet` |
-| **extra_api_parameters** | Extra API parameters for your LLM. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0`) |
+| **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and optional `api_key`. For Google Gemini, just provide the `api_key`. Popular providers (`openai`, `google`, `ollama`, etc.) are already included.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.** |
+| **model** | Set to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.0-flash`<br />-`ollama/llama3.3`<br />-`openrouter/anthropic/claude-3.7-sonnet` |
+| **extra_api_parameters** | Extra API parameters for your LLM. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0` for OpenAI compatible)<br />(Gemini uses parameters like `max_output_tokens`, `temperature`, `top_p`, `top_k`) |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br />**Leave blank for no system prompt.** |
 
-3. Run the bot:
+3. Install requirements:
+   ```bash
+   python -m pip install -U -r requirements.txt
+   ```
+
+4. Run the bot:
 
    **No Docker:**
    ```bash
-   python -m pip install -U -r requirements.txt
    python llmcord.py
    ```
 
@@ -104,6 +114,8 @@ Or run a local model with:
 - If you're having issues, try my suggestions [here](https://github.com/jakobdylanc/llmcord/issues/19)
 
 - Only models from OpenAI API and xAI API are "user identity aware" because only they support the "name" parameter in the message object. Hopefully more providers support this in the future.
+
+- Gemini safety settings are currently hardcoded to `BLOCK_NONE` for all categories.
 
 - PRs are welcome :)
 

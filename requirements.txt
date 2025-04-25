@@ -1,4 +1,5 @@
 discord.py
 httpx
+google-genai
 openai
 pyyaml
