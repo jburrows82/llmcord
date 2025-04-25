@@ -1,21 +1,28 @@
 import asyncio
-from base64 import b64encode
+import base64
 from dataclasses import dataclass, field
-from datetime import datetime as dt
+from datetime import datetime as dt, timedelta, timezone
 import logging
-from typing import Literal, Optional, List, Dict, Any, Tuple, Union
+import os
+import random
+import sqlite3
+import time
+from typing import Literal, Optional, List, Dict, Any, Tuple, Union, Set
 import io
-import re # Import re module
+import re
 import urllib.parse
-import json # Import json for formatting SerpAPI results
+import json
 
 import asyncpraw
 import discord
 from discord import ui
 import httpx
-from openai import AsyncOpenAI, APIError, RateLimitError, AuthenticationError, APIConnectionError # Import specific OpenAI errors
+# Import specific OpenAI errors and base APIError
+from openai import AsyncOpenAI, APIError, RateLimitError, AuthenticationError, APIConnectionError, BadRequestError
 from google import genai as google_genai
 from google.genai import types as google_types
+# Import specific Google API core exceptions
+from google.api_core import exceptions as google_api_exceptions
 from googleapiclient.discovery import build as build_google_api_client
 from googleapiclient.errors import HttpError
 from asyncprawcore.exceptions import NotFound, Redirect, Forbidden, RequestException as AsyncPrawRequestException
@@ -36,6 +43,7 @@ PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
+EMBED_COLOR_ERROR = discord.Color.red()
 
 STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
@@ -56,17 +64,178 @@ MAX_URL_CONTENT_LENGTH = 100000 # Limit for scraped web content per URL
 MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image
 
 # --- URL Regex Patterns ---
-# General URL pattern (simplified, might need refinement for edge cases)
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
-# YouTube URL regex (captures full URL and video ID)
 YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))')
-# Reddit URL regex (captures full URL and submission ID)
 REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/([a-zA-Z0-9]+))')
-# Pattern to detect "at ai" as whole words, case-insensitive
 AT_AI_PATTERN = re.compile(r'\bat ai\b', re.IGNORECASE)
-# Google Lens keyword pattern (case-insensitive, requires space after)
 GOOGLE_LENS_KEYWORD = "googlelens"
 GOOGLE_LENS_PATTERN = re.compile(rf'^{GOOGLE_LENS_KEYWORD}\s+', re.IGNORECASE)
+
+# --- Rate Limiting Constants ---
+RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
+GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
+DB_FOLDER = "ratelimit_dbs"
+
+# --- Custom Exceptions ---
+class AllKeysFailedError(Exception):
+    """Custom exception raised when all API keys for a service have failed."""
+    def __init__(self, service_name, errors):
+        self.service_name = service_name
+        self.errors = errors # List of errors encountered for each key
+        super().__init__(f"All API keys failed for service '{service_name}'. Last error: {errors[-1] if errors else 'None'}")
+
+# --- Rate Limit Database Manager ---
+class RateLimitDBManager:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn = None
+        self._connect()
+
+    def _connect(self):
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self.conn = sqlite3.connect(self.db_path)
+            self._create_table()
+        except sqlite3.Error as e:
+            logging.error(f"Error connecting to database {self.db_path}: {e}")
+            self.conn = None # Ensure conn is None if connection fails
+
+    def _create_table(self):
+        if not self.conn: return
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS rate_limited_keys (
+                        api_key TEXT PRIMARY KEY,
+                        ratelimit_timestamp REAL NOT NULL
+                    )
+                """)
+        except sqlite3.Error as e:
+            logging.error(f"Error creating table in {self.db_path}: {e}")
+
+    def add_key(self, api_key: str):
+        if not self.conn:
+            logging.error(f"Cannot add key, no connection to {self.db_path}")
+            return
+        timestamp = time.time()
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    INSERT OR REPLACE INTO rate_limited_keys (api_key, ratelimit_timestamp)
+                    VALUES (?, ?)
+                """, (api_key, timestamp))
+            logging.info(f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}.")
+        except sqlite3.Error as e:
+            logging.error(f"Error adding key {api_key[-4:]} to {self.db_path}: {e}")
+
+    def get_limited_keys(self, cooldown_seconds: int) -> Set[str]:
+        if not self.conn:
+            logging.error(f"Cannot get limited keys, no connection to {self.db_path}")
+            return set()
+        cutoff_time = time.time() - cooldown_seconds
+        limited_keys = set()
+        try:
+            with self.conn:
+                cursor = self.conn.execute("""
+                    SELECT api_key FROM rate_limited_keys WHERE ratelimit_timestamp >= ?
+                """, (cutoff_time,))
+                limited_keys = {row[0] for row in cursor.fetchall()}
+        except sqlite3.Error as e:
+            logging.error(f"Error getting limited keys from {self.db_path}: {e}")
+        return limited_keys
+
+    def reset_db(self):
+        if not self.conn:
+            logging.error(f"Cannot reset DB, no connection to {self.db_path}")
+            return
+        try:
+            with self.conn:
+                self.conn.execute("DELETE FROM rate_limited_keys")
+            logging.info(f"Rate limit database {os.path.basename(self.db_path)} reset.")
+        except sqlite3.Error as e:
+            logging.error(f"Error resetting database {self.db_path}: {e}")
+
+    def close(self):
+        if self.conn:
+            try:
+                self.conn.close()
+                self.conn = None
+                logging.debug(f"Closed database connection: {self.db_path}")
+            except sqlite3.Error as e:
+                logging.error(f"Error closing database {self.db_path}: {e}")
+
+# --- Global Rate Limit Management ---
+db_managers: Dict[str, RateLimitDBManager] = {}
+
+def get_db_manager(service_name: str) -> RateLimitDBManager:
+    """Gets or creates a DB manager for a specific service."""
+    global db_managers
+    if service_name not in db_managers:
+        db_path = os.path.join(DB_FOLDER, f"ratelimit_{service_name.lower().replace('-', '_')}.db")
+        db_managers[service_name] = RateLimitDBManager(db_path)
+    # Ensure connection is alive (e.g., if it failed initially)
+    if db_managers[service_name].conn is None:
+         db_managers[service_name]._connect()
+    return db_managers[service_name]
+
+def check_and_perform_global_reset():
+    """Checks if 24 hours have passed since the last reset and resets all DBs if so."""
+    now = time.time()
+    last_reset_time = 0.0
+    try:
+        if os.path.exists(GLOBAL_RESET_FILE):
+            with open(GLOBAL_RESET_FILE, 'r') as f:
+                last_reset_time = float(f.read().strip())
+    except (IOError, ValueError) as e:
+        logging.warning(f"Could not read last reset timestamp: {e}. Forcing reset.")
+        last_reset_time = 0.0 # Force reset if file is invalid
+
+    if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
+        logging.info("Performing global 24-hour rate limit database reset.")
+        # Ensure all potential DB managers are instantiated before resetting
+        # (This relies on services being used at least once, or pre-defined)
+        # A more robust way might be to scan the config for all services with keys
+        services_in_config = set()
+        providers = cfg.get("providers", {})
+        for provider_name, provider_cfg in providers.items():
+            if provider_cfg and provider_cfg.get("api_keys"): # Check for list of keys
+                services_in_config.add(provider_name)
+        if cfg.get("serpapi_api_keys"): # Check SerpAPI separately
+            services_in_config.add("serpapi")
+        # Add other services with keys here if needed
+
+        for service_name in services_in_config:
+             manager = get_db_manager(service_name)
+             manager.reset_db()
+
+        # Also reset any managers that might exist but weren't in config scan (less likely)
+        for manager in db_managers.values():
+            manager.reset_db()
+
+        try:
+            with open(GLOBAL_RESET_FILE, 'w') as f:
+                f.write(str(now))
+        except IOError as e:
+            logging.error(f"Could not write last reset timestamp: {e}")
+    else:
+        logging.info(f"Time since last global reset: {timedelta(seconds=now - last_reset_time)}. Next reset in approx {timedelta(seconds=RATE_LIMIT_COOLDOWN_SECONDS - (now - last_reset_time))}.")
+
+# --- API Key Selection and Retry Logic ---
+async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str]:
+    """Gets available (non-rate-limited) keys for a service."""
+    if not all_keys:
+        return []
+
+    db_manager = get_db_manager(service_name)
+    limited_keys = db_manager.get_limited_keys(RATE_LIMIT_COOLDOWN_SECONDS)
+    available_keys = [key for key in all_keys if key not in limited_keys]
+
+    if not available_keys:
+        logging.warning(f"All keys for service '{service_name}' are currently rate-limited. Resetting DB and using full list for this attempt.")
+        db_manager.reset_db()
+        return all_keys # Return the full list after reset
+
+    return available_keys
 
 # --- Initialization ---
 ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
@@ -74,7 +243,47 @@ ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
 def get_config(filename="config.yaml"):
     try:
         with open(filename, "r") as file:
-            return yaml.safe_load(file)
+            config_data = yaml.safe_load(file)
+            # --- Config Validation & Key Normalization ---
+            # Ensure providers have api_keys (plural) as a list
+            providers = config_data.get("providers", {})
+            for name, provider_cfg in providers.items():
+                if provider_cfg: # Check if provider config exists
+                    single_key = provider_cfg.get("api_key")
+                    key_list = provider_cfg.get("api_keys")
+
+                    if single_key and not key_list:
+                        logging.warning(f"Config Warning: Provider '{name}' uses deprecated 'api_key'. Converting to 'api_keys' list. Please update config.yaml.")
+                        provider_cfg["api_keys"] = [single_key]
+                        del provider_cfg["api_key"]
+                    elif single_key and key_list:
+                         logging.warning(f"Config Warning: Provider '{name}' has both 'api_key' and 'api_keys'. Using 'api_keys'. Please remove 'api_key' from config.yaml.")
+                         del provider_cfg["api_key"]
+                    elif key_list is None: # Handle case where api_keys is explicitly null or missing
+                         # Allow providers without keys (like Ollama)
+                         provider_cfg["api_keys"] = []
+                    elif not isinstance(key_list, list):
+                         logging.error(f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty.")
+                         provider_cfg["api_keys"] = []
+
+            # Handle SerpAPI key(s)
+            single_serp_key = config_data.get("serpapi_api_key")
+            serp_key_list = config_data.get("serpapi_api_keys")
+            if single_serp_key and not serp_key_list:
+                logging.warning("Config Warning: Found 'serpapi_api_key'. Converting to 'serpapi_api_keys' list. Please update config.yaml.")
+                config_data["serpapi_api_keys"] = [single_serp_key]
+                del config_data["serpapi_api_key"]
+            elif single_serp_key and serp_key_list:
+                 logging.warning("Config Warning: Found both 'serpapi_api_key' and 'serpapi_api_keys'. Using 'serpapi_api_keys'. Please remove 'serpapi_api_key' from config.yaml.")
+                 del config_data["serpapi_api_key"]
+            elif serp_key_list is None: # Handle case where serpapi_api_keys is explicitly null or missing
+                 config_data["serpapi_api_keys"] = []
+            elif not isinstance(serp_key_list, list):
+                 logging.error("Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
+                 config_data["serpapi_api_keys"] = []
+
+            return config_data
+
     except FileNotFoundError:
         logging.error(f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it.")
         exit()
@@ -83,27 +292,29 @@ def get_config(filename="config.yaml"):
         exit()
 
 cfg = get_config()
-youtube_api_key = cfg.get("youtube_api_key")
+check_and_perform_global_reset() # Perform initial check/reset after loading config
+
+youtube_api_key = cfg.get("youtube_api_key") # YouTube still uses single key for now
 reddit_client_id = cfg.get("reddit_client_id")
 reddit_client_secret = cfg.get("reddit_client_secret")
 reddit_user_agent = cfg.get("reddit_user_agent")
-serpapi_api_key = cfg.get("serpapi_api_key") # Load SerpAPI key
+# SerpAPI keys are now handled by the retry logic
 
 if not cfg.get("bot_token"):
     logging.error("CRITICAL: bot_token is not set in config.yaml")
     exit()
 
-if client_id := cfg.get("client_id"): # Use .get() for safety
+if client_id := cfg.get("client_id"):
     logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
 else:
     logging.warning("client_id not found in config.yaml. Cannot generate invite URL.")
 
 intents = discord.Intents.default()
 intents.message_content = True
-activity = discord.CustomActivity(name=(cfg.get("status_message") or "github.com/jakobdylanc/llmcord")[:128]) # Use .get()
+activity = discord.CustomActivity(name=(cfg.get("status_message") or "github.com/jakobdylanc/llmcord")[:128])
 discord_client = discord.Client(intents=intents, activity=activity)
 
-httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True) # Increased timeout, enable redirects
+httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
 
 msg_nodes = {}
 last_task_time = 0
@@ -113,7 +324,7 @@ last_task_time = 0
 class MsgNode:
     text: Optional[str] = None
     images: list = field(default_factory=list)
-    role: Literal["user", "assistant"] = "assistant"
+    role: Literal["user", "assistant", "model"] = "assistant" # Added 'model' for Gemini
     user_id: Optional[int] = None
     has_bad_attachments: bool = False
     fetch_parent_failed: bool = False
@@ -123,10 +334,10 @@ class MsgNode:
 @dataclass
 class UrlFetchResult:
     url: str
-    content: Optional[Union[str, Dict[str, Any]]] # str for general/lens, dict for YT/Reddit
+    content: Optional[Union[str, Dict[str, Any]]]
     error: Optional[str] = None
-    type: Literal["youtube", "reddit", "general", "google_lens"] = "general" # Added google_lens
-    original_index: int = -1 # To preserve order
+    type: Literal["youtube", "reddit", "general", "google_lens"] = "general"
+    original_index: int = -1
 
 # --- Discord UI ---
 class SourcesView(ui.View):
@@ -533,62 +744,107 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
         logging.exception(f"Unexpected error fetching general URL {url}")
         return UrlFetchResult(url=url, error=f"Unexpected error: {type(e).__name__}", type="general", original_index=index)
 
-async def fetch_google_lens_data(image_url: str, index: int, api_key: str) -> UrlFetchResult:
-    """Fetches Google Lens results for a single image URL using SerpAPI."""
-    if not api_key:
-        return UrlFetchResult(url=image_url, error="SerpAPI key not configured.", type="google_lens", original_index=index)
+async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFetchResult:
+    """Fetches Google Lens results for an image URL using SerpAPI with key rotation and retry."""
+    service_name = "serpapi"
+    all_keys = cfg.get("serpapi_api_keys", [])
+    if not all_keys:
+        return UrlFetchResult(url=image_url, error="SerpAPI keys not configured.", type="google_lens", original_index=index)
 
-    params = {
-        "engine": "google_lens",
-        "url": image_url,
-        "api_key": api_key,
-        "safe": "off", # Optional: adjust safety filter if needed
-    }
+    available_keys = await get_available_keys(service_name, all_keys)
+    random.shuffle(available_keys)
+    db_manager = get_db_manager(service_name)
+    encountered_errors = []
 
-    try:
-        search = GoogleSearch(params)
-        # Run the synchronous get_dict in a separate thread
-        results = await asyncio.to_thread(search.get_dict)
+    for key_index, api_key in enumerate(available_keys):
+        params = {
+            "engine": "google_lens",
+            "url": image_url,
+            "api_key": api_key,
+            "safe": "off",
+        }
+        logging.info(f"Attempting SerpAPI Google Lens request for image {index+1} with key ...{api_key[-4:]} ({key_index+1}/{len(available_keys)})")
 
-        # Check for top-level errors from SerpAPI
-        if "error" in results:
-            logging.warning(f"SerpAPI error for image {index+1} ({image_url[:50]}...): {results['error']}")
-            return UrlFetchResult(url=image_url, error=f"SerpAPI error: {results['error']}", type="google_lens", original_index=index)
+        try:
+            search = GoogleSearch(params)
+            results = await asyncio.to_thread(search.get_dict) # Blocking call in thread
 
-        # Extract visual matches
-        visual_matches = results.get("visual_matches", [])
-        if not visual_matches:
-            return UrlFetchResult(url=image_url, content="No visual matches found.", type="google_lens", original_index=index)
+            # Check for API-level errors (e.g., invalid key, quota)
+            if "error" in results:
+                error_msg = results["error"]
+                logging.warning(f"SerpAPI error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
+                encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
+                # Check if it's a rate limit / quota error
+                if "rate limit" in error_msg.lower() or "quota" in error_msg.lower() or "plan limit" in error_msg.lower() or "ran out of searches" in error_msg.lower():
+                    db_manager.add_key(api_key)
+                    continue # Try next key
+                elif "invalid api key" in error_msg.lower():
+                    # Don't retry with other keys if this one is definitively invalid
+                    return UrlFetchResult(url=image_url, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens", original_index=index)
+                else:
+                    # For other API errors, maybe retry? For now, continue to next key.
+                    continue
 
-        # Format the results concisely
-        formatted_results = []
-        for i, match in enumerate(visual_matches[:MAX_SERPAPI_RESULTS_DISPLAY]):
-            title = match.get("title", "N/A")
-            link = match.get("link", "#")
-            source = match.get("source", "")
-            result_line = f"- [{title}]({link})"
-            if source:
-                result_line += f" (Source: {source})"
-            formatted_results.append(result_line)
+            # Check for search-specific errors (e.g., couldn't process image)
+            if results.get("search_metadata", {}).get("status", "").lower() == "error":
+                 error_msg = results.get("search_metadata", {}).get("error", "Unknown search error")
+                 logging.warning(f"SerpAPI search error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
+                 encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
+                 # These errors are usually not key-related, so maybe don't retry?
+                 # For now, let's return the error from the first key that hit this.
+                 return UrlFetchResult(url=image_url, error=f"SerpAPI Search Error: {error_msg}", type="google_lens", original_index=index)
 
-        content_str = "\n".join(formatted_results)
-        if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
-            content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
 
-        return UrlFetchResult(url=image_url, content=content_str, type="google_lens", original_index=index)
+            # --- Success Case ---
+            visual_matches = results.get("visual_matches", [])
+            if not visual_matches:
+                return UrlFetchResult(url=image_url, content="No visual matches found.", type="google_lens", original_index=index)
 
-    except SerpApiClientException as e:
-        logging.warning(f"SerpAPI client exception for image {index+1} ({image_url[:50]}...): {e}")
-        return UrlFetchResult(url=image_url, error=f"SerpAPI client error: {e}", type="google_lens", original_index=index)
-    except Exception as e:
-        logging.exception(f"Unexpected error fetching Google Lens data for image {index+1} ({image_url[:50]}...)")
-        return UrlFetchResult(url=image_url, error=f"Unexpected error: {type(e).__name__}", type="google_lens", original_index=index)
+            # Format the results concisely
+            formatted_results = []
+            for i, match in enumerate(visual_matches[:MAX_SERPAPI_RESULTS_DISPLAY]):
+                title = match.get("title", "N/A")
+                link = match.get("link", "#")
+                source = match.get("source", "")
+                result_line = f"- [{title}]({link})"
+                if source:
+                    result_line += f" (Source: {source})"
+                formatted_results.append(result_line)
+
+            content_str = "\n".join(formatted_results)
+            if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
+                content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+
+            logging.info(f"SerpAPI Google Lens request successful for image {index+1} with key ...{api_key[-4:]}")
+            return UrlFetchResult(url=image_url, content=content_str, type="google_lens", original_index=index)
+
+        except SerpApiClientException as e:
+            # Handle client-level exceptions (e.g., connection errors, timeouts)
+            logging.warning(f"SerpAPI client exception for image {index+1} (key ...{api_key[-4:]}): {e}")
+            encountered_errors.append(f"Key ...{api_key[-4:]}: Client Error - {e}")
+            # Check if the exception indicates a rate limit (might need specific checks based on library behavior/status codes)
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                 db_manager.add_key(api_key)
+            # Retry with the next key for client exceptions
+            continue
+        except Exception as e:
+            logging.exception(f"Unexpected error fetching Google Lens data for image {index+1} (key ...{api_key[-4:]})")
+            encountered_errors.append(f"Key ...{api_key[-4:]}: Unexpected Error - {type(e).__name__}")
+            # Retry with the next key for unexpected errors
+            continue
+
+    # If loop finishes, all keys failed
+    logging.error(f"All SerpAPI keys failed for Google Lens request for image {index+1}.")
+    final_error_msg = "All SerpAPI keys failed."
+    if encountered_errors:
+        final_error_msg += f" Last error: {encountered_errors[-1]}"
+    return UrlFetchResult(url=image_url, error=final_error_msg, type="google_lens", original_index=index)
 
 
 # --- Discord Event Handler ---
 @discord_client.event
 async def on_message(new_msg):
-    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent, serpapi_api_key
+    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent
 
     # --- Basic Checks and Trigger ---
     if new_msg.author.bot:
@@ -620,13 +876,14 @@ async def on_message(new_msg):
     if not should_process:
         return
 
-    # --- Reload config ---
+    # --- Reload config & Check Global Reset ---
     cfg = get_config()
-    youtube_api_key = cfg.get("youtube_api_key")
+    check_and_perform_global_reset() # Check/perform reset before processing message
+    youtube_api_key = cfg.get("youtube_api_key") # Still single key
     reddit_client_id = cfg.get("reddit_client_id")
     reddit_client_secret = cfg.get("reddit_client_secret")
     reddit_user_agent = cfg.get("reddit_user_agent")
-    serpapi_api_key = cfg.get("serpapi_api_key") # Reload SerpAPI key
+    # SerpAPI keys are now handled by fetch_google_lens_data_with_retry
 
     # --- Permissions Check ---
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
@@ -654,31 +911,31 @@ async def on_message(new_msg):
         logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
         return
 
-    # --- LLM Client Initialization ---
+    # --- LLM Provider/Model Selection ---
     provider_slash_model = cfg.get("model", "openai/gpt-4.1") # Default model
-    provider, model = provider_slash_model.split("/", 1)
-    provider_config = cfg.get("providers", {}).get(provider, {})
-    base_url = provider_config.get("base_url")
-    api_key = provider_config.get("api_key")
-
-    is_gemini = provider == "google"
-    gemini_client = None
-    openai_client = None
-
     try:
-        if is_gemini:
-            if not api_key:
-                raise ValueError("Google API key is missing in config.yaml for the 'google' provider.")
-            gemini_client = google_genai.Client(api_key=api_key)
-        else:
-            openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key or "sk-no-key-required")
-    except Exception as e:
-        logging.exception(f"Failed to initialize LLM client for provider '{provider}'")
-        await new_msg.reply(f"⚠️ Failed to configure LLM API: {e}", silent=True)
+        provider, model_name = provider_slash_model.split("/", 1)
+    except ValueError:
+        logging.error(f"Invalid model format in config: '{provider_slash_model}'. Should be 'provider/model_name'.")
+        await new_msg.reply(f"⚠️ Invalid model format in config: `{provider_slash_model}`", silent=True)
         return
 
+    provider_config = cfg.get("providers", {}).get(provider, {})
+    all_api_keys = provider_config.get("api_keys", []) # Expecting a list now
+    base_url = provider_config.get("base_url") # Needed for OpenAI-compatible
+
+    is_gemini = provider == "google"
+
+    # Check if keys are required for this provider
+    keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"] # Add other keyless providers here
+
+    if keys_required and not all_api_keys:
+         logging.error(f"No API keys configured for provider '{provider}' in config.yaml.")
+         await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", silent=True)
+         return
+
     # --- Configuration Values ---
-    accept_images = any(x in model.lower() for x in VISION_MODEL_TAGS)
+    accept_images = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
     max_text = cfg.get("max_text", 100000)
     max_images = cfg.get("max_images", 5) if accept_images else 0
     max_messages = cfg.get("max_messages", 25)
@@ -700,10 +957,9 @@ async def on_message(new_msg):
         # Remove the keyword itself from the content going to the LLM
         cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
         logging.info(f"Google Lens keyword detected for message {new_msg.id}")
-        if not serpapi_api_key:
-             logging.warning("Google Lens requested but serpapi_api_key is not configured.")
-             # Optionally add a user warning here if desired
-             # user_warnings.add("⚠️ Google Lens requested but SerpAPI key is missing.")
+        if not cfg.get("serpapi_api_keys"): # Check if list exists and is not empty
+             logging.warning("Google Lens requested but serpapi_api_keys list is missing or empty in config.yaml.")
+             # user_warnings.add("⚠️ Google Lens requested but SerpAPI keys are missing.") # Add warning later
 
 
     # --- URL Extraction and Task Creation ---
@@ -713,9 +969,13 @@ async def on_message(new_msg):
     processed_urls = set() # Avoid processing duplicates
 
     # Add Google Lens tasks first if applicable
-    if use_google_lens and serpapi_api_key:
-        for i, attachment in enumerate(image_attachments):
-            fetch_tasks.append(fetch_google_lens_data(attachment.url, i, serpapi_api_key))
+    if use_google_lens:
+        if not cfg.get("serpapi_api_keys"):
+            user_warnings.add("⚠️ Google Lens requested but SerpAPI keys are missing.")
+        else:
+            for i, attachment in enumerate(image_attachments):
+                # Use the new retry wrapper function
+                fetch_tasks.append(fetch_google_lens_data_with_retry(attachment.url, i))
 
     # Add other URL tasks
     for url, index in all_urls_with_indices:
@@ -789,21 +1049,20 @@ async def on_message(new_msg):
 
                 curr_node.text = "\n".join(filter(None, text_parts))
 
-                # Process image attachments (only store if not using Google Lens for this message, or if needed by LLM anyway)
-                # Store image data regardless, LLM might still need it even if Lens was used.
+                # Process image attachments
                 image_parts = []
                 for att, resp in zip(good_attachments, attachment_responses):
                     if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
                         if is_gemini:
                             image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
                         else:
-                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}")))
+                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
                     elif isinstance(resp, Exception):
                         # Already logged warning above
                         curr_node.has_bad_attachments = True
 
                 curr_node.images = image_parts
-                curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
+                curr_node.role = "model" if curr_msg.author == discord_client.user else "user" # Use 'model' for Gemini assistant role
                 curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
                 curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
 
@@ -877,13 +1136,17 @@ async def on_message(new_msg):
             # Add to history if parts exist
             if parts_for_api:
                 message_data = {
-                    "role": "model" if curr_node.role == "assistant" else "user" # Gemini roles
+                    "role": curr_node.role # Use 'user' or 'model'/'assistant'
                 }
                 if is_gemini:
                     # Ensure parts_for_api is always a list for Gemini
-                    message_data["parts"] = parts_for_api if isinstance(parts_for_api, list) else [parts_for_api]
+                    if not isinstance(parts_for_api, list):
+                        parts_for_api = [parts_for_api]
+                    message_data["parts"] = parts_for_api
                 else:
-                    message_data["role"] = curr_node.role # OpenAI roles
+                    # OpenAI uses 'assistant' role for model responses
+                    if message_data["role"] == "model":
+                        message_data["role"] = "assistant"
                     message_data["content"] = parts_for_api
                     # Add name field if supported by provider
                     if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
@@ -946,11 +1209,11 @@ async def on_message(new_msg):
                 if result.type == "google_lens":
                     # Use original_index + 1 as the image number
                     header = f"SerpAPI's Google Lens API results for image {result.original_index + 1}:\n"
-                    google_lens_parts.append(header + result.content)
+                    google_lens_parts.append(header + str(result.content)) # Ensure content is string
                 else:
                     content_str = f"\nurl {other_url_counter}: {result.url}\n"
                     content_str += f"url {other_url_counter} content:\n"
-                    if result.type == "youtube":
+                    if result.type == "youtube" and isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
                         desc = result.content.get('description', 'N/A')
@@ -961,7 +1224,7 @@ async def on_message(new_msg):
                         comments = result.content.get("comments")
                         if comments:
                             content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                    elif result.type == "reddit":
+                    elif result.type == "reddit" and isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         selftext = result.content.get('selftext')
                         if selftext:
@@ -969,7 +1232,7 @@ async def on_message(new_msg):
                         comments = result.content.get("comments")
                         if comments:
                             content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                    elif result.type == "general":
+                    elif result.type == "general" and isinstance(result.content, str):
                         # Content is already limited string
                         content_str += f"  {result.content}\n"
 
@@ -1051,202 +1314,369 @@ async def on_message(new_msg):
             system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
         system_prompt_text = "\n".join([system_prompt] + system_prompt_extras)
 
-    # API Arguments
-    api_config = None
-    api_content_kwargs = {}
-
-    if is_gemini:
-        gemini_contents = []
-        for msg in history_for_llm:
-            role = msg["role"] # Already 'user' or 'model'
-            parts = msg.get("parts", []) # Default to empty list if parts missing
-            # Ensure parts is a list, even if empty
-            if not isinstance(parts, list):
-                 logging.warning(f"Correcting non-list parts for Gemini message: {parts}")
-                 # Convert non-list to text part or empty list
-                 parts = [google_types.Part.from_text(text=str(parts))] if parts else []
-            gemini_contents.append(google_types.Content(role=role, parts=parts))
-
-        api_content_kwargs["contents"] = gemini_contents
-
-        gemini_extra_params = cfg.get("extra_api_parameters", {}).copy()
-        if "max_tokens" in gemini_extra_params:
-            gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
-
-        gemini_safety_settings_list = [
-            google_types.SafetySetting(category=category, threshold=threshold)
-            for category, threshold in GEMINI_SAFETY_SETTINGS_DICT.items()
-        ]
-
-        api_config = google_types.GenerateContentConfig(
-            **gemini_extra_params,
-            safety_settings=gemini_safety_settings_list,
-            tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
-        )
-        if system_prompt_text:
-             api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
-
-    else: # OpenAI
-        openai_messages = history_for_llm
-        if system_prompt_text:
-            openai_messages.insert(0, dict(role="system", content=system_prompt_text))
-
-        api_content_kwargs["messages"] = openai_messages
-        api_config = cfg.get("extra_api_parameters", {}).copy()
-        api_config["stream"] = True # Always stream for OpenAI
-
-    # --- Generate and Send Response ---
-    curr_content = finish_reason = edit_task = None
+    # --- Generate and Send Response with Retry ---
+    response_msgs = [] # Keep track of messages sent by the bot for this request
+    final_text = ""    # Store the final aggregated text
+    llm_call_successful = False
+    llm_errors = []
+    view = None
     grounding_metadata = None
-    response_msgs = []
-    response_contents = []
-    final_text = "" # Initialize final_text
-    view = None # Initialize view
+    edit_task = None
 
-    embed = discord.Embed()
+    embed = discord.Embed() # Initialize embed here
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
-    try:
-        async with new_msg.channel.typing():
-            stream_response = None
-            if is_gemini:
-                if not gemini_client: raise ValueError("Gemini client not initialized")
-                stream_response = await gemini_client.aio.models.generate_content_stream(
-                    model=model,
-                    contents=api_content_kwargs["contents"],
-                    config=api_config
-                )
-            else:
-                if not openai_client: raise ValueError("OpenAI client not initialized")
-                stream_response = await openai_client.chat.completions.create(
-                    model=model,
-                    messages=api_content_kwargs["messages"],
-                    **api_config
-                )
+    try: # Main try block for the core processing and API calls
+        # Get available keys for the selected provider
+        available_llm_keys = await get_available_keys(provider, all_api_keys)
+        random.shuffle(available_llm_keys)
+        llm_db_manager = get_db_manager(provider)
 
-            # --- Stream Processing Loop ---
-            async for chunk in stream_response:
-                new_content_chunk = ""
-                chunk_finish_reason = None
-                chunk_grounding_metadata = None
+        if keys_required and not available_llm_keys: # Check if keys are actually needed and available
+            logging.error(f"No available (non-rate-limited) API keys for provider '{provider}'.")
+            await new_msg.reply(f"⚠️ No available API keys for provider `{provider}` right now.", silent=True)
+            return # Exit if no keys available and keys are required
 
+        # Loop even if no keys needed (e.g., Ollama) - use a dummy key placeholder
+        keys_to_loop = available_llm_keys if keys_required else ["dummy_key"]
+
+        for key_index, current_api_key in enumerate(keys_to_loop):
+            key_display = f"...{current_api_key[-4:]}" if current_api_key != "dummy_key" else "N/A (keyless)"
+            logging.info(f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index+1}/{len(keys_to_loop)})")
+
+            # Reset state for each attempt
+            response_contents = []
+            # final_text = "" # Don't reset final_text here, aggregate across stream chunks
+            finish_reason = None
+            grounding_metadata = None
+            llm_client = None
+            api_config = None
+            api_content_kwargs = {}
+
+            try: # Inner try for the specific API call attempt
+                # --- Initialize Client for this attempt ---
                 if is_gemini:
-                    # Extract Gemini data
-                    if hasattr(chunk, 'text') and chunk.text:
-                        new_content_chunk = chunk.text
-                    if hasattr(chunk, 'candidates') and chunk.candidates:
-                         candidate = chunk.candidates[0]
-                         if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
-                              # Map Gemini finish reason if needed, default to 'stop' if successful
-                              reason_map = {
-                                   google_types.FinishReason.STOP: "stop",
-                                   google_types.FinishReason.MAX_TOKENS: "length",
-                                   google_types.FinishReason.SAFETY: "safety",
-                                   google_types.FinishReason.RECITATION: "recitation",
-                                   # Add other mappings as needed
-                              }
-                              # Use FINISH_REASON_UNSPECIFIED as a successful stop condition too
-                              chunk_finish_reason = reason_map.get(candidate.finish_reason, "stop" if candidate.finish_reason in (google_types.FinishReason.FINISH_REASON_UNSPECIFIED, google_types.FinishReason.STOP) else str(candidate.finish_reason))
-                         if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
-                              chunk_grounding_metadata = candidate.grounding_metadata
-                else: # OpenAI
-                    if chunk.choices:
-                        delta = chunk.choices[0].delta
-                        chunk_finish_reason = chunk.choices[0].finish_reason
-                        if delta and delta.content:
-                            new_content_chunk = delta.content
+                    if current_api_key == "dummy_key": raise ValueError("Gemini requires an API key.")
+                    llm_client = google_genai.Client(api_key=current_api_key)
+                    # Prepare Gemini specific args
+                    gemini_contents = []
+                    for msg in history_for_llm:
+                        role = msg["role"] # Already 'user' or 'model'
+                        parts = msg.get("parts", []) # Default to empty list if parts missing
+                        # Ensure parts is a list, even if empty
+                        if not isinstance(parts, list):
+                             logging.warning(f"Correcting non-list parts for Gemini message: {parts}")
+                             # Convert non-list to text part or empty list
+                             parts = [google_types.Part.from_text(text=str(parts))] if parts else []
+                        gemini_contents.append(google_types.Content(role=role, parts=parts))
 
-                # Update overall finish reason and grounding metadata
-                if chunk_finish_reason:
-                    finish_reason = chunk_finish_reason
-                if chunk_grounding_metadata:
-                    grounding_metadata = chunk_grounding_metadata # Keep the latest
+                    api_content_kwargs["contents"] = gemini_contents
 
-                # Append content if not empty
-                if new_content_chunk:
-                    response_contents.append(new_content_chunk)
+                    gemini_extra_params = cfg.get("extra_api_parameters", {}).copy()
+                    if "max_tokens" in gemini_extra_params:
+                        gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
 
-                # --- Real-time Editing Logic (Common for both) ---
-                if not use_plain_responses:
-                    current_full_text = "".join(response_contents)
-                    if not current_full_text and not finish_reason: # Skip empty intermediate chunks
-                         continue
+                    gemini_safety_settings_list = [
+                        google_types.SafetySetting(category=category, threshold=threshold)
+                        for category, threshold in GEMINI_SAFETY_SETTINGS_DICT.items()
+                    ]
 
-                    # Create view if grounding metadata exists *during* streaming
-                    if view is None and grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None)):
-                        view = SourcesView(grounding_metadata)
+                    api_config = google_types.GenerateContentConfig(
+                        **gemini_extra_params,
+                        safety_settings=gemini_safety_settings_list,
+                        tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
+                    )
+                    if system_prompt_text:
+                         api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
 
-                    current_msg_index = (len(current_full_text) - 1) // split_limit if current_full_text else 0
-                    start_next_msg = current_msg_index >= len(response_msgs)
+                else: # OpenAI compatible
+                    api_key_to_use = current_api_key if current_api_key != "dummy_key" else None
+                    llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
+                    # Prepare OpenAI specific args
+                    openai_messages = history_for_llm[:] # Copy history
+                    if system_prompt_text:
+                        openai_messages.insert(0, dict(role="system", content=system_prompt_text))
 
-                    ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
-                    is_final_chunk = finish_reason is not None
+                    api_content_kwargs["messages"] = openai_messages
+                    api_config = cfg.get("extra_api_parameters", {}).copy()
+                    api_config["stream"] = True # Always stream for OpenAI
 
-                    if start_next_msg or ready_to_edit or is_final_chunk:
-                        if edit_task is not None:
-                            await edit_task # Wait for previous edit
+                # --- Make API Call and Process Stream ---
+                async with new_msg.channel.typing():
+                    stream_response = None
+                    if is_gemini:
+                        if not llm_client: raise ValueError("Gemini client not initialized for this key.")
+                        stream_response = await llm_client.aio.models.generate_content_stream(
+                            model=model_name,
+                            contents=api_content_kwargs["contents"],
+                            config=api_config
+                        )
+                    else:
+                        if not llm_client: raise ValueError("OpenAI client not initialized for this key.")
+                        stream_response = await llm_client.chat.completions.create(
+                            model=model_name,
+                            messages=api_content_kwargs["messages"],
+                            **api_config
+                        )
 
-                        # Finalize previous message if splitting
-                        if start_next_msg and response_msgs:
-                            prev_msg_index = current_msg_index - 1
-                            prev_msg_text = current_full_text[prev_msg_index * split_limit : current_msg_index * split_limit]
-                            prev_msg_text = prev_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)] # Ensure limit
-                            embed.description = prev_msg_text or "..." # No indicator, handle empty
-                            embed.color = EMBED_COLOR_COMPLETE
-                            try:
-                                # Remove view from previous message
-                                await response_msgs[prev_msg_index].edit(embed=embed, view=None)
-                            except discord.HTTPException as e:
-                                logging.error(f"Failed to finalize previous message {prev_msg_index}: {e}")
+                    # --- Stream Processing Loop (Inside Retry Loop) ---
+                    async for chunk in stream_response:
+                        new_content_chunk = ""
+                        chunk_finish_reason = None
+                        chunk_grounding_metadata = None
 
-                        # Prepare current message segment
-                        current_display_text = current_full_text[current_msg_index * split_limit : (current_msg_index + 1) * split_limit]
-                        current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH] # Truncate
+                        try: # Inner try for stream processing errors
+                            if is_gemini:
+                                # Extract Gemini data
+                                if hasattr(chunk, 'text') and chunk.text:
+                                    new_content_chunk = chunk.text
+                                if hasattr(chunk, 'candidates') and chunk.candidates:
+                                     candidate = chunk.candidates[0]
+                                     if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
+                                          # Map Gemini finish reason if needed, default to 'stop' if successful
+                                          reason_map = {
+                                               google_types.FinishReason.STOP: "stop",
+                                               google_types.FinishReason.MAX_TOKENS: "length",
+                                               google_types.FinishReason.SAFETY: "safety",
+                                               google_types.FinishReason.RECITATION: "recitation",
+                                               # Add other mappings as needed
+                                          }
+                                          # Use FINISH_REASON_UNSPECIFIED as a successful stop condition too
+                                          chunk_finish_reason = reason_map.get(candidate.finish_reason, "stop" if candidate.finish_reason in (google_types.FinishReason.FINISH_REASON_UNSPECIFIED, google_types.FinishReason.STOP) else str(candidate.finish_reason))
+                                     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                                          chunk_grounding_metadata = candidate.grounding_metadata
+                            else: # OpenAI
+                                if chunk.choices:
+                                    delta = chunk.choices[0].delta
+                                    chunk_finish_reason = chunk.choices[0].finish_reason
+                                    if delta and delta.content:
+                                        new_content_chunk = delta.content
 
-                        # Set embed content and color
-                        embed.description = (current_display_text or "...") if is_final_chunk else ((current_display_text or "...") + STREAMING_INDICATOR)
-                        is_successful_finish = finish_reason and finish_reason.lower() in ("stop", "end_turn") # Define success
-                        embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
+                            # Update overall finish reason and grounding metadata
+                            if chunk_finish_reason:
+                                finish_reason = chunk_finish_reason
+                            if chunk_grounding_metadata:
+                                grounding_metadata = chunk_grounding_metadata # Keep the latest
 
-                        # Attach view only if it's the final chunk and grounding exists
-                        view_to_attach = view if is_final_chunk else None
+                            # Append content if not empty
+                            if new_content_chunk:
+                                response_contents.append(new_content_chunk)
 
-                        # Create or Edit the current message
-                        if start_next_msg:
-                            reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
-                            response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
-                            response_msgs.append(response_msg)
-                            msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                            await msg_nodes[response_msg.id].lock.acquire()
-                        elif response_msgs and current_msg_index < len(response_msgs):
-                            edit_task = asyncio.create_task(response_msgs[current_msg_index].edit(embed=embed, view=view_to_attach))
-                        elif not response_msgs and is_final_chunk: # Handle case where response is short and finishes immediately
-                             reply_to_msg = new_msg
-                             response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
-                             response_msgs.append(response_msg)
-                             msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                             await msg_nodes[response_msg.id].lock.acquire()
+                            # --- Real-time Editing Logic (Common for both) ---
+                            if not use_plain_responses:
+                                current_full_text = "".join(response_contents)
+                                if not current_full_text and not finish_reason: # Skip empty intermediate chunks
+                                     continue
+
+                                # Create view if grounding metadata exists *during* streaming
+                                if view is None and grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None)):
+                                    view = SourcesView(grounding_metadata)
+
+                                current_msg_index = (len(current_full_text) - 1) // split_limit if current_full_text else 0
+                                start_next_msg = current_msg_index >= len(response_msgs)
+
+                                ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+                                is_final_chunk = finish_reason is not None
+
+                                if start_next_msg or ready_to_edit or is_final_chunk:
+                                    if edit_task is not None:
+                                        await edit_task # Wait for previous edit
+
+                                    # Finalize previous message if splitting
+                                    if start_next_msg and response_msgs:
+                                        prev_msg_index = current_msg_index - 1
+                                        prev_msg_text = current_full_text[prev_msg_index * split_limit : current_msg_index * split_limit]
+                                        prev_msg_text = prev_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)] # Ensure limit
+                                        embed.description = prev_msg_text or "..." # No indicator, handle empty
+                                        embed.color = EMBED_COLOR_COMPLETE
+                                        try:
+                                            # Remove view from previous message
+                                            await response_msgs[prev_msg_index].edit(embed=embed, view=None)
+                                        except discord.HTTPException as e:
+                                            logging.error(f"Failed to finalize previous message {prev_msg_index}: {e}")
+
+                                    # Prepare current message segment
+                                    current_display_text = current_full_text[current_msg_index * split_limit : (current_msg_index + 1) * split_limit]
+                                    current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH] # Truncate
+
+                                    # Set embed content and color
+                                    embed.description = (current_display_text or "...") if is_final_chunk else ((current_display_text or "...") + STREAMING_INDICATOR)
+                                    is_successful_finish = finish_reason and finish_reason.lower() in ("stop", "end_turn") # Define success
+                                    embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
+
+                                    # Attach view only if it's the final chunk and grounding exists
+                                    view_to_attach = view if is_final_chunk else None
+
+                                    # Create or Edit the current message
+                                    if start_next_msg:
+                                        reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                        # Clear previous response messages if starting over due to retry
+                                        if key_index > 0:
+                                            logging.info(f"Clearing previous response messages due to retry (Key index: {key_index})")
+                                            for old_msg in response_msgs:
+                                                try: await old_msg.delete()
+                                                except discord.HTTPException: pass # Ignore if already deleted
+                                            response_msgs = [] # Reset the list
+                                        response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
+                                        response_msgs.append(response_msg)
+                                        msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                        await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
+                                    elif response_msgs and current_msg_index < len(response_msgs):
+                                        edit_task = asyncio.create_task(response_msgs[current_msg_index].edit(embed=embed, view=view_to_attach))
+                                    elif not response_msgs and is_final_chunk: # Handle case where response is short and finishes immediately
+                                         reply_to_msg = new_msg
+                                         response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
+                                         response_msgs.append(response_msg)
+                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                         await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
 
 
-                        last_task_time = dt.now().timestamp()
+                                    last_task_time = dt.now().timestamp()
 
-                # Break loop if finished
-                if finish_reason:
-                    break
-            # --- End Stream Processing Loop ---
+                            # Break inner stream loop if finished
+                            if finish_reason:
+                                break # Exit inner stream loop
 
+                        except APIConnectionError as stream_err: # Catch connection errors during streaming
+                            logging.warning(f"Connection error during streaming with key {key_display}: {stream_err}")
+                            llm_errors.append(f"Key {key_display}: Stream Connection Error - {stream_err}")
+                            # Break inner stream loop and proceed to retry with next key
+                            break
+                        except APIError as stream_err: # Catch other API errors during streaming (OpenAI specific)
+                            logging.warning(f"API error during streaming with key {key_display}: {stream_err}")
+                            llm_errors.append(f"Key {key_display}: Stream API Error - {stream_err}")
+                            # Check if it's a rate limit error during stream
+                            if isinstance(stream_err, RateLimitError):
+                                if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
+                            # Break inner stream loop and proceed to retry with next key
+                            break
+                        except google_api_exceptions.GoogleAPIError as stream_err: # Catch Google API errors during streaming
+                            logging.warning(f"Google API error during streaming with key {key_display}: {stream_err}")
+                            llm_errors.append(f"Key {key_display}: Stream Google API Error - {stream_err}")
+                            # Check if it's a rate limit error during stream
+                            if isinstance(stream_err, google_api_exceptions.ResourceExhausted):
+                                if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
+                            # Break inner stream loop and proceed to retry with next key
+                            break
+                        except Exception as stream_err: # Catch unexpected errors during streaming
+                            logging.exception(f"Unexpected error during streaming with key {key_display}")
+                            llm_errors.append(f"Key {key_display}: Unexpected Stream Error - {type(stream_err).__name__}")
+                            # Break inner stream loop and proceed to retry with next key
+                            break
+                    # --- End Stream Processing Loop ---
+
+                    # If the stream finished without breaking due to an error
+                    if finish_reason:
+                        llm_call_successful = True
+                        logging.info(f"LLM request successful with key {key_display}")
+                        break # Exit the outer retry loop
+
+            # --- Handle API Call Errors for the current key ---
+            except (RateLimitError, google_api_exceptions.ResourceExhausted) as e:
+                logging.warning(f"Rate limit hit for provider '{provider}' with key {key_display}. Error: {e}")
+                if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
+                llm_errors.append(f"Key {key_display}: Rate Limited")
+                continue # Try next key
+            except (AuthenticationError, google_api_exceptions.PermissionDenied) as e:
+                logging.error(f"Authentication failed for provider '{provider}' with key {key_display}. Error: {e}")
+                llm_errors.append(f"Key {key_display}: Authentication Failed")
+                # Don't retry with other keys if auth fails for this one specifically
+                llm_call_successful = False; break
+            except (APIConnectionError, google_api_exceptions.ServiceUnavailable, google_api_exceptions.DeadlineExceeded) as e:
+                logging.warning(f"Connection/Service error for provider '{provider}' with key {key_display}. Error: {e}")
+                llm_errors.append(f"Key {key_display}: Connection/Service Error - {type(e).__name__}")
+                continue # Try next key
+            except (BadRequestError, google_api_exceptions.InvalidArgument) as e:
+                 logging.error(f"Bad request error for provider '{provider}' with key {key_display}. Error: {e}")
+                 llm_errors.append(f"Key {key_display}: Bad Request - {e}")
+                 # Bad requests are unlikely to be fixed by changing keys, stop retrying.
+                 llm_call_successful = False; break
+            except google_types.BlockedPromptError as e:
+                 logging.warning(f"Gemini Prompt Blocked with key {key_display}: {e}")
+                 llm_errors.append(f"Key {key_display}: Prompt Blocked")
+                 # Prompt blocked is not key-specific, stop retrying.
+                 llm_call_successful = False
+                 # Send specific message immediately
+                 await new_msg.reply("⚠️ My prompt was blocked by safety filters.", silent=True)
+                 break
+            except google_types.StopCandidateError as e:
+                 logging.warning(f"Gemini Response Blocked with key {key_display}: {e}")
+                 llm_errors.append(f"Key {key_display}: Response Blocked")
+                 # Response blocked is not key-specific, stop retrying.
+                 llm_call_successful = False
+                 # Edit the last message to show it was blocked if possible
+                 if not use_plain_responses and response_msgs:
+                     try:
+                         # Ensure embed description exists before appending
+                         current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
+                         embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                         embed.description += "\n\n⚠️ Response blocked by safety filters."
+                         embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                         embed.color = EMBED_COLOR_ERROR
+                         await response_msgs[-1].edit(embed=embed, view=None)
+                     except Exception as edit_err:
+                         logging.error(f"Failed to edit message to show safety block: {edit_err}")
+                         await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
+                 else:
+                    await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
+                 break
+            except APIError as e: # Catch other OpenAI API errors
+                logging.exception(f"OpenAI API Error for key {key_display}")
+                llm_errors.append(f"Key {key_display}: API Error - {type(e).__name__}: {e}")
+                continue # Try next key for general API errors
+            except google_api_exceptions.GoogleAPICallError as e: # Catch other Google API errors
+                logging.exception(f"Google API Call Error for key {key_display}")
+                llm_errors.append(f"Key {key_display}: Google API Error - {type(e).__name__}: {e}")
+                continue # Try next key
+            except Exception as e: # Catch other unexpected errors
+                logging.exception(f"Unexpected error during LLM call with key {key_display}")
+                llm_errors.append(f"Key {key_display}: Unexpected Error - {type(e).__name__}: {e}")
+                continue # Try next key
+            # No finally block needed here for the inner try
+
+        # --- Post-Retry Loop Processing --- (Still inside the main try)
+        if not llm_call_successful:
+            # This block executes only if the loop finished without success
+            logging.error(f"All LLM API keys failed for provider '{provider}'. Errors: {llm_errors}")
+            error_message = f"⚠️ All API keys for provider `{provider}` failed."
+            if llm_errors:
+                # Show the last error encountered
+                last_error_short = str(llm_errors[-1])
+                error_message += f"\nLast error: `{last_error_short[:100]}{'...' if len(last_error_short) > 100 else ''}`"
+
+            # Edit the last message OR reply with the final error
+            if not use_plain_responses and response_msgs:
+                 try:
+                     # Ensure embed description exists before appending
+                     current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
+                     embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                     embed.description += f"\n\n{error_message}"
+                     embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                     embed.color = EMBED_COLOR_ERROR
+                     await response_msgs[-1].edit(embed=embed, view=None) # Remove view on final error
+                 except Exception as edit_err:
+                     logging.error(f"Failed to edit message to show final error: {edit_err}")
+                     await new_msg.reply(error_message, silent=True) # Fallback reply
+            else:
+                # If plain responses were used, or no messages were sent yet, just reply
+                await new_msg.reply(error_message, silent=True)
+            # Do NOT return here, let finally run
+
+        else: # If successful
             final_text = "".join(response_contents)
-
-            # Create view if grounding metadata exists (final check)
+            # Create view if grounding metadata exists (final check after successful call)
             if view is None and grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None)):
                 view = SourcesView(grounding_metadata)
 
-            # Handle plain text responses
+            # Handle plain text responses (final output)
             if use_plain_responses:
                  final_messages_content = [final_text[i:i+2000] for i in range(0, len(final_text), 2000)]
-                 if not final_messages_content: # Handle empty response
-                     final_messages_content.append("...")
+                 if not final_messages_content: final_messages_content.append("...")
+
+                 # Delete previous potentially failed attempts if retried and successful
+                 # This assumes response_msgs was cleared correctly before the successful attempt
+                 # No explicit deletion needed here if logic inside stream loop is correct
 
                  temp_response_msgs = []
                  for i, content in enumerate(final_messages_content):
@@ -1254,116 +1684,99 @@ async def on_message(new_msg):
                      current_view = view if (i == len(final_messages_content) - 1) else None
                      response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=current_view, silent=True)
                      temp_response_msgs.append(response_msg)
+                     # Create node and acquire lock immediately
                      msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                     await msg_nodes[response_msg.id].lock.acquire()
-                 response_msgs = temp_response_msgs
+                     node = msg_nodes[response_msg.id]
+                     await node.lock.acquire()
+                 response_msgs = temp_response_msgs # Update the main list
 
             # Final edit for embed messages (if not already handled by final chunk logic)
             elif not use_plain_responses and response_msgs:
-                 if edit_task is not None and not edit_task.done():
-                     await edit_task # Ensure last edit task completes
+                 if edit_task is not None and not edit_task.done(): await edit_task
 
                  final_msg_index = len(response_msgs) - 1
                  final_msg_text = final_text[final_msg_index * split_limit : (final_msg_index + 1) * split_limit]
                  # Ensure final text doesn't exceed limit even without indicator
                  final_msg_text = final_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
 
-                 # Ensure the last message has the final content and view
                  embed.description = final_msg_text or "..."
                  embed.color = EMBED_COLOR_COMPLETE
                  try:
-                     # Check if view needs to be added/updated or content/color changed
                      last_msg = response_msgs[final_msg_index]
                      needs_edit = False
-                     if view and not last_msg.components:
-                         needs_edit = True
-                     elif not view and last_msg.components:
-                          needs_edit = True
-                     elif last_msg.embeds and (last_msg.embeds[0].description != embed.description or last_msg.embeds[0].color != embed.color):
-                          needs_edit = True
-                     elif not last_msg.embeds: # Should not happen, but safety check
-                          needs_edit = True
+                     current_description = last_msg.embeds[0].description if last_msg.embeds else ""
+                     current_color = last_msg.embeds[0].color if last_msg.embeds else None
+                     current_view_exists = bool(last_msg.components)
+
+                     # Check if edit is needed: view changed, content changed, or color changed
+                     if (view and not current_view_exists) or (not view and current_view_exists): needs_edit = True
+                     elif current_description != embed.description or current_color != embed.color: needs_edit = True
+                     elif not last_msg.embeds: needs_edit = True # Should not happen, but safety check
 
                      if needs_edit:
-                          await last_msg.edit(embed=embed, view=view)
-                 except discord.HTTPException as e:
-                      logging.error(f"Failed final edit on message {final_msg_index}: {e}")
-                 except IndexError:
-                      logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}")
+                         await last_msg.edit(embed=embed, view=view)
+                 except discord.HTTPException as e: logging.error(f"Failed final edit on message {final_msg_index}: {e}")
+                 except IndexError: logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}")
 
-            elif not use_plain_responses and not response_msgs:
-                 # Handle case where response was empty and no initial message was sent
+            elif not use_plain_responses and not response_msgs: # Handle empty successful response
                  embed.description = "..."
                  embed.color = EMBED_COLOR_COMPLETE
                  response_msg = await new_msg.reply(embed=embed, view=view, silent=True)
                  response_msgs.append(response_msg)
+                 # Create node and acquire lock immediately
                  msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                 await msg_nodes[response_msg.id].lock.acquire()
+                 node = msg_nodes[response_msg.id]
+                 await node.lock.acquire()
 
+    except Exception as outer_e:
+        # Catch any unexpected errors in the main processing block
+        logging.exception("Unhandled error during message processing.")
+        try:
+            await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", silent=True)
+        except discord.HTTPException:
+            pass # Ignore if we can't even reply
 
-    # --- Error Handling ---
-    except google_types.BlockedPromptError as e:
-         logging.warning(f"Gemini Prompt Blocked: {e}")
-         await new_msg.reply("⚠️ My prompt was blocked by safety filters.", silent=True)
-    except google_types.StopCandidateError as e:
-         logging.warning(f"Gemini Response Blocked: {e}")
-         # Edit the last message to show it was blocked if possible
-         if not use_plain_responses and response_msgs:
-             try:
-                 embed.description = (embed.description or "") + "\n\n⚠️ Response blocked by safety filters."
-                 embed.description = embed.description.replace(STREAMING_INDICATOR, "").strip()[:MAX_EMBED_DESCRIPTION_LENGTH]
-                 embed.color = discord.Color.red()
-                 await response_msgs[-1].edit(embed=embed, view=None) # Remove view on block
-             except Exception as edit_err:
-                 logging.error(f"Failed to edit message to show safety block: {edit_err}")
-                 await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
-         else:
-            await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
-    except google_types.GoogleAPICallError as e:
-        logging.exception("Google API Call Error")
-        await new_msg.reply(f"⚠️ Google API Error: {e}", silent=True)
-    except Exception as e: # Catch OpenAI errors and others
-        logging.exception("Error during LLM call")
-        error_message = f"⚠️ An error occurred: {type(e).__name__}"
-
-        # Add more specific error details if possible and safe
-        if hasattr(e, 'message'): error_message += f": {e.message}"
-        elif hasattr(e, 'body') and isinstance(e.body, dict) and 'message' in e.body: error_message += f": {e.body['message']}" # OpenAI specific
-        elif hasattr(e, 'args') and e.args: error_message += f": {e.args[0]}"
-
-        # Check for specific OpenAI errors if applicable
-        if not is_gemini and isinstance(e, APIError):
-             if isinstance(e, RateLimitError): error_message = "⚠️ Rate limit exceeded. Please try again later."
-             elif isinstance(e, AuthenticationError): error_message = "⚠️ Authentication error. Check your API key."
-             elif isinstance(e, APIConnectionError): error_message = "⚠️ Could not connect to the API."
-             # Add more specific OpenAI error checks if needed
-
-        await new_msg.reply(error_message, silent=True)
-
-    # --- Cleanup and Cache Management ---
-    finally:
-        # Release locks and store final text for all response messages
+    finally: # --- Cleanup and Cache Management --- (Associated with the main try)
+        # Release locks and store final text for all response messages created in this run
+        logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
         for response_msg in response_msgs:
-            if response_msg.id in msg_nodes:
-                # Ensure node exists before accessing attributes
+            if response_msg and response_msg.id in msg_nodes: # Check if response_msg is not None
                 node = msg_nodes[response_msg.id]
-                node.text = final_text # Store aggregated final text
+                # Store final text only if the call was successful
+                if llm_call_successful:
+                    node.text = final_text
+                else:
+                    # Optionally store an error indicator or leave text as None
+                    node.text = node.text or "[Error occurred during generation]" # Keep existing text if any, else mark error
+
                 if node.lock.locked():
                     try:
+                        logging.debug(f"Releasing lock for message node {response_msg.id}")
                         node.lock.release()
-                    except RuntimeError: # Lock might already be released
+                    except RuntimeError:
+                        logging.warning(f"Attempted to release an already unlocked lock for node {response_msg.id}")
                         pass
+                else:
+                     logging.debug(f"Lock for message node {response_msg.id} was not locked in finally block.")
+            elif response_msg:
+                 logging.warning(f"Response message {response_msg.id} not found in msg_nodes during cleanup.")
 
-
-        # Delete oldest MsgNodes (lowest message IDs) from the cache
+        # Delete oldest MsgNodes from the cache
         if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
             nodes_to_delete = sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
             logging.info(f"Cache limit reached ({num_nodes}/{MAX_MESSAGE_NODES}). Removing {len(nodes_to_delete)} oldest nodes.")
             for msg_id in nodes_to_delete:
+                # Before popping, ensure the lock is released if it exists and is locked
+                node_to_delete = msg_nodes.get(msg_id)
+                if node_to_delete and hasattr(node_to_delete, 'lock') and node_to_delete.lock.locked():
+                    try:
+                        node_to_delete.lock.release()
+                        logging.debug(f"Released lock for node {msg_id} before cache eviction.")
+                    except RuntimeError:
+                        pass # Ignore if already unlocked
                 msg_nodes.pop(msg_id, None)
-                # No need to acquire/release lock here, just pop
 
-
+# --- Main Function ---
 async def main():
     bot_token = cfg.get("bot_token")
     if not bot_token:
@@ -1375,6 +1788,15 @@ async def main():
         logging.critical("Failed to log in. Please check your bot_token in config.yaml.")
     except Exception as e:
         logging.critical(f"Error starting Discord client: {e}")
+    finally:
+        # Close all database connections on shutdown
+        logging.info("Closing database connections...")
+        for manager in db_managers.values():
+            manager.close()
+        logging.info("Database connections closed.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")

@@ -25,7 +25,7 @@ permissions:
 # YouTube Data API v3 settings:
 # Get an API key from Google Cloud Console: https://console.cloud.google.com/apis/credentials
 # Make sure to enable the "YouTube Data API v3" for your project.
-youtube_api_key:
+youtube_api_key: # NOTE: YouTube API still uses a single key in this implementation
 
 # Reddit API settings:
 # Create a 'script' app on Reddit: https://www.reddit.com/prefs/apps
@@ -34,48 +34,78 @@ reddit_client_secret:
 reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
 
 # SerpAPI settings:
-# Get an API key from SerpApi: https://serpapi.com/manage-api-key
-serpapi_api_key:
+# Get API keys from SerpApi: https://serpapi.com/manage-api-key
+# Provide a list of keys for rotation and retries
+serpapi_api_keys:
+  - YOUR_SERPAPI_KEY_1
+  # - YOUR_SERPAPI_KEY_2
+  # - ...
 
 # LLM settings:
 
 providers:
   openai:
     base_url: https://api.openai.com/v1
-    api_key:
+    # Provide a list of keys for rotation and retries
+    api_keys:
+      - YOUR_OPENAI_KEY_1
+      # - YOUR_OPENAI_KEY_2
+      # - ...
   x-ai:
     base_url: https://api.x.ai/v1
-    api_key:
+    api_keys:
+      - YOUR_XAI_KEY_1
+      # - ...
   google:
-    # For google-genai, base_url is not used. API key is configured directly.
-    # Add your Google API Key here.
-    api_key:
+    # For google-genai, base_url is not used. API keys are configured directly.
+    # Provide a list of Google API Keys here for rotation and retries.
+    api_keys:
+      - YOUR_GEMINI_KEY_1
+      # - YOUR_GEMINI_KEY_2
+      # - ...
   mistral:
     base_url: https://api.mistral.ai/v1
-    api_key:
+    api_keys:
+      - YOUR_MISTRAL_KEY_1
+      # - ...
   groq:
     base_url: https://api.groq.com/openai/v1
-    api_key:
+    api_keys:
+      - YOUR_GROQ_KEY_1
+      # - ...
   openrouter:
     base_url: https://openrouter.ai/api/v1
-    api_key:
+    api_keys:
+      - YOUR_OPENROUTER_KEY_1
+      # - ...
+  # --- Local / Keyless Providers ---
   ollama:
     base_url: http://localhost:11434/v1
+    api_keys: [] # Explicitly empty list for keyless providers
   lmstudio:
     base_url: http://localhost:1234/v1
+    api_keys: []
   vllm:
     base_url: http://localhost:8000/v1
+    api_keys: []
   oobabooga:
     base_url: http://localhost:5000/v1
+    api_keys: []
   jan:
     base_url: http://localhost:1337/v1
+    api_keys: []
 
-model: openai/gpt-4.1
+model: openai/gpt-4.1 # Example: Select the provider and model
 
 extra_api_parameters:
+  # Common OpenAI-compatible parameters:
   max_tokens: 4096
   temperature: 1.0
-  # Example for Gemini:
+  # top_p: 1.0
+  # frequency_penalty: 0.0
+  # presence_penalty: 0.0
+
+  # Example Gemini parameters (these would be used if model starts with 'google/'):
   # max_output_tokens: 4096
   # temperature: 1.0
   # top_p: 0.95

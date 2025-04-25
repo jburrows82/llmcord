@@ -43,6 +43,9 @@ Or run a local model with:
 
 ...Or use any other OpenAI compatible API server.
 
+- **Multiple API Key Support:** Configure multiple API keys for each LLM provider (see `config.yaml`).
+- **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys for each request. If an error occurs (including during response streaming), it automatically retries with another key until the request succeeds.
+
 ### YouTube Content Extraction
 - Include YouTube URLs directly in your query.
 - The bot automatically extracts the video's **title**, **description**, **channel name**, **transcript** (using `youtube-transcript-api`), and up to **10 top comments** (using YouTube Data API v3).
@@ -71,7 +74,15 @@ Or run a local model with:
 - Fetches visual matches and related content for each image concurrently.
 - Appends the formatted SerpAPI results to your original query before sending it to the LLM, providing visual context for analysis or identification.
 - Handles multiple image attachments in a single query.
-- **Requires a SerpAPI API key** configured in `config.yaml`.
+- **Requires SerpAPI API keys** configured in `config.yaml`.
+- **Multiple API Key Support:** Configure multiple SerpAPI keys in `config.yaml`.
+- **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails (e.g., rate limit), it automatically retries with another key.
+
+### Robust Rate Limit Handling
+- **Persistent Cooldown:** Rate-limited API keys (LLM providers & SerpAPI) are automatically detected and put on a 24-hour cooldown to prevent reuse.
+- **SQLite Database:** Cooldown information is stored in separate SQLite databases per service (in the `ratelimit_dbs/` folder), ensuring the cooldown persists even if the bot restarts.
+- **Automatic Reset:** Databases are automatically reset every 24 hours (tracked via `last_reset_timestamp.txt`). Additionally, if *all* keys for a specific service become rate-limited, that service's database is reset immediately to allow retries.
+- **Silent Retries:** Error messages are only sent to Discord if *all* configured keys for a service have been tried and failed for a single request.
 
 ### Gemini Grounding with Sources
 - When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
@@ -88,7 +99,7 @@ Or run a local model with:
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~1000 lines of code
+- 1 Python file, ~1700 lines of code
 
 ## Instructions
 
@@ -117,7 +128,7 @@ Or run a local model with:
 
 | Setting | Description |
 | --- | --- |
-| **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` and do not require this key. |
+| **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` and do not require this key. *(Note: Currently only supports a single key).* |
 
 ### Reddit API settings:
 
@@ -131,13 +142,13 @@ Or run a local model with:
 
 | Setting | Description |
 | --- | --- |
-| **serpapi_api_key** | **Required for Google Lens image processing.** Get an API key from [SerpApi](https://serpapi.com/manage-api-key). This key is used to query the Google Lens API via SerpAPI. |
+| **serpapi_api_keys** | **Required for Google Lens image processing.** A **list** of API keys from [SerpApi](https://serpapi.com/manage-api-key). The bot will rotate through these keys and retry if one fails (e.g., due to rate limits). |
 
 ### LLM settings:
 
 | Setting | Description |
 | --- | --- |
-| **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and optional `api_key`. For Google Gemini, just provide the `api_key`. Popular providers (`openai`, `google`, `ollama`, etc.) are already included.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.** |
+| **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and a **list** of `api_keys`. For Google Gemini, just provide a **list** of `api_keys`. For keyless providers (like Ollama), provide an empty list `[]` for `api_keys`.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.**<br />The bot rotates through keys and retries on failure. |
 | **model** | Set to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.0-flash`<br />-`ollama/llama3.3`<br />-`openrouter/anthropic/claude-3.7-sonnet` |
 | **extra_api_parameters** | Extra API parameters for your LLM. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0` for OpenAI compatible)<br />(Gemini uses parameters like `max_output_tokens`, `temperature`, `top_p`, `top_k`) |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br />**Leave blank for no system prompt.** |
@@ -174,7 +185,9 @@ Or run a local model with:
 
 - General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements.
 
-- SerpAPI Google Lens usage counts towards your SerpAPI plan's search credits.
+- SerpAPI Google Lens usage counts towards your SerpAPI plan's search credits. The bot rotates keys and handles rate limits across your provided keys.
+
+- **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt`). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
 
 - PRs are welcome :)
 
