@@ -6,12 +6,12 @@ import logging
 import os
 import random
 import sqlite3
-import sys # Added for custom lens error printing
+import sys
 import time
 from typing import Literal, Optional, List, Dict, Any, Tuple, Union, Set
 import io
 import re
-import traceback # Added for custom lens error printing
+import traceback
 import urllib.parse
 import json
 
@@ -23,7 +23,7 @@ import httpx
 from openai import AsyncOpenAI, APIError, RateLimitError, AuthenticationError, APIConnectionError, BadRequestError
 # Import the new google-genai library and its types
 from google import genai as google_genai
-from google.genai import types as google_types # Corrected import
+from google.genai import types as google_types
 # Import specific Google API core exceptions
 from google.api_core import exceptions as google_api_exceptions
 from googleapiclient.discovery import build as build_google_api_client
@@ -377,6 +377,7 @@ class MsgNode:
     parent_msg: Optional[discord.Message] = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     full_response_text: Optional[str] = None # Added field for full response text
+    external_content: Optional[str] = None # Added field for fetched external content
 
 @dataclass
 class UrlFetchResult:
@@ -476,10 +477,15 @@ class ResponseActionView(ui.View):
 
             if not embed.fields and not embed.description:
                 try:
-                    metadata_str = str(view.grounding_metadata)
+                    # Attempt to serialize grounding_metadata using model_dump if available
+                    if hasattr(view.grounding_metadata, 'model_dump'):
+                        metadata_str = json.dumps(view.grounding_metadata.model_dump(mode='json'), indent=2)
+                    else:
+                        metadata_str = str(view.grounding_metadata)
                     embed.description = f"```json\n{metadata_str[:MAX_EMBED_DESCRIPTION_LENGTH-10]}\n```"
                 except Exception:
                     embed.description = "Could not display raw grounding metadata."
+
 
             if not embed.fields and not embed.description and not embed.title:
                 await interaction.response.send_message("Could not extract source information.", ephemeral=True)
@@ -579,7 +585,9 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
         if transcript:
             fetched_transcript = await asyncio.to_thread(transcript.fetch)
             # Use attribute access (.text) instead of dictionary access (['text'])
-            full_transcript = " ".join([entry.text for entry in fetched_transcript])
+            # Use .to_dict() to get the raw list of dictionaries for easier processing later if needed
+            raw_transcript_data = await asyncio.to_thread(fetched_transcript.to_raw_data)
+            full_transcript = " ".join([entry['text'] for entry in raw_transcript_data])
             return full_transcript, None
         else:
             return None, "No suitable transcript found."
@@ -1364,186 +1372,6 @@ async def on_message(new_msg):
             # Fetch general URL content
             fetch_tasks.append(fetch_general_url_content(url, index))
 
-    # --- Build Message History ---
-    history = []
-    curr_msg = new_msg
-    while curr_msg is not None and len(history) < max_messages:
-        # Ensure node exists or create it
-        if curr_msg.id not in msg_nodes:
-             msg_nodes[curr_msg.id] = MsgNode() # Create node if missing (e.g., cache cleared)
-        curr_node = msg_nodes[curr_msg.id]
-
-        async with curr_node.lock:
-            # Populate node if it's empty (first time seeing this message)
-            if curr_node.text is None:
-                # Use the already cleaned content for the *new* message
-                content_to_store = cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
-
-                # Further clean mentions/at ai from older messages if needed (redundant if cleaned above, but safe)
-                is_dm_current = curr_msg.channel.type == discord.ChannelType.private
-                if not is_dm_current and discord_client.user.mentioned_in(curr_msg):
-                     content_to_store = content_to_store.replace(discord_client.user.mention, '').strip()
-                if curr_msg.id != new_msg.id: # Only remove "at ai" from older messages if it wasn't the trigger
-                    content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
-                    content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
-
-
-                # Process attachments (only for the current message node being processed)
-                current_attachments = curr_msg.attachments
-                good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
-                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
-
-                # Combine text content using the cleaned content
-                text_parts = [content_to_store] if content_to_store else []
-                text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
-                text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
-                text_parts.extend(filter(None, (getattr(embed.footer, 'text', None) for embed in curr_msg.embeds)))
-
-                # Add text from attachments
-                for att, resp in zip(good_attachments, attachment_responses):
-                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
-                        try:
-                            # Limit attachment text size
-                            attachment_text = resp.text[:max_text // 2] # Limit text attachment size
-                            if len(resp.text) > max_text // 2:
-                                attachment_text += "..."
-                                user_warnings.add(f"⚠️ Truncated text attachment: {att.filename}")
-                            text_parts.append(attachment_text)
-                        except Exception as e:
-                            logging.warning(f"Failed to decode text attachment {att.filename}: {e}")
-                            curr_node.has_bad_attachments = True
-                    elif isinstance(resp, Exception):
-                        logging.warning(f"Failed to fetch attachment {att.filename}: {resp}")
-                        curr_node.has_bad_attachments = True
-
-                curr_node.text = "\n".join(filter(None, text_parts))
-
-                # Process image attachments
-                image_parts = []
-                for att, resp in zip(good_attachments, attachment_responses):
-                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
-                        if is_gemini:
-                            # Use google.genai.types (imported as google_types)
-                            image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
-                        else:
-                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
-                    elif isinstance(resp, Exception):
-                        # Already logged warning above
-                        curr_node.has_bad_attachments = True
-
-                curr_node.images = image_parts
-                curr_node.role = "model" if curr_msg.author == discord_client.user else "user" # Use 'model' for Gemini assistant role
-                curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-                curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
-
-                # Find parent message
-                try:
-                    parent_msg_obj = None
-                    # Check if the current message explicitly triggers the bot (mention or "at ai")
-                    # Use the variables calculated at the start of on_message if curr_msg is new_msg
-                    if curr_msg.id == new_msg.id:
-                        mentions_bot_in_current = mentions_bot
-                        contains_at_ai_in_current = contains_at_ai
-                    else: # Recalculate for older messages in the chain if needed
-                        mentions_bot_in_current = discord_client.user.mentioned_in(curr_msg)
-                        contains_at_ai_in_current = AT_AI_PATTERN.search(curr_msg.content) is not None
-
-                    is_explicit_trigger = mentions_bot_in_current or contains_at_ai_in_current
-
-                    # 1. Check reference (Explicit Reply always takes precedence)
-                    if curr_msg.reference and curr_msg.reference.message_id:
-                        try:
-                            parent_msg_obj = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(curr_msg.reference.message_id)
-                        except (discord.NotFound, discord.HTTPException) as e:
-                            logging.warning(f"Could not fetch referenced message {curr_msg.reference.message_id}: {e}")
-                            curr_node.fetch_parent_failed = True
-                    # 2. Check if it's the start of a thread (and not a reply within the thread)
-                    elif curr_msg.channel.type == discord.ChannelType.public_thread and not curr_msg.reference:
-                         try:
-                             # The starter message is the parent
-                             parent_msg_obj = curr_msg.channel.starter_message or await curr_msg.channel.parent.fetch_message(curr_msg.channel.id)
-                         except (discord.NotFound, discord.HTTPException, AttributeError) as e:
-                             logging.warning(f"Could not fetch thread starter message for thread {curr_msg.channel.id}: {e}")
-                             curr_node.fetch_parent_failed = True
-                    # 3. Check for automatic chaining ONLY IF not explicitly triggered by mention/@ai
-                    elif not is_explicit_trigger:
-                         prev_msg_in_channel = None
-                         try:
-                             # Use history instead of list comprehension for efficiency
-                             async for m in curr_msg.channel.history(before=curr_msg, limit=1):
-                                 prev_msg_in_channel = m
-                                 break # Get only the most recent one
-                         except (discord.Forbidden, discord.HTTPException) as e:
-                             logging.warning(f"Could not fetch history in channel {curr_msg.channel.id}: {e}")
-
-                         if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
-                             # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
-                             if (is_dm_current and prev_msg_in_channel.author == discord_client.user) or \
-                                (not is_dm_current and prev_msg_in_channel.author == curr_msg.author):
-                                 parent_msg_obj = prev_msg_in_channel
-
-                    curr_node.parent_msg = parent_msg_obj
-
-                except Exception as e:
-                    logging.exception(f"Error determining parent message for {curr_msg.id}")
-                    curr_node.fetch_parent_failed = True
-
-
-            # Prepare parts for the current message node for the LLM API
-            current_text_content = curr_node.text[:max_text] if curr_node.text else ""
-            current_images = curr_node.images[:max_images]
-
-            parts_for_api = []
-            if is_gemini:
-                if current_text_content:
-                    # Use google.genai.types (imported as google_types)
-                    parts_for_api.append(google_types.Part.from_text(text=current_text_content))
-                parts_for_api.extend(current_images)
-            else: # OpenAI format
-                if current_text_content:
-                    parts_for_api.append({"type": "text", "text": current_text_content})
-                parts_for_api.extend(current_images) # These are already dicts
-
-            # Add to history if parts exist
-            if parts_for_api:
-                message_data = {
-                    "role": curr_node.role # Use 'user' or 'model'/'assistant'
-                }
-                if is_gemini:
-                    # Ensure parts_for_api is always a list for Gemini
-                    if not isinstance(parts_for_api, list):
-                        parts_for_api = [parts_for_api]
-                    message_data["parts"] = parts_for_api
-                else:
-                    # OpenAI uses 'assistant' role for model responses
-                    if message_data["role"] == "model":
-                        message_data["role"] = "assistant"
-                    message_data["content"] = parts_for_api
-                    # Add name field if supported by provider
-                    if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
-                        message_data["name"] = str(curr_node.user_id)
-
-                history.append(message_data)
-
-            # Add warnings based on limits and errors for this specific node
-            if curr_node.text and len(curr_node.text) > max_text:
-                user_warnings.add(f"⚠️ Max {max_text:,} chars/msg")
-            if len(curr_node.images) > max_images:
-                user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
-            if curr_node.has_bad_attachments:
-                user_warnings.add("⚠️ Unsupported attachments")
-            if curr_node.fetch_parent_failed:
-                 user_warnings.add(f"⚠️ Couldn't fetch full history")
-            # Add warning if max messages reached *while processing this node*
-            if curr_node.parent_msg is not None and len(history) == max_messages:
-                 user_warnings.add(f"⚠️ Only using last {max_messages} messages")
-
-
-            # Move to the parent message for the next iteration
-            curr_msg = curr_node.parent_msg
-
-    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}):\n{new_msg.content}")
-
     # --- Fetch External Content Concurrently ---
     url_fetch_results = []
     if fetch_tasks:
@@ -1630,7 +1458,7 @@ async def on_message(new_msg):
         if other_url_parts:
             other_url_context_to_append = "".join(other_url_parts)
 
-    # Combine context parts
+    # Combine context parts into a single string to be stored
     combined_context = ""
     if google_lens_context_to_append or other_url_context_to_append:
         combined_context = "Answer the user's query based on the following:\n\n"
@@ -1639,60 +1467,203 @@ async def on_message(new_msg):
         if other_url_context_to_append:
             combined_context += other_url_context_to_append
 
+    # --- Build Message History ---
+    history = []
+    curr_msg = new_msg
+    while curr_msg is not None and len(history) < max_messages:
+        # Ensure node exists or create it
+        if curr_msg.id not in msg_nodes:
+             msg_nodes[curr_msg.id] = MsgNode() # Create node if missing (e.g., cache cleared)
+        curr_node = msg_nodes[curr_msg.id]
+
+        async with curr_node.lock:
+            # Populate node if it's empty (first time seeing this message)
+            if curr_node.text is None:
+                # Use the already cleaned content for the *new* message
+                content_to_store = cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
+
+                # Further clean mentions/at ai from older messages if needed (redundant if cleaned above, but safe)
+                is_dm_current = curr_msg.channel.type == discord.ChannelType.private
+                if not is_dm_current and discord_client.user.mentioned_in(curr_msg):
+                     content_to_store = content_to_store.replace(discord_client.user.mention, '').strip()
+                if curr_msg.id != new_msg.id: # Only remove "at ai" from older messages if it wasn't the trigger
+                    content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
+                    content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
+
+
+                # Process attachments (only for the current message node being processed)
+                current_attachments = curr_msg.attachments
+                good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
+                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
+
+                # Combine text content using the cleaned content
+                text_parts = [content_to_store] if content_to_store else []
+                text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
+                text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
+                # text_parts.extend(filter(None, (getattr(embed.footer, 'text', None) for embed in curr_msg.embeds))) # Removed to prevent footer text in history
+
+                # Add text from attachments
+                for att, resp in zip(good_attachments, attachment_responses):
+                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
+                        try:
+                            # Limit attachment text size
+                            attachment_text = resp.text[:max_text // 2] # Limit text attachment size
+                            if len(resp.text) > max_text // 2:
+                                attachment_text += "..."
+                                user_warnings.add(f"⚠️ Truncated text attachment: {att.filename}")
+                            text_parts.append(attachment_text)
+                        except Exception as e:
+                            logging.warning(f"Failed to decode text attachment {att.filename}: {e}")
+                            curr_node.has_bad_attachments = True
+                    elif isinstance(resp, Exception):
+                        logging.warning(f"Failed to fetch attachment {att.filename}: {resp}")
+                        curr_node.has_bad_attachments = True
+
+                curr_node.text = "\n".join(filter(None, text_parts))
+
+                # Process image attachments
+                image_parts = []
+                for att, resp in zip(good_attachments, attachment_responses):
+                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
+                        if is_gemini:
+                            # Use google.genai.types (imported as google_types)
+                            image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
+                        else:
+                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
+                    elif isinstance(resp, Exception):
+                        # Already logged warning above
+                        curr_node.has_bad_attachments = True
+
+                curr_node.images = image_parts
+                curr_node.role = "model" if curr_msg.author == discord_client.user else "user" # Use 'model' for Gemini assistant role
+                curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
+                curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
+
+                # Store the fetched external content in the node for the triggering message
+                if curr_msg.id == new_msg.id and combined_context:
+                    curr_node.external_content = combined_context
+
+                # Find parent message
+                try:
+                    parent_msg_obj = None
+                    # Check if the current message explicitly triggers the bot (mention or "at ai")
+                    # Use the variables calculated at the start of on_message if curr_msg is new_msg
+                    if curr_msg.id == new_msg.id:
+                        mentions_bot_in_current = mentions_bot
+                        contains_at_ai_in_current = contains_at_ai
+                    else: # Recalculate for older messages in the chain if needed
+                        mentions_bot_in_current = discord_client.user.mentioned_in(curr_msg)
+                        contains_at_ai_in_current = AT_AI_PATTERN.search(curr_msg.content) is not None
+
+                    is_explicit_trigger = mentions_bot_in_current or contains_at_ai_in_current
+
+                    # 1. Check reference (Explicit Reply always takes precedence)
+                    if curr_msg.reference and curr_msg.reference.message_id:
+                        try:
+                            parent_msg_obj = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(curr_msg.reference.message_id)
+                        except (discord.NotFound, discord.HTTPException) as e:
+                            logging.warning(f"Could not fetch referenced message {curr_msg.reference.message_id}: {e}")
+                            curr_node.fetch_parent_failed = True
+                    # 2. Check if it's the start of a thread (and not a reply within the thread)
+                    elif curr_msg.channel.type == discord.ChannelType.public_thread and not curr_msg.reference:
+                         try:
+                             # The starter message is the parent
+                             parent_msg_obj = curr_msg.channel.starter_message or await curr_msg.channel.parent.fetch_message(curr_msg.channel.id)
+                         except (discord.NotFound, discord.HTTPException, AttributeError) as e:
+                             logging.warning(f"Could not fetch thread starter message for thread {curr_msg.channel.id}: {e}")
+                             curr_node.fetch_parent_failed = True
+                    # 3. Check for automatic chaining ONLY IF not explicitly triggered by mention/@ai
+                    elif not is_explicit_trigger:
+                         prev_msg_in_channel = None
+                         try:
+                             # Use history instead of list comprehension for efficiency
+                             async for m in curr_msg.channel.history(before=curr_msg, limit=1):
+                                 prev_msg_in_channel = m
+                                 break # Get only the most recent one
+                         except (discord.Forbidden, discord.HTTPException) as e:
+                             logging.warning(f"Could not fetch history in channel {curr_msg.channel.id}: {e}")
+
+                         if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
+                             # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
+                             if (is_dm_current and prev_msg_in_channel.author == discord_client.user) or \
+                                (not is_dm_current and prev_msg_in_channel.author == curr_msg.author):
+                                 parent_msg_obj = prev_msg_in_channel
+
+                    curr_node.parent_msg = parent_msg_obj
+
+                except Exception as e:
+                    logging.exception(f"Error determining parent message for {curr_msg.id}")
+                    curr_node.fetch_parent_failed = True
+
+
+            # --- Prepare content for this node, including external content if present ---
+            current_text_content = ""
+            if curr_node.external_content:
+                # Prepend external content if it exists for this node
+                current_text_content += curr_node.external_content + "\n\nUser's query:\n" # Add separator
+            if curr_node.text:
+                current_text_content += curr_node.text
+
+            # Limit the combined text content
+            current_text_content = current_text_content[:max_text] if current_text_content else ""
+            current_images = curr_node.images[:max_images] # Apply max_images limit
+
+            parts_for_api = []
+            if is_gemini:
+                if current_text_content:
+                    parts_for_api.append(google_types.Part.from_text(text=current_text_content))
+                parts_for_api.extend(current_images) # These are already google_types.Part
+            else: # OpenAI format
+                if current_text_content:
+                    parts_for_api.append({"type": "text", "text": current_text_content})
+                parts_for_api.extend(current_images) # These are already dicts
+
+            # Add to history if parts exist
+            if parts_for_api:
+                message_data = {
+                    "role": curr_node.role # Use 'user' or 'model'/'assistant'
+                }
+                if is_gemini:
+                    # Ensure parts_for_api is always a list for Gemini
+                    if not isinstance(parts_for_api, list):
+                        parts_for_api = [parts_for_api]
+                    message_data["parts"] = parts_for_api
+                else:
+                    # OpenAI uses 'assistant' role for model responses
+                    if message_data["role"] == "model":
+                        message_data["role"] = "assistant"
+                    message_data["content"] = parts_for_api
+                    # Add name field if supported by provider
+                    if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
+                        message_data["name"] = str(curr_node.user_id)
+
+                history.append(message_data)
+
+            # Add warnings based on limits and errors for this specific node
+            if curr_node.text and len(curr_node.text) > max_text: # Check original text length
+                user_warnings.add(f"⚠️ Max {max_text:,} chars/msg")
+            if len(curr_node.images) > max_images:
+                user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
+            if curr_node.has_bad_attachments:
+                user_warnings.add("⚠️ Unsupported attachments")
+            if curr_node.fetch_parent_failed:
+                 user_warnings.add(f"⚠️ Couldn't fetch full history")
+            # Add warning if max messages reached *while processing this node*
+            if curr_node.parent_msg is not None and len(history) == max_messages:
+                 user_warnings.add(f"⚠️ Only using last {max_messages} messages")
+
+
+            # Move to the parent message for the next iteration
+            curr_msg = curr_node.parent_msg
+
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}):\n{new_msg.content}")
+
 
     # --- Prepare API Call ---
     history_for_llm = history[::-1] # Reverse history for correct chronological order
 
-    # Prepend combined external content context if available
-    if combined_context:
-        context_header = combined_context + "\n\nUser's query:\n" # Use the formatted context
-        if history_for_llm and history_for_llm[0]['role'] == 'user':
-            first_user_msg = history_for_llm[0]
-            if is_gemini:
-                # Find or add text part in Gemini message
-                text_part_found = False
-                # Ensure 'parts' exists and is a list
-                if 'parts' not in first_user_msg or not isinstance(first_user_msg['parts'], list):
-                    first_user_msg['parts'] = []
-
-                for part in first_user_msg['parts']:
-                    # Use google.genai.types (imported as google_types)
-                    if isinstance(part, google_types.Part) and part.text is not None:
-                        part.text = context_header + part.text
-                        text_part_found = True
-                        break
-                if not text_part_found:
-                    # Use google.genai.types (imported as google_types)
-                    first_user_msg['parts'].insert(0, google_types.Part.from_text(text=context_header))
-            else: # OpenAI
-                # Ensure 'content' exists before modifying
-                if 'content' not in first_user_msg:
-                    first_user_msg['content'] = []
-
-                # Find or add text part in OpenAI message content list
-                if isinstance(first_user_msg['content'], list):
-                    text_part_found = False
-                    for part in first_user_msg['content']:
-                        if isinstance(part, dict) and part.get('type') == 'text':
-                            part['text'] = context_header + part.get('text', '')
-                            text_part_found = True
-                            break
-                    if not text_part_found:
-                        first_user_msg['content'].insert(0, {'type': 'text', 'text': context_header})
-                elif isinstance(first_user_msg['content'], str): # Handle case where content is just a string
-                     first_user_msg['content'] = context_header + first_user_msg['content']
-                else: # Fallback: create content list if it's missing or wrong type
-                     first_user_msg['content'] = [{'type': 'text', 'text': context_header}]
-
-        else:
-            # Insert context as a new user message if history is empty or starts with assistant/model
-            new_user_message_role = 'user'
-            if is_gemini:
-                 # Use google.genai.types (imported as google_types)
-                 history_for_llm.insert(0, {'role': new_user_message_role, 'parts': [google_types.Part.from_text(text=context_header)]})
-            else:
-                 history_for_llm.insert(0, {'role': new_user_message_role, 'content': context_header})
-
+    # --- REMOVED: Old context prepending logic ---
+    # The context is now part of the message node's text content
 
     # System Prompt
     system_prompt_text = None
@@ -1742,6 +1713,7 @@ async def on_message(new_msg):
             llm_client = None
             api_config = None
             api_content_kwargs = {}
+            payload_to_print = {} # Initialize payload dict for printing
 
             try: # Inner try for the specific API call attempt
                 # --- Initialize Client for this attempt ---
@@ -1785,6 +1757,18 @@ async def on_message(new_msg):
                          # Use google.genai.types (imported as google_types)
                          api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
 
+                    # --- Prepare Gemini Payload for Printing ---
+                    payload_to_print = {
+                        "model": model_name,
+                        # Use model_dump() for Content objects
+                        "contents": [c.model_dump(mode='json', exclude_none=True) for c in api_content_kwargs["contents"]],
+                        # Use model_dump() for config object
+                        "generationConfig": api_config.model_dump(mode='json', exclude_none=True) if api_config else {},
+                    }
+                    # Remove empty fields from generationConfig for cleaner printing
+                    payload_to_print["generationConfig"] = {k: v for k, v in payload_to_print["generationConfig"].items() if v}
+
+
                 else: # OpenAI compatible
                     api_key_to_use = current_api_key if current_api_key != "dummy_key" else None
                     llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
@@ -1796,6 +1780,54 @@ async def on_message(new_msg):
                     api_content_kwargs["messages"] = openai_messages
                     api_config = cfg.get("extra_api_parameters", {}).copy()
                     api_config["stream"] = True # Always stream for OpenAI
+
+                    # --- Prepare OpenAI Payload for Printing ---
+                    payload_to_print = {
+                        "model": model_name,
+                        "messages": api_content_kwargs["messages"],
+                        **api_config # Spread the config parameters
+                    }
+
+                # --- Print Payload ---
+                try:
+                    print(f"\n--- LLM Request Payload (Provider: {provider}, Model: {model_name}) ---")
+                    # Custom default handler for non-serializable types
+                    def default_serializer(obj):
+                        # Check for Pydantic models first
+                        if hasattr(obj, 'model_dump'):
+                            try:
+                                # Use exclude_none=True to remove None values for cleaner output
+                                return obj.model_dump(mode='json', exclude_none=True)
+                            except Exception:
+                                pass
+                        # Handle specific known types like google_types.Part
+                        elif isinstance(obj, google_types.Part):
+                             part_dict = {}
+                             if hasattr(obj, 'text') and obj.text is not None:
+                                 part_dict["text"] = obj.text
+                             if hasattr(obj, 'inline_data') and obj.inline_data:
+                                 part_dict["inline_data"] = {
+                                     "mime_type": obj.inline_data.mime_type,
+                                     "data": "<base64_encoded_data>"
+                                 }
+                             # Add other Part types if needed (function_call, etc.)
+                             return part_dict if part_dict else None # Return None if empty
+                        elif isinstance(obj, bytes):
+                            return "<bytes_data>"
+                        # Fallback for other types
+                        try:
+                            return json.JSONEncoder.default(None, obj)
+                        except TypeError:
+                            return f"<unserializable_object: {type(obj).__name__}>"
+
+                    # Use the custom serializer with json.dumps
+                    print(json.dumps(payload_to_print, indent=2, default=default_serializer))
+                    print("--- End LLM Request Payload ---\n")
+                except Exception as print_err:
+                    logging.error(f"Error printing LLM payload: {print_err}")
+                    # Fallback to printing the raw dict which might still fail on unserializable objects
+                    print(f"Raw Payload Data (may contain unserializable objects):\n{payload_to_print}\n")
+
 
                 # --- Make API Call and Process Stream ---
                 async with new_msg.channel.typing():
