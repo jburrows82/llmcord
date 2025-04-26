@@ -19,8 +19,9 @@ from discord import ui
 import httpx
 # Import specific OpenAI errors and base APIError
 from openai import AsyncOpenAI, APIError, RateLimitError, AuthenticationError, APIConnectionError, BadRequestError
+# Import the new google-genai library and its types
 from google import genai as google_genai
-from google.genai import types as google_types
+from google.genai import types as google_types # Corrected import
 # Import specific Google API core exceptions
 from google.api_core import exceptions as google_api_exceptions
 from googleapiclient.discovery import build as build_google_api_client
@@ -49,6 +50,7 @@ STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
 
 # Gemini safety settings (BLOCK_NONE for all categories)
+# Use google.genai.types (imported as google_types)
 GEMINI_SAFETY_SETTINGS_DICT = {
     google_types.HarmCategory.HARM_CATEGORY_HARASSMENT: google_types.HarmBlockThreshold.BLOCK_NONE,
     google_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: google_types.HarmBlockThreshold.BLOCK_NONE,
@@ -330,102 +332,142 @@ class MsgNode:
     fetch_parent_failed: bool = False
     parent_msg: Optional[discord.Message] = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    full_response_text: Optional[str] = None # Added field for full response text
 
 @dataclass
 class UrlFetchResult:
     url: str
-    content: Optional[Union[str, Dict[str, Any]]]
+    content: Optional[Union[str, Dict[str, Any]]] # This is the required argument
     error: Optional[str] = None
     type: Literal["youtube", "reddit", "general", "google_lens"] = "general"
     original_index: int = -1
 
 # --- Discord UI ---
-class SourcesView(ui.View):
-    def __init__(self, grounding_metadata, timeout=300):
+class ResponseActionView(ui.View):
+    """A view combining 'Show Sources' and 'Get response as text file' buttons."""
+    def __init__(self, *,
+                 grounding_metadata: Optional[Any] = None,
+                 full_response_text: Optional[str] = None,
+                 model_name: Optional[str] = None,
+                 timeout=300):
         super().__init__(timeout=timeout)
         self.grounding_metadata = grounding_metadata
+        self.full_response_text = full_response_text
+        self.model_name = model_name or "llm" # Default filename model name
         self.message = None # Will be set after sending the message
 
-    @ui.button(label="Show Sources", style=discord.ButtonStyle.grey)
-    async def show_sources_button(self, interaction: discord.Interaction, button: ui.Button):
-        if not self.grounding_metadata:
-            await interaction.response.send_message("No grounding metadata available.", ephemeral=True)
-            return
+        # Conditionally add buttons
+        has_sources_button = False
+        if self.grounding_metadata and (getattr(self.grounding_metadata, 'web_search_queries', None) or getattr(self.grounding_metadata, 'grounding_chunks', None)):
+            self.add_item(self.ShowSourcesButton())
+            has_sources_button = True
 
-        embed = discord.Embed(title="Grounding Sources", color=EMBED_COLOR_COMPLETE)
-        field_count = 0
+        if self.full_response_text:
+            # Determine row based on whether sources button exists
+            row = 1 if has_sources_button else 0
+            self.add_item(self.GetTextFileButton(row=row))
 
-        # Add Search Queries field (usually short)
-        if queries := getattr(self.grounding_metadata, 'web_search_queries', None):
-            query_text = "\n".join(f"- `{q}`" for q in queries)
-            if len(query_text) <= MAX_EMBED_FIELD_VALUE_LENGTH and field_count < MAX_EMBED_FIELDS:
-                embed.add_field(name="Search Queries Used", value=query_text, inline=False)
-                field_count += 1
-            else:
-                logging.warning("Search query list too long for embed field.")
-                # Optionally handle very long query lists here (e.g., truncate or split)
+    # Inner class for the Show Sources button
+    class ShowSourcesButton(ui.Button):
+        def __init__(self):
+            super().__init__(label="Show Sources", style=discord.ButtonStyle.grey, row=0)
 
-        # Add Sources Consulted field(s), splitting if necessary
-        if chunks := getattr(self.grounding_metadata, 'grounding_chunks', None):
-            current_field_value = ""
-            field_title = "Sources Consulted"
-            sources_added = 0
+        async def callback(self, interaction: discord.Interaction):
+            # Access parent view's data
+            view: 'ResponseActionView' = self.view
+            if not view.grounding_metadata:
+                await interaction.response.send_message("No grounding metadata available.", ephemeral=True)
+                return
 
-            for chunk in chunks:
-                # Check for web chunk structure
-                web_chunk = getattr(chunk, 'web', None)
-                if web_chunk and hasattr(web_chunk, 'title') and hasattr(web_chunk, 'uri'):
-                    title = web_chunk.title or "Source" # Fallback title
-                    uri = web_chunk.uri
-                    source_line = f"- [{title}]({uri})\n"
+            embed = discord.Embed(title="Grounding Sources", color=EMBED_COLOR_COMPLETE)
+            field_count = 0
 
-                    # Check if adding this line exceeds the limit for the current field
-                    if len(current_field_value) + len(source_line) > MAX_EMBED_FIELD_VALUE_LENGTH:
-                        # Add the current field if it has content
-                        if current_field_value and field_count < MAX_EMBED_FIELDS:
-                            embed.add_field(name=field_title, value=current_field_value, inline=False)
-                            field_count += 1
-                            field_title = "Sources Consulted (cont.)" # Change title for subsequent fields
-                        elif field_count >= MAX_EMBED_FIELDS:
-                             logging.warning("Max embed fields reached while adding sources.")
-                             break # Stop adding sources if max fields reached
+            # Add Search Queries field
+            if queries := getattr(view.grounding_metadata, 'web_search_queries', None):
+                query_text = "\n".join(f"- `{q}`" for q in queries)
+                if len(query_text) <= MAX_EMBED_FIELD_VALUE_LENGTH and field_count < MAX_EMBED_FIELDS:
+                    embed.add_field(name="Search Queries Used", value=query_text, inline=False)
+                    field_count += 1
+                else:
+                    logging.warning("Search query list too long for embed field.")
 
-                        # Start a new field, checking if the single line itself is too long
-                        if len(source_line) <= MAX_EMBED_FIELD_VALUE_LENGTH:
-                            current_field_value = source_line
+            # Add Sources Consulted field(s)
+            if chunks := getattr(view.grounding_metadata, 'grounding_chunks', None):
+                current_field_value = ""
+                field_title = "Sources Consulted"
+                sources_added = 0
+
+                for chunk in chunks:
+                    web_chunk = getattr(chunk, 'web', None)
+                    if web_chunk and hasattr(web_chunk, 'title') and hasattr(web_chunk, 'uri'):
+                        title = web_chunk.title or "Source"
+                        uri = web_chunk.uri
+                        source_line = f"- [{title}]({uri})\n"
+
+                        if len(current_field_value) + len(source_line) > MAX_EMBED_FIELD_VALUE_LENGTH:
+                            if current_field_value and field_count < MAX_EMBED_FIELDS:
+                                embed.add_field(name=field_title, value=current_field_value, inline=False)
+                                field_count += 1
+                                field_title = "Sources Consulted (cont.)"
+                            elif field_count >= MAX_EMBED_FIELDS:
+                                logging.warning("Max embed fields reached while adding sources.")
+                                break
+
+                            if len(source_line) <= MAX_EMBED_FIELD_VALUE_LENGTH:
+                                current_field_value = source_line
+                            else:
+                                truncated_line = source_line[:MAX_EMBED_FIELD_VALUE_LENGTH-4] + "...\n"
+                                current_field_value = truncated_line
+                                logging.warning(f"Single source line truncated: {source_line}")
                         else:
-                            # Handle case where a single source line is too long (e.g., truncate)
-                            truncated_line = source_line[:MAX_EMBED_FIELD_VALUE_LENGTH-4] + "...\n"
-                            current_field_value = truncated_line
-                            logging.warning(f"Single source line truncated: {source_line}")
+                            current_field_value += source_line
+                        sources_added += 1
 
-                    else:
-                        # Add the line to the current field
-                        current_field_value += source_line
-                    sources_added += 1
+                if current_field_value and field_count < MAX_EMBED_FIELDS:
+                    embed.add_field(name=field_title, value=current_field_value, inline=False)
+                    field_count += 1
 
-            # Add the last field if it has content and we haven't hit the limit
-            if current_field_value and field_count < MAX_EMBED_FIELDS:
-                embed.add_field(name=field_title, value=current_field_value, inline=False)
-                field_count += 1
+                if sources_added == 0 and not embed.fields:
+                    embed.description = "No web sources found in metadata."
 
-            if sources_added == 0 and not embed.fields: # If no web chunks were found and no queries
-                 embed.description = "No web sources or search queries found in metadata."
+            if not embed.fields and not embed.description:
+                try:
+                    metadata_str = str(view.grounding_metadata)
+                    embed.description = f"```json\n{metadata_str[:MAX_EMBED_DESCRIPTION_LENGTH-10]}\n```"
+                except Exception:
+                    embed.description = "Could not display raw grounding metadata."
 
-        # If somehow still no fields (e.g., queries were too long and no sources)
-        if not embed.fields and not embed.description:
-             # Fallback: Show raw metadata if possible, else generic message
-             try:
-                 metadata_str = str(self.grounding_metadata) # Or use a specific formatting method if available
-                 embed.description = f"```json\n{metadata_str[:MAX_EMBED_DESCRIPTION_LENGTH-10]}\n```" # Truncate raw data
-             except Exception:
-                 embed.description = "Could not display raw grounding metadata."
+            if not embed.fields and not embed.description and not embed.title:
+                await interaction.response.send_message("Could not extract source information.", ephemeral=True)
+            else:
+                # Send as ephemeral message
+                await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # Check if embed is empty before sending
-        if not embed.fields and not embed.description and not embed.title:
-             await interaction.response.send_message("Could not extract source information.", ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+    # Inner class for the Get Text File button
+    class GetTextFileButton(ui.Button):
+        def __init__(self, row: int):
+            super().__init__(label="Get response as a text file", style=discord.ButtonStyle.green, row=row)
+
+        async def callback(self, interaction: discord.Interaction):
+            # Access parent view's data
+            view: 'ResponseActionView' = self.view
+            if not view.full_response_text:
+                await interaction.response.send_message("No response text available to send.", ephemeral=True)
+                return
+
+            try:
+                # Clean model name for filename
+                safe_model_name = re.sub(r'[<>:"/\\|?*]', '_', view.model_name) # Replace invalid chars
+                filename = f"llm_response_{safe_model_name}.txt"
+
+                # Create a file-like object from the string
+                file_content = io.BytesIO(view.full_response_text.encode('utf-8'))
+                discord_file = discord.File(fp=file_content, filename=filename)
+
+                await interaction.response.send_message(file=discord_file, ephemeral=True)
+            except Exception as e:
+                logging.error(f"Error creating or sending text file: {e}")
+                await interaction.response.send_message("Sorry, I couldn't create the text file.", ephemeral=True)
 
 
 # --- Helper Functions ---
@@ -492,7 +534,8 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
 
         if transcript:
             fetched_transcript = await asyncio.to_thread(transcript.fetch)
-            full_transcript = " ".join([entry['text'] for entry in fetched_transcript]) # Use dict access for fetched
+            # Use attribute access (.text) instead of dictionary access (['text'])
+            full_transcript = " ".join([entry.text for entry in fetched_transcript])
             return full_transcript, None
         else:
             return None, "No suitable transcript found."
@@ -591,7 +634,8 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
     """Fetches transcript and details for a single YouTube URL."""
     video_id = extract_video_id(url)
     if not video_id:
-        return UrlFetchResult(url=url, error="Could not extract video ID.", type="youtube", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error="Could not extract video ID.", type="youtube", original_index=index)
 
     # Fetch transcript and details concurrently
     transcript_task = asyncio.create_task(get_transcript(video_id))
@@ -622,7 +666,8 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
 async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id: str, client_secret: str, user_agent: str) -> UrlFetchResult:
     """Fetches content for a single Reddit submission URL."""
     if not all([client_id, client_secret, user_agent]):
-        return UrlFetchResult(url=url, error="Reddit API credentials not configured.", type="reddit", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error="Reddit API credentials not configured.", type="reddit", original_index=index)
 
     reddit = None # Initialize outside try block
     try:
@@ -662,16 +707,20 @@ async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id:
         return UrlFetchResult(url=url, content=content_data, type="reddit", original_index=index)
 
     except (NotFound, Redirect):
-        return UrlFetchResult(url=url, error="Submission not found or invalid URL.", type="reddit", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error="Submission not found or invalid URL.", type="reddit", original_index=index)
     except Forbidden as e:
          logging.warning(f"Reddit API Forbidden error for {url}: {e}")
-         return UrlFetchResult(url=url, error="Reddit API access forbidden.", type="reddit", original_index=index)
+         # Add content=None
+         return UrlFetchResult(url=url, content=None, error="Reddit API access forbidden.", type="reddit", original_index=index)
     except AsyncPrawRequestException as e:
         logging.warning(f"Reddit API Request error for {url}: {e}")
-        return UrlFetchResult(url=url, error=f"Reddit API request error: {type(e).__name__}", type="reddit", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error=f"Reddit API request error: {type(e).__name__}", type="reddit", original_index=index)
     except Exception as e:
         logging.exception(f"Unexpected error fetching Reddit content for {url}")
-        return UrlFetchResult(url=url, error=f"Unexpected error: {type(e).__name__}", type="reddit", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error=f"Unexpected error: {type(e).__name__}", type="reddit", original_index=index)
     finally:
         # Ensure the Reddit client is closed if it was initialized
         if reddit:
@@ -688,13 +737,16 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
             if response.status_code != 200:
                  # Check for redirect loop explicitly
                  if response.status_code >= 300 and response.status_code < 400 and len(response.history) > 5:
-                     return UrlFetchResult(url=url, error=f"Too many redirects ({response.status_code}).", type="general", original_index=index)
-                 return UrlFetchResult(url=url, error=f"HTTP status {response.status_code}.", type="general", original_index=index)
+                     # Add content=None
+                     return UrlFetchResult(url=url, content=None, error=f"Too many redirects ({response.status_code}).", type="general", original_index=index)
+                 # Add content=None
+                 return UrlFetchResult(url=url, content=None, error=f"HTTP status {response.status_code}.", type="general", original_index=index)
 
             # Check content type
             content_type = response.headers.get("content-type", "").lower()
             if "text/html" not in content_type:
-                return UrlFetchResult(url=url, error=f"Unsupported content type: {content_type}", type="general", original_index=index)
+                # Add content=None
+                return UrlFetchResult(url=url, content=None, error=f"Unsupported content type: {content_type}", type="general", original_index=index)
 
             # Read content incrementally
             html_content = ""
@@ -706,10 +758,12 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
                         html_content = html_content[:5*1024*1024] + "..."
                         break
             except httpx.ReadTimeout:
-                 return UrlFetchResult(url=url, error="Timeout while reading content.", type="general", original_index=index)
+                 # Add content=None
+                 return UrlFetchResult(url=url, content=None, error="Timeout while reading content.", type="general", original_index=index)
             except Exception as e:
                  logging.warning(f"Error decoding content for {url}: {e}")
-                 return UrlFetchResult(url=url, error=f"Content decoding error: {type(e).__name__}", type="general", original_index=index)
+                 # Add content=None
+                 return UrlFetchResult(url=url, content=None, error=f"Content decoding error: {type(e).__name__}", type="general", original_index=index)
 
 
         # Parse with BeautifulSoup
@@ -730,7 +784,8 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
         text = re.sub(r'\s+', ' ', text).strip()
 
         if not text:
-            return UrlFetchResult(url=url, error="No text content found.", type="general", original_index=index)
+            # Add content=None
+            return UrlFetchResult(url=url, content=None, error="No text content found.", type="general", original_index=index)
 
         # Limit content length
         content = text[:MAX_URL_CONTENT_LENGTH] + ('...' if len(text) > MAX_URL_CONTENT_LENGTH else '')
@@ -739,17 +794,20 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
 
     except httpx.RequestError as e:
         logging.warning(f"HTTPX RequestError fetching {url}: {type(e).__name__}")
-        return UrlFetchResult(url=url, error=f"Request failed: {type(e).__name__}", type="general", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error=f"Request failed: {type(e).__name__}", type="general", original_index=index)
     except Exception as e:
         logging.exception(f"Unexpected error fetching general URL {url}")
-        return UrlFetchResult(url=url, error=f"Unexpected error: {type(e).__name__}", type="general", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=url, content=None, error=f"Unexpected error: {type(e).__name__}", type="general", original_index=index)
 
 async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFetchResult:
     """Fetches Google Lens results for an image URL using SerpAPI with key rotation and retry."""
     service_name = "serpapi"
     all_keys = cfg.get("serpapi_api_keys", [])
     if not all_keys:
-        return UrlFetchResult(url=image_url, error="SerpAPI keys not configured.", type="google_lens", original_index=index)
+        # Add content=None
+        return UrlFetchResult(url=image_url, content=None, error="SerpAPI keys not configured.", type="google_lens", original_index=index)
 
     available_keys = await get_available_keys(service_name, all_keys)
     random.shuffle(available_keys)
@@ -780,7 +838,8 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
                     continue # Try next key
                 elif "invalid api key" in error_msg.lower():
                     # Don't retry with other keys if this one is definitively invalid
-                    return UrlFetchResult(url=image_url, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens", original_index=index)
+                    # Add content=None
+                    return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens", original_index=index)
                 else:
                     # For other API errors, maybe retry? For now, continue to next key.
                     continue
@@ -792,7 +851,8 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
                  encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
                  # These errors are usually not key-related, so maybe don't retry?
                  # For now, let's return the error from the first key that hit this.
-                 return UrlFetchResult(url=image_url, error=f"SerpAPI Search Error: {error_msg}", type="google_lens", original_index=index)
+                 # Add content=None
+                 return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Search Error: {error_msg}", type="google_lens", original_index=index)
 
 
             # --- Success Case ---
@@ -838,7 +898,8 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
     final_error_msg = "All SerpAPI keys failed."
     if encountered_errors:
         final_error_msg += f" Last error: {encountered_errors[-1]}"
-    return UrlFetchResult(url=image_url, error=final_error_msg, type="google_lens", original_index=index)
+    # Add content=None
+    return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens", original_index=index)
 
 
 # --- Discord Event Handler ---
@@ -917,7 +978,7 @@ async def on_message(new_msg):
         provider, model_name = provider_slash_model.split("/", 1)
     except ValueError:
         logging.error(f"Invalid model format in config: '{provider_slash_model}'. Should be 'provider/model_name'.")
-        await new_msg.reply(f"⚠️ Invalid model format in config: `{provider_slash_model}`", silent=True)
+        await new_msg.reply(f"⚠️ Invalid model format in config: `{provider_slash_model}`", mention_author = False)
         return
 
     provider_config = cfg.get("providers", {}).get(provider, {})
@@ -931,7 +992,7 @@ async def on_message(new_msg):
 
     if keys_required and not all_api_keys:
          logging.error(f"No API keys configured for provider '{provider}' in config.yaml.")
-         await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", silent=True)
+         await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", mention_author = False)
          return
 
     # --- Configuration Values ---
@@ -1054,6 +1115,7 @@ async def on_message(new_msg):
                 for att, resp in zip(good_attachments, attachment_responses):
                     if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
                         if is_gemini:
+                            # Use google.genai.types (imported as google_types)
                             image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
                         else:
                             image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
@@ -1126,6 +1188,7 @@ async def on_message(new_msg):
             parts_for_api = []
             if is_gemini:
                 if current_text_content:
+                    # Use google.genai.types (imported as google_types)
                     parts_for_api.append(google_types.Part.from_text(text=current_text_content))
                 parts_for_api.extend(current_images)
             else: # OpenAI format
@@ -1271,11 +1334,13 @@ async def on_message(new_msg):
                     first_user_msg['parts'] = []
 
                 for part in first_user_msg['parts']:
-                    if hasattr(part, 'text') and part.text is not None:
+                    # Use google.genai.types (imported as google_types)
+                    if isinstance(part, google_types.Part) and part.text is not None:
                         part.text = context_header + part.text
                         text_part_found = True
                         break
                 if not text_part_found:
+                    # Use google.genai.types (imported as google_types)
                     first_user_msg['parts'].insert(0, google_types.Part.from_text(text=context_header))
             else: # OpenAI
                 # Ensure 'content' exists before modifying
@@ -1301,6 +1366,7 @@ async def on_message(new_msg):
             # Insert context as a new user message if history is empty or starts with assistant/model
             new_user_message_role = 'user'
             if is_gemini:
+                 # Use google.genai.types (imported as google_types)
                  history_for_llm.insert(0, {'role': new_user_message_role, 'parts': [google_types.Part.from_text(text=context_header)]})
             else:
                  history_for_llm.insert(0, {'role': new_user_message_role, 'content': context_header})
@@ -1319,11 +1385,12 @@ async def on_message(new_msg):
     final_text = ""    # Store the final aggregated text
     llm_call_successful = False
     llm_errors = []
-    view = None
+    final_view = None # Initialize final_view here
     grounding_metadata = None
     edit_task = None
 
     embed = discord.Embed() # Initialize embed here
+    embed.set_footer(text=f"Model: {provider_slash_model}") # Add the footer with the model name
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
@@ -1335,7 +1402,7 @@ async def on_message(new_msg):
 
         if keys_required and not available_llm_keys: # Check if keys are actually needed and available
             logging.error(f"No available (non-rate-limited) API keys for provider '{provider}'.")
-            await new_msg.reply(f"⚠️ No available API keys for provider `{provider}` right now.", silent=True)
+            await new_msg.reply(f"⚠️ No available API keys for provider `{provider}` right now.", mention_author = False)
             return # Exit if no keys available and keys are required
 
         # Loop even if no keys needed (e.g., Ollama) - use a dummy key placeholder
@@ -1358,6 +1425,7 @@ async def on_message(new_msg):
                 # --- Initialize Client for this attempt ---
                 if is_gemini:
                     if current_api_key == "dummy_key": raise ValueError("Gemini requires an API key.")
+                    # Use google.genai (imported as google_genai)
                     llm_client = google_genai.Client(api_key=current_api_key)
                     # Prepare Gemini specific args
                     gemini_contents = []
@@ -1368,7 +1436,9 @@ async def on_message(new_msg):
                         if not isinstance(parts, list):
                              logging.warning(f"Correcting non-list parts for Gemini message: {parts}")
                              # Convert non-list to text part or empty list
+                             # Use google.genai.types (imported as google_types)
                              parts = [google_types.Part.from_text(text=str(parts))] if parts else []
+                        # Use google.genai.types (imported as google_types)
                         gemini_contents.append(google_types.Content(role=role, parts=parts))
 
                     api_content_kwargs["contents"] = gemini_contents
@@ -1377,17 +1447,20 @@ async def on_message(new_msg):
                     if "max_tokens" in gemini_extra_params:
                         gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
 
+                    # Use google.genai.types (imported as google_types)
                     gemini_safety_settings_list = [
                         google_types.SafetySetting(category=category, threshold=threshold)
                         for category, threshold in GEMINI_SAFETY_SETTINGS_DICT.items()
                     ]
 
+                    # Use google.genai.types (imported as google_types)
                     api_config = google_types.GenerateContentConfig(
                         **gemini_extra_params,
                         safety_settings=gemini_safety_settings_list,
                         tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
                     )
                     if system_prompt_text:
+                         # Use google.genai.types (imported as google_types)
                          api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
 
                 else: # OpenAI compatible
@@ -1407,6 +1480,7 @@ async def on_message(new_msg):
                     stream_response = None
                     if is_gemini:
                         if not llm_client: raise ValueError("Gemini client not initialized for this key.")
+                        # Use google.genai.types (imported as google_types)
                         stream_response = await llm_client.aio.models.generate_content_stream(
                             model=model_name,
                             contents=api_content_kwargs["contents"],
@@ -1435,6 +1509,7 @@ async def on_message(new_msg):
                                      candidate = chunk.candidates[0]
                                      if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
                                           # Map Gemini finish reason if needed, default to 'stop' if successful
+                                          # Use google.genai.types (imported as google_types)
                                           reason_map = {
                                                google_types.FinishReason.STOP: "stop",
                                                google_types.FinishReason.MAX_TOKENS: "length",
@@ -1459,6 +1534,36 @@ async def on_message(new_msg):
                             if chunk_grounding_metadata:
                                 grounding_metadata = chunk_grounding_metadata # Keep the latest
 
+                            # --- ADD SAFETY CHECK HERE ---
+                            if finish_reason and finish_reason.lower() == "safety":
+                                logging.warning(f"Gemini Response Blocked (finish_reason=SAFETY) with key {key_display}")
+                                llm_errors.append(f"Key {key_display}: Response Blocked (Safety)")
+                                llm_call_successful = False # Mark as unsuccessful
+
+                                # Edit the last message to show it was blocked if possible
+                                if not use_plain_responses and response_msgs:
+                                    try:
+                                        # Ensure embed description exists before appending
+                                        current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
+                                        embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip() # Remove indicator
+                                        embed.description += "\n\n⚠️ Response blocked by safety filters."
+                                        embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                                        embed.color = EMBED_COLOR_ERROR
+                                        # Ensure previous edit task is awaited if exists
+                                        if edit_task and not edit_task.done():
+                                            await edit_task
+                                        await response_msgs[-1].edit(embed=embed, view=None) # Edit final state
+                                    except Exception as edit_err:
+                                        logging.error(f"Failed to edit message to show safety block: {edit_err}")
+                                        # Fallback reply will happen outside the loop if llm_call_successful is False
+                                else:
+                                     # Reply will happen outside the loop if llm_call_successful is False
+                                     pass # No immediate reply needed here for plain text
+
+                                # Break both inner stream loop and outer retry loop
+                                break # Break inner stream loop (will trigger outer break below)
+                            # --- END SAFETY CHECK ---
+
                             # Append content if not empty
                             if new_content_chunk:
                                 response_contents.append(new_content_chunk)
@@ -1469,15 +1574,28 @@ async def on_message(new_msg):
                                 if not current_full_text and not finish_reason: # Skip empty intermediate chunks
                                      continue
 
-                                # Create view if grounding metadata exists *during* streaming
-                                if view is None and grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None)):
-                                    view = SourcesView(grounding_metadata)
+                                # Create view only on the final chunk if needed
+                                view_to_attach = None
+                                is_final_chunk = finish_reason is not None
+                                if is_final_chunk:
+                                    # Check if any button should be added
+                                    has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None))
+                                    has_text = bool(current_full_text)
+                                    if has_sources or has_text:
+                                        view_to_attach = ResponseActionView(
+                                            grounding_metadata=grounding_metadata,
+                                            full_response_text=current_full_text,
+                                            model_name=provider_slash_model
+                                        )
+                                        # Remove view if it ended up having no buttons
+                                        if not view_to_attach or len(view_to_attach.children) == 0:
+                                            view_to_attach = None
+
 
                                 current_msg_index = (len(current_full_text) - 1) // split_limit if current_full_text else 0
                                 start_next_msg = current_msg_index >= len(response_msgs)
 
                                 ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
-                                is_final_chunk = finish_reason is not None
 
                                 if start_next_msg or ready_to_edit or is_final_chunk:
                                     if edit_task is not None:
@@ -1505,9 +1623,6 @@ async def on_message(new_msg):
                                     is_successful_finish = finish_reason and finish_reason.lower() in ("stop", "end_turn") # Define success
                                     embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
 
-                                    # Attach view only if it's the final chunk and grounding exists
-                                    view_to_attach = view if is_final_chunk else None
-
                                     # Create or Edit the current message
                                     if start_next_msg:
                                         reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
@@ -1518,7 +1633,7 @@ async def on_message(new_msg):
                                                 try: await old_msg.delete()
                                                 except discord.HTTPException: pass # Ignore if already deleted
                                             response_msgs = [] # Reset the list
-                                        response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
+                                        response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
                                         response_msgs.append(response_msg)
                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                                         await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
@@ -1526,7 +1641,7 @@ async def on_message(new_msg):
                                         edit_task = asyncio.create_task(response_msgs[current_msg_index].edit(embed=embed, view=view_to_attach))
                                     elif not response_msgs and is_final_chunk: # Handle case where response is short and finishes immediately
                                          reply_to_msg = new_msg
-                                         response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, silent=True)
+                                         response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
                                          response_msgs.append(response_msg)
                                          msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                                          await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
@@ -1566,8 +1681,13 @@ async def on_message(new_msg):
                             break
                     # --- End Stream Processing Loop ---
 
-                    # If the stream finished without breaking due to an error
-                    if finish_reason:
+                    # --- ADD OUTER BREAK FOR SAFETY ---
+                    if finish_reason and finish_reason.lower() == "safety":
+                        break # Break outer retry loop immediately if safety blocked
+                    # --- END OUTER BREAK ---
+
+                    # If the stream finished without breaking due to an error (and wasn't safety)
+                    if finish_reason and finish_reason.lower() != "safety": # Check it wasn't safety
                         llm_call_successful = True
                         logging.info(f"LLM request successful with key {key_display}")
                         break # Exit the outer retry loop
@@ -1592,35 +1712,7 @@ async def on_message(new_msg):
                  llm_errors.append(f"Key {key_display}: Bad Request - {e}")
                  # Bad requests are unlikely to be fixed by changing keys, stop retrying.
                  llm_call_successful = False; break
-            except google_types.BlockedPromptError as e:
-                 logging.warning(f"Gemini Prompt Blocked with key {key_display}: {e}")
-                 llm_errors.append(f"Key {key_display}: Prompt Blocked")
-                 # Prompt blocked is not key-specific, stop retrying.
-                 llm_call_successful = False
-                 # Send specific message immediately
-                 await new_msg.reply("⚠️ My prompt was blocked by safety filters.", silent=True)
-                 break
-            except google_types.StopCandidateError as e:
-                 logging.warning(f"Gemini Response Blocked with key {key_display}: {e}")
-                 llm_errors.append(f"Key {key_display}: Response Blocked")
-                 # Response blocked is not key-specific, stop retrying.
-                 llm_call_successful = False
-                 # Edit the last message to show it was blocked if possible
-                 if not use_plain_responses and response_msgs:
-                     try:
-                         # Ensure embed description exists before appending
-                         current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
-                         embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
-                         embed.description += "\n\n⚠️ Response blocked by safety filters."
-                         embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
-                         embed.color = EMBED_COLOR_ERROR
-                         await response_msgs[-1].edit(embed=embed, view=None)
-                     except Exception as edit_err:
-                         logging.error(f"Failed to edit message to show safety block: {edit_err}")
-                         await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
-                 else:
-                    await new_msg.reply("⚠️ My response was blocked by safety filters.", silent=True)
-                 break
+            # Removed BlockedPromptError and StopCandidateError handlers
             except APIError as e: # Catch other OpenAI API errors
                 logging.exception(f"OpenAI API Error for key {key_display}")
                 llm_errors.append(f"Key {key_display}: API Error - {type(e).__name__}: {e}")
@@ -1657,17 +1749,29 @@ async def on_message(new_msg):
                      await response_msgs[-1].edit(embed=embed, view=None) # Remove view on final error
                  except Exception as edit_err:
                      logging.error(f"Failed to edit message to show final error: {edit_err}")
-                     await new_msg.reply(error_message, silent=True) # Fallback reply
+                     await new_msg.reply(error_message, mention_author = False) # Fallback reply
             else:
                 # If plain responses were used, or no messages were sent yet, just reply
-                await new_msg.reply(error_message, silent=True)
+                await new_msg.reply(error_message, mention_author = False)
             # Do NOT return here, let finally run
 
         else: # If successful
             final_text = "".join(response_contents)
-            # Create view if grounding metadata exists (final check after successful call)
-            if view is None and grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None)):
-                view = SourcesView(grounding_metadata)
+
+            # Create the final view (if needed) after successful generation
+            final_view = None
+            if not use_plain_responses:
+                has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None))
+                has_text = bool(final_text)
+                if has_sources or has_text:
+                    final_view = ResponseActionView(
+                        grounding_metadata=grounding_metadata,
+                        full_response_text=final_text,
+                        model_name=provider_slash_model
+                    )
+                    # Remove view if it ended up having no buttons
+                    if not final_view or len(final_view.children) == 0:
+                        final_view = None
 
             # Handle plain text responses (final output)
             if use_plain_responses:
@@ -1681,13 +1785,16 @@ async def on_message(new_msg):
                  temp_response_msgs = []
                  for i, content in enumerate(final_messages_content):
                      reply_to_msg = new_msg if not temp_response_msgs else temp_response_msgs[-1]
-                     current_view = view if (i == len(final_messages_content) - 1) else None
-                     response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=current_view, silent=True)
+                     # Plain responses don't get views
+                     response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=None, mention_author = False)
                      temp_response_msgs.append(response_msg)
                      # Create node and acquire lock immediately
                      msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                      node = msg_nodes[response_msg.id]
                      await node.lock.acquire()
+                     # Store full text in the last node for plain responses
+                     if i == len(final_messages_content) - 1:
+                         node.full_response_text = final_text
                  response_msgs = temp_response_msgs # Update the main list
 
             # Final edit for embed messages (if not already handled by final chunk logic)
@@ -1709,46 +1816,48 @@ async def on_message(new_msg):
                      current_view_exists = bool(last_msg.components)
 
                      # Check if edit is needed: view changed, content changed, or color changed
-                     if (view and not current_view_exists) or (not view and current_view_exists): needs_edit = True
+                     if (final_view and not current_view_exists) or (not final_view and current_view_exists): needs_edit = True
                      elif current_description != embed.description or current_color != embed.color: needs_edit = True
                      elif not last_msg.embeds: needs_edit = True # Should not happen, but safety check
 
                      if needs_edit:
-                         await last_msg.edit(embed=embed, view=view)
+                         await last_msg.edit(embed=embed, view=final_view)
+
+                     # Store full text in the last node for embed responses
+                     if last_msg.id in msg_nodes:
+                         msg_nodes[last_msg.id].full_response_text = final_text
+
                  except discord.HTTPException as e: logging.error(f"Failed final edit on message {final_msg_index}: {e}")
                  except IndexError: logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}")
 
             elif not use_plain_responses and not response_msgs: # Handle empty successful response
                  embed.description = "..."
                  embed.color = EMBED_COLOR_COMPLETE
-                 response_msg = await new_msg.reply(embed=embed, view=view, silent=True)
+                 response_msg = await new_msg.reply(embed=embed, view=final_view, mention_author = False)
                  response_msgs.append(response_msg)
                  # Create node and acquire lock immediately
                  msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                  node = msg_nodes[response_msg.id]
                  await node.lock.acquire()
+                 # Store full text (which is empty or just "...")
+                 node.full_response_text = final_text
+
 
     except Exception as outer_e:
         # Catch any unexpected errors in the main processing block
         logging.exception("Unhandled error during message processing.")
         try:
-            await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", silent=True)
+            await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", mention_author = False)
         except discord.HTTPException:
             pass # Ignore if we can't even reply
 
     finally: # --- Cleanup and Cache Management --- (Associated with the main try)
-        # Release locks and store final text for all response messages created in this run
+        # Release locks for all response messages created in this run
         logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
         for response_msg in response_msgs:
             if response_msg and response_msg.id in msg_nodes: # Check if response_msg is not None
                 node = msg_nodes[response_msg.id]
-                # Store final text only if the call was successful
-                if llm_call_successful:
-                    node.text = final_text
-                else:
-                    # Optionally store an error indicator or leave text as None
-                    node.text = node.text or "[Error occurred during generation]" # Keep existing text if any, else mark error
-
+                # Text/full_response_text is now stored during the success path
                 if node.lock.locked():
                     try:
                         logging.debug(f"Releasing lock for message node {response_msg.id}")
