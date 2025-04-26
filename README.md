@@ -52,6 +52,7 @@ Or run a local model with:
 - This extracted information is appended to your original query before being sent to the LLM, providing rich context for summarization, analysis, or question-answering based on the video content.
 - Handles multiple YouTube URLs within the same message concurrently.
 - **Requires a YouTube Data API v3 key** configured in `config.yaml`.
+- **Persistent Context:** The extracted YouTube content is stored in the chat history database (`llmcord_history.db`) and will be included in the context for subsequent replies in the conversation, even after bot restarts.
 
 ### Reddit Content Extraction
 - Include Reddit submission URLs directly in your query (e.g., `https://www.reddit.com/r/.../comments/.../`).
@@ -59,6 +60,7 @@ Or run a local model with:
 - This extracted information is appended to your original query before being sent to the LLM, providing context for summarization, analysis, or question-answering based on the Reddit post.
 - Handles multiple Reddit URLs within the same message concurrently.
 - **Requires Reddit API credentials** (client ID, client secret, user agent) configured in `config.yaml`. You can obtain these by creating a 'script' app on Reddit's [app preferences page](https://www.reddit.com/prefs/apps).
+- **Persistent Context:** The extracted Reddit content is stored in the chat history database (`llmcord_history.db`) and will be included in the context for subsequent replies in the conversation, even after bot restarts.
 
 ### General URL Content Extraction
 - Include most HTTP/HTTPS URLs directly in your query (excluding YouTube and Reddit, which have specialized handling).
@@ -66,23 +68,25 @@ Or run a local model with:
 - Extracted text (limited length) is appended to your original query before being sent to the LLM, providing context for summarization, analysis, or question-answering based on the web page content.
 - Handles multiple URLs within the same message concurrently.
 - Basic error handling included (timeouts, non-HTML content, fetch errors).
+- **Persistent Context:** The extracted web page content is stored in the chat history database (`llmcord_history.db`) and will be included in the context for subsequent replies in the conversation, even after bot restarts.
 
 ### Google Lens Integration (Custom Primary, SerpAPI Fallback)
 - **Primary Implementation (Custom/Playwright):**
   - Trigger image analysis by starting your query with `googlelens` (case-insensitive) after mentioning the bot or using `at ai` (e.g., `@BotName googlelens what is this?` or `at ai googlelens identify this object`).
   - Requires image(s) to be attached to the message.
-  - The bot uses **Playwright** (integrated within `llmcord.py`) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search. This mimics human interaction for potentially better results or bypassing certain restrictions.
-  - **Requires configuration** of your Chrome user data directory and profile name in `config.yaml` (see below).
-  - **Requires Playwright and its browser drivers to be installed** (`pip install playwright` and `python -m playwright install chrome`).
+  - The bot uses **Playwright** (integrated within `llmcord.py`) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search.
+  - **Requires configuration** of your Chrome user data directory and profile name in `config.yaml`.
+  - **Requires Playwright and its browser drivers to be installed**.
 - **Fallback Implementation (SerpAPI):**
-  - If the custom Playwright implementation fails (due to configuration errors, Playwright issues, or Google changes), the bot automatically falls back to using **SerpAPI's Google Lens API**.
+  - If the custom Playwright implementation fails, the bot automatically falls back to using **SerpAPI's Google Lens API**.
 - Requires image(s) to be attached to the message.
 - Fetches visual matches and related content for each image concurrently.
-- Appends the formatted results (indicating source: custom or SerpAPI) to your original query before sending it to the LLM, providing visual context for analysis or identification.
+- Appends the formatted results (indicating source: custom or SerpAPI) to your original query before sending it to the LLM.
 - Handles multiple image attachments in a single query.
 - **Requires SerpAPI API keys** configured in `config.yaml` for the fallback functionality.
 - **Multiple API Key Support:** Configure multiple SerpAPI keys in `config.yaml`.
-- **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails (e.g., rate limit), it automatically retries with another key.
+- **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails, it automatically retries with another key.
+- **Persistent Context:** The Google Lens results (whether from custom or SerpAPI) are stored in the chat history database (`llmcord_history.db`) and will be included in the context for subsequent replies in the conversation, even after bot restarts.
 
 ### Robust Rate Limit Handling
 - **Persistent Cooldown:** Rate-limited API keys (LLM providers & SerpAPI) are automatically detected and put on a 24-hour cooldown to prevent reuse.
@@ -95,6 +99,10 @@ Or run a local model with:
 - If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
 - Clicking "Show Sources" reveals the search queries the model used and the web sources it consulted to generate the response.
 
+### Persistent Chat History
+- **SQLite Database:** All conversation turns, including user messages, bot responses, attached images (URLs), and **fetched content from YouTube, Reddit, general URLs, and Google Lens**, are stored in a local SQLite database (`llmcord_history.db`).
+- **Restart Resilience:** This ensures that the full context of a conversation, including the content retrieved from external sources, is maintained even if the bot is restarted. When you reply to a message, the bot loads the necessary history from the database to continue the conversation accurately.
+
 ### And more:
 - Supports image attachments when using a vision model (like gpt-4.1, claude-3, gemini-flash, llama-4, etc.)
 - Supports text file attachments (.txt, .py, .c, etc.)
@@ -103,9 +111,8 @@ Or run a local model with:
 - Streamed responses (turns green when complete, automatically splits into separate messages when too long)
 - Hot reloading config (you can change settings without restarting the bot)
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
-- Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~1700 lines of code
+- 1 Python file, ~2000 lines of code
 
 ## Instructions
 
@@ -125,7 +132,7 @@ Or run a local model with:
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br />**Max 128 characters.** |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br />(Default: `100,000`) |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model.**<br />(Default: `5`) |
-| **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br />(Default: `25`) |
+| **max_messages** | The maximum number of messages loaded from the history database for context.<br />(Default: `25`) |
 | **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
 | **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
@@ -171,7 +178,7 @@ Or run a local model with:
    ```bash
    python -m pip install -U -r requirements.txt
    ```
-   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results`, and `playwright`)*
+   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results`, and `playwright`)*
    *(Note: You also need Playwright's browser drivers: `python -m playwright install chrome`)*
 
 4. Run the bot:
@@ -204,6 +211,8 @@ Or run a local model with:
 - Google Lens processing primarily uses a custom Playwright implementation integrated within `llmcord.py`. Ensure Chrome is closed for the specified profile. If this fails, it falls back to SerpAPI, which counts towards your SerpAPI plan's search credits. The bot rotates SerpAPI keys and handles rate limits across your provided keys during fallback.
 
 - **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt`). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
+
+- **Chat History Persistence:** Conversation history, including fetched content from URLs and Google Lens, is stored in `llmcord_history.db`. This allows conversations to resume with full context after restarts. Ensure this file is backed up if needed and add `*.db` and `*.db-journal` to your `.gitignore`. The runtime message cache (`msg_nodes`) is still used for efficiency during active processing but is not the primary source for history reconstruction.
 
 - PRs are welcome :)
 
