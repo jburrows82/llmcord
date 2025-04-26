@@ -6,15 +6,14 @@ import logging
 import os
 import random
 import sqlite3
-import sys
+import sys # Added for custom lens error printing
 import time
 from typing import Literal, Optional, List, Dict, Any, Tuple, Union, Set
 import io
 import re
-import traceback
+import traceback # Added for custom lens error printing
 import urllib.parse
 import json
-import copy
 
 import asyncpraw
 import discord
@@ -24,7 +23,7 @@ import httpx
 from openai import AsyncOpenAI, APIError, RateLimitError, AuthenticationError, APIConnectionError, BadRequestError
 # Import the new google-genai library and its types
 from google import genai as google_genai
-from google.genai import types as google_types
+from google.genai import types as google_types # Corrected import
 # Import specific Google API core exceptions
 from google.api_core import exceptions as google_api_exceptions
 from googleapiclient.discovery import build as build_google_api_client
@@ -69,18 +68,20 @@ STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
 
 # Gemini safety settings (BLOCK_NONE for all categories)
+# Use google.genai.types (imported as google_types)
 GEMINI_SAFETY_SETTINGS_DICT = {
     google_types.HarmCategory.HARM_CATEGORY_HARASSMENT: google_types.HarmBlockThreshold.BLOCK_NONE,
     google_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: google_types.HarmBlockThreshold.BLOCK_NONE,
     google_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: google_types.HarmBlockThreshold.BLOCK_NONE,
     google_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: google_types.HarmBlockThreshold.BLOCK_NONE,
+    # google_types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY: google_types.HarmBlockThreshold.BLOCK_NONE, # Uncomment if supported and desired
 }
-MAX_MESSAGE_NODES = 500 # Max nodes in runtime cache (DB handles long-term history)
+MAX_MESSAGE_NODES = 500
 MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
 MAX_URL_CONTENT_LENGTH = 100000 # Limit for scraped web content per URL
-MAX_SERPAPI_RESULTS_DISPLAY = 200 # Limit number of visual matches shown per image
+MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image (used for both custom and SerpAPI)
 
 # --- URL Regex Patterns ---
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
@@ -95,16 +96,15 @@ RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
 DB_FOLDER = "ratelimit_dbs"
 
-# --- Database Constants ---
-HISTORY_DB_FILE = "llmcord_history.db"
-
 # --- Custom Google Lens (Playwright) Configuration ---
+# Selectors (These might change if Google updates their site)
 LENS_ICON_SELECTOR = '[aria-label="Search by image"]'
 PASTE_LINK_INPUT_SELECTOR = 'input[placeholder="Paste image link"]'
 SEE_EXACT_MATCHES_SELECTOR = 'div.ndigne.ZwRhJd.RiJqbb:has-text("See exact matches")'
 EXACT_MATCH_RESULT_SELECTOR = 'div.ZhosBf.T7iOye.MBI8Pd.dctkEf'
 INITIAL_RESULTS_WAIT_SELECTOR = "div#rso"
 ORIGINAL_RESULT_SPAN_SELECTOR = 'span.Yt787'
+# Timeouts
 CUSTOM_LENS_DEFAULT_TIMEOUT = 60000
 CUSTOM_LENS_SHORT_TIMEOUT = 5000
 
@@ -129,8 +129,8 @@ class RateLimitDBManager:
             self.conn = sqlite3.connect(self.db_path)
             self._create_table()
         except sqlite3.Error as e:
-            logging.error(f"Error connecting to rate limit database {self.db_path}: {e}")
-            self.conn = None
+            logging.error(f"Error connecting to database {self.db_path}: {e}")
+            self.conn = None # Ensure conn is None if connection fails
 
     def _create_table(self):
         if not self.conn: return
@@ -143,11 +143,11 @@ class RateLimitDBManager:
                     )
                 """)
         except sqlite3.Error as e:
-            logging.error(f"Error creating rate limit table in {self.db_path}: {e}")
+            logging.error(f"Error creating table in {self.db_path}: {e}")
 
     def add_key(self, api_key: str):
         if not self.conn:
-            logging.error(f"Cannot add key, no connection to rate limit DB {self.db_path}")
+            logging.error(f"Cannot add key, no connection to {self.db_path}")
             return
         timestamp = time.time()
         try:
@@ -158,11 +158,11 @@ class RateLimitDBManager:
                 """, (api_key, timestamp))
             logging.info(f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}.")
         except sqlite3.Error as e:
-            logging.error(f"Error adding key {api_key[-4:]} to rate limit DB {self.db_path}: {e}")
+            logging.error(f"Error adding key {api_key[-4:]} to {self.db_path}: {e}")
 
     def get_limited_keys(self, cooldown_seconds: int) -> Set[str]:
         if not self.conn:
-            logging.error(f"Cannot get limited keys, no connection to rate limit DB {self.db_path}")
+            logging.error(f"Cannot get limited keys, no connection to {self.db_path}")
             return set()
         cutoff_time = time.time() - cooldown_seconds
         limited_keys = set()
@@ -173,150 +173,28 @@ class RateLimitDBManager:
                 """, (cutoff_time,))
                 limited_keys = {row[0] for row in cursor.fetchall()}
         except sqlite3.Error as e:
-            logging.error(f"Error getting limited keys from rate limit DB {self.db_path}: {e}")
+            logging.error(f"Error getting limited keys from {self.db_path}: {e}")
         return limited_keys
 
     def reset_db(self):
         if not self.conn:
-            logging.error(f"Cannot reset rate limit DB, no connection to {self.db_path}")
+            logging.error(f"Cannot reset DB, no connection to {self.db_path}")
             return
         try:
             with self.conn:
                 self.conn.execute("DELETE FROM rate_limited_keys")
             logging.info(f"Rate limit database {os.path.basename(self.db_path)} reset.")
         except sqlite3.Error as e:
-            logging.error(f"Error resetting rate limit database {self.db_path}: {e}")
+            logging.error(f"Error resetting database {self.db_path}: {e}")
 
     def close(self):
         if self.conn:
             try:
                 self.conn.close()
                 self.conn = None
-                logging.debug(f"Closed rate limit database connection: {self.db_path}")
+                logging.debug(f"Closed database connection: {self.db_path}")
             except sqlite3.Error as e:
-                logging.error(f"Error closing rate limit database {self.db_path}: {e}")
-
-# --- History Database Manager ---
-class HistoryDBManager:
-    def __init__(self, db_path: str = HISTORY_DB_FILE):
-        self.db_path = db_path
-        self.conn = None
-        self._connect()
-
-    def _connect(self):
-        try:
-            self.conn = sqlite3.connect(self.db_path)
-            self.conn.row_factory = sqlite3.Row # Access columns by name
-            self._create_table()
-        except sqlite3.Error as e:
-            logging.error(f"Error connecting to history database {self.db_path}: {e}")
-            self.conn = None
-
-    def _create_table(self):
-        if not self.conn: return
-        try:
-            with self.conn:
-                self.conn.execute("""
-                    CREATE TABLE IF NOT EXISTS message_history (
-                        message_id INTEGER PRIMARY KEY,
-                        channel_id INTEGER NOT NULL,
-                        author_id INTEGER NOT NULL,
-                        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                        timestamp REAL NOT NULL,
-                        original_content TEXT,
-                        image_urls TEXT, -- JSON list of strings
-                        fetched_url_data TEXT, -- JSON list of UrlFetchResult-like dicts
-                        llm_response_content TEXT, -- Final LLM text output for assistant messages
-                        parent_message_id INTEGER -- Can be NULL
-                    )
-                """)
-                # Add index for faster parent lookups
-                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_parent_message_id ON message_history (parent_message_id)")
-        except sqlite3.Error as e:
-            logging.error(f"Error creating history table in {self.db_path}: {e}")
-
-    def save_message(self, message_id: int, channel_id: int, author_id: int, role: str, timestamp: float,
-                     original_content: Optional[str], image_urls: Optional[List[str]],
-                     fetched_url_data: Optional[List[Dict]], llm_response_content: Optional[str],
-                     parent_message_id: Optional[int]):
-        if not self.conn:
-            logging.error(f"Cannot save message {message_id}, no connection to history DB {self.db_path}")
-            return
-
-        image_urls_json = json.dumps(image_urls) if image_urls else None
-        fetched_url_data_json = json.dumps(fetched_url_data) if fetched_url_data else None
-
-        try:
-            with self.conn:
-                self.conn.execute("""
-                    INSERT OR REPLACE INTO message_history (
-                        message_id, channel_id, author_id, role, timestamp, original_content,
-                        image_urls, fetched_url_data, llm_response_content, parent_message_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (message_id, channel_id, author_id, role, timestamp, original_content,
-                      image_urls_json, fetched_url_data_json, llm_response_content, parent_message_id))
-            logging.debug(f"Saved message {message_id} (Role: {role}) to history DB.")
-        except sqlite3.Error as e:
-            logging.error(f"Error saving message {message_id} to history DB {self.db_path}: {e}")
-
-    def load_message(self, message_id: int) -> Optional[sqlite3.Row]:
-        if not self.conn:
-            logging.error(f"Cannot load message {message_id}, no connection to history DB {self.db_path}")
-            return None
-        try:
-            cursor = self.conn.execute("SELECT * FROM message_history WHERE message_id = ?", (message_id,))
-            row = cursor.fetchone()
-            return row
-        except sqlite3.Error as e:
-            logging.error(f"Error loading message {message_id} from history DB {self.db_path}: {e}")
-            return None
-
-    def load_conversation_history(self, start_message_id: int, max_messages: int) -> List[Dict[str, Any]]:
-        """Loads conversation history by traversing parent IDs from the database."""
-        if not self.conn:
-            logging.error(f"Cannot load history, no connection to history DB {self.db_path}")
-            return []
-
-        history = []
-        current_id: Optional[int] = start_message_id
-        visited_ids = set() # Prevent infinite loops
-
-        while current_id is not None and len(history) < max_messages and current_id not in visited_ids:
-            visited_ids.add(current_id)
-            row = self.load_message(current_id)
-            if row:
-                # Convert row to a dictionary for easier handling
-                message_data = dict(row)
-                # Parse JSON fields back into Python objects
-                try:
-                    message_data['image_urls'] = json.loads(row['image_urls']) if row['image_urls'] else []
-                except (json.JSONDecodeError, TypeError) as e:
-                    logging.warning(f"Could not parse image_urls JSON for message {current_id}: {e}")
-                    message_data['image_urls'] = []
-                try:
-                    message_data['fetched_url_data'] = json.loads(row['fetched_url_data']) if row['fetched_url_data'] else []
-                except (json.JSONDecodeError, TypeError) as e:
-                    logging.warning(f"Could not parse fetched_url_data JSON for message {current_id}: {e}")
-                    message_data['fetched_url_data'] = []
-
-                history.append(message_data)
-                current_id = row['parent_message_id'] # Move to the parent
-            else:
-                logging.warning(f"Message {current_id} not found in history DB while traversing.")
-                break # Stop if a message in the chain is missing
-
-        # The history is loaded in reverse chronological order (newest to oldest)
-        # It will be reversed again before sending to the LLM
-        return history
-
-    def close(self):
-        if self.conn:
-            try:
-                self.conn.close()
-                self.conn = None
-                logging.debug(f"Closed history database connection: {self.db_path}")
-            except sqlite3.Error as e:
-                logging.error(f"Error closing history database {self.db_path}: {e}")
+                logging.error(f"Error closing database {self.db_path}: {e}")
 
 # --- Global Rate Limit Management ---
 db_managers: Dict[str, RateLimitDBManager] = {}
@@ -327,6 +205,7 @@ def get_db_manager(service_name: str) -> RateLimitDBManager:
     if service_name not in db_managers:
         db_path = os.path.join(DB_FOLDER, f"ratelimit_{service_name.lower().replace('-', '_')}.db")
         db_managers[service_name] = RateLimitDBManager(db_path)
+    # Ensure connection is alive (e.g., if it failed initially)
     if db_managers[service_name].conn is None:
          db_managers[service_name]._connect()
     return db_managers[service_name]
@@ -341,22 +220,25 @@ def check_and_perform_global_reset():
                 last_reset_time = float(f.read().strip())
     except (IOError, ValueError) as e:
         logging.warning(f"Could not read last reset timestamp: {e}. Forcing reset.")
-        last_reset_time = 0.0
+        last_reset_time = 0.0 # Force reset if file is invalid
 
     if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
         logging.info("Performing global 24-hour rate limit database reset.")
+        # Ensure all potential DB managers are instantiated before resetting
         services_in_config = set()
         providers = cfg.get("providers", {})
         for provider_name, provider_cfg in providers.items():
-            if provider_cfg and provider_cfg.get("api_keys"):
+            if provider_cfg and provider_cfg.get("api_keys"): # Check for list of keys
                 services_in_config.add(provider_name)
-        if cfg.get("serpapi_api_keys"):
+        if cfg.get("serpapi_api_keys"): # Check SerpAPI separately
             services_in_config.add("serpapi")
+        # Add other services with keys here if needed
 
         for service_name in services_in_config:
              manager = get_db_manager(service_name)
              manager.reset_db()
 
+        # Also reset any managers that might exist but weren't in config scan (less likely)
         for manager in db_managers.values():
             manager.reset_db()
 
@@ -381,24 +263,25 @@ async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str
     if not available_keys:
         logging.warning(f"All keys for service '{service_name}' are currently rate-limited. Resetting DB and using full list for this attempt.")
         db_manager.reset_db()
-        return all_keys
+        return all_keys # Return the full list after reset
 
     return available_keys
 
 # --- Initialization ---
 ytt_api = YouTubeTranscriptApi() # Initialize youtube-transcript-api client
-history_db = HistoryDBManager() # Initialize history database manager
 
 def get_config(filename="config.yaml"):
     try:
         with open(filename, "r") as file:
             config_data = yaml.safe_load(file)
             # --- Config Validation & Key Normalization ---
+            # Ensure providers have api_keys (plural) as a list
             providers = config_data.get("providers", {})
             for name, provider_cfg in providers.items():
-                if provider_cfg:
+                if provider_cfg: # Check if provider config exists
                     single_key = provider_cfg.get("api_key")
                     key_list = provider_cfg.get("api_keys")
+
                     if single_key and not key_list:
                         logging.warning(f"Config Warning: Provider '{name}' uses deprecated 'api_key'. Converting to 'api_keys' list. Please update config.yaml.")
                         provider_cfg["api_keys"] = [single_key]
@@ -406,12 +289,14 @@ def get_config(filename="config.yaml"):
                     elif single_key and key_list:
                          logging.warning(f"Config Warning: Provider '{name}' has both 'api_key' and 'api_keys'. Using 'api_keys'. Please remove 'api_key' from config.yaml.")
                          del provider_cfg["api_key"]
-                    elif key_list is None:
+                    elif key_list is None: # Handle case where api_keys is explicitly null or missing
+                         # Allow providers without keys (like Ollama)
                          provider_cfg["api_keys"] = []
                     elif not isinstance(key_list, list):
                          logging.error(f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty.")
                          provider_cfg["api_keys"] = []
 
+            # Handle SerpAPI key(s)
             single_serp_key = config_data.get("serpapi_api_key")
             serp_key_list = config_data.get("serpapi_api_keys")
             if single_serp_key and not serp_key_list:
@@ -421,12 +306,13 @@ def get_config(filename="config.yaml"):
             elif single_serp_key and serp_key_list:
                  logging.warning("Config Warning: Found both 'serpapi_api_key' and 'serpapi_api_keys'. Using 'serpapi_api_keys'. Please remove 'serpapi_api_key' from config.yaml.")
                  del config_data["serpapi_api_key"]
-            elif serp_key_list is None:
+            elif serp_key_list is None: # Handle case where serpapi_api_keys is explicitly null or missing
                  config_data["serpapi_api_keys"] = []
             elif not isinstance(serp_key_list, list):
                  logging.error("Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
                  config_data["serpapi_api_keys"] = []
 
+            # Validate custom Google Lens config (optional)
             custom_lens_cfg = config_data.get("custom_google_lens_config")
             if custom_lens_cfg:
                 if not isinstance(custom_lens_cfg, dict):
@@ -440,6 +326,7 @@ def get_config(filename="config.yaml"):
             else:
                  logging.info("Optional 'custom_google_lens_config' not found in config.yaml. SerpAPI will be used for Google Lens.")
 
+
             return config_data
 
     except FileNotFoundError:
@@ -452,11 +339,12 @@ def get_config(filename="config.yaml"):
 cfg = get_config()
 check_and_perform_global_reset() # Perform initial check/reset after loading config
 
-youtube_api_key = cfg.get("youtube_api_key")
+youtube_api_key = cfg.get("youtube_api_key") # YouTube still uses single key for now
 reddit_client_id = cfg.get("reddit_client_id")
 reddit_client_secret = cfg.get("reddit_client_secret")
 reddit_user_agent = cfg.get("reddit_user_agent")
-custom_google_lens_config = cfg.get("custom_google_lens_config")
+# SerpAPI keys are now handled by the fallback logic
+custom_google_lens_config = cfg.get("custom_google_lens_config") # Load custom lens config
 
 if not cfg.get("bot_token"):
     logging.error("CRITICAL: bot_token is not set in config.yaml")
@@ -474,40 +362,29 @@ discord_client = discord.Client(intents=intents, activity=activity)
 
 httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
 
-msg_nodes = {} # Still used for runtime cache/locking
+msg_nodes = {}
 last_task_time = 0
 
 # --- Data Classes ---
 @dataclass
-class MsgNode: # Represents runtime state, not DB schema
-    text: Optional[str] = None # Original text for user, LLM response for assistant
-    images: list = field(default_factory=list) # List of image parts (base64 dict or google Part)
-    role: Literal["user", "assistant", "model"] = "assistant"
+class MsgNode:
+    text: Optional[str] = None
+    images: list = field(default_factory=list)
+    role: Literal["user", "assistant", "model"] = "assistant" # Added 'model' for Gemini
     user_id: Optional[int] = None
     has_bad_attachments: bool = False
     fetch_parent_failed: bool = False
-    parent_msg_id: Optional[int] = None # Store parent ID found during runtime processing
+    parent_msg: Optional[discord.Message] = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    full_response_text: Optional[str] = None # Final LLM response text
-    fetched_url_data: List[Dict] = field(default_factory=list) # Store fetched data before saving to DB
+    full_response_text: Optional[str] = None # Added field for full response text
 
 @dataclass
 class UrlFetchResult:
     url: str
-    content: Optional[Union[str, Dict[str, Any]]]
+    content: Optional[Union[str, Dict[str, Any]]] # This is the required argument
     error: Optional[str] = None
     type: Literal["youtube", "reddit", "general", "google_lens_custom", "google_lens_serpapi", "google_lens_fallback_failed"] = "general"
     original_index: int = -1
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Converts the result to a dictionary suitable for JSON serialization."""
-        return {
-            "url": self.url,
-            "content": self.content,
-            "error": self.error,
-            "type": self.type,
-            "original_index": self.original_index,
-        }
 
 # --- Discord UI ---
 class ResponseActionView(ui.View):
@@ -530,6 +407,7 @@ class ResponseActionView(ui.View):
             has_sources_button = True
 
         if self.full_response_text:
+            # Determine row based on whether sources button exists
             row = 1 if has_sources_button else 0
             self.add_item(self.GetTextFileButton(row=row))
 
@@ -539,6 +417,7 @@ class ResponseActionView(ui.View):
             super().__init__(label="Show Sources", style=discord.ButtonStyle.grey, row=0)
 
         async def callback(self, interaction: discord.Interaction):
+            # Access parent view's data
             view: 'ResponseActionView' = self.view
             if not view.grounding_metadata:
                 await interaction.response.send_message("No grounding metadata available.", ephemeral=True)
@@ -547,6 +426,7 @@ class ResponseActionView(ui.View):
             embed = discord.Embed(title="Grounding Sources", color=EMBED_COLOR_COMPLETE)
             field_count = 0
 
+            # Add Search Queries field
             if queries := getattr(view.grounding_metadata, 'web_search_queries', None):
                 query_text = "\n".join(f"- `{q}`" for q in queries)
                 if len(query_text) <= MAX_EMBED_FIELD_VALUE_LENGTH and field_count < MAX_EMBED_FIELDS:
@@ -555,6 +435,7 @@ class ResponseActionView(ui.View):
                 else:
                     logging.warning("Search query list too long for embed field.")
 
+            # Add Sources Consulted field(s)
             if chunks := getattr(view.grounding_metadata, 'grounding_chunks', None):
                 current_field_value = ""
                 field_title = "Sources Consulted"
@@ -603,6 +484,7 @@ class ResponseActionView(ui.View):
             if not embed.fields and not embed.description and not embed.title:
                 await interaction.response.send_message("Could not extract source information.", ephemeral=True)
             else:
+                # Send as ephemeral message
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # Inner class for the Get Text File button
@@ -611,16 +493,21 @@ class ResponseActionView(ui.View):
             super().__init__(label="Get response as a text file", style=discord.ButtonStyle.green, row=row)
 
         async def callback(self, interaction: discord.Interaction):
+            # Access parent view's data
             view: 'ResponseActionView' = self.view
             if not view.full_response_text:
                 await interaction.response.send_message("No response text available to send.", ephemeral=True)
                 return
 
             try:
-                safe_model_name = re.sub(r'[<>:"/\\|?*]', '_', view.model_name)
+                # Clean model name for filename
+                safe_model_name = re.sub(r'[<>:"/\\|?*]', '_', view.model_name) # Replace invalid chars
                 filename = f"llm_response_{safe_model_name}.txt"
+
+                # Create a file-like object from the string
                 file_content = io.BytesIO(view.full_response_text.encode('utf-8'))
                 discord_file = discord.File(fp=file_content, filename=filename)
+
                 await interaction.response.send_message(file=discord_file, ephemeral=True)
             except Exception as e:
                 logging.error(f"Error creating or sending text file: {e}")
@@ -659,89 +546,14 @@ def extract_reddit_submission_id(url: str) -> Optional[str]:
     match = REDDIT_URL_PATTERN.search(url)
     return match.group(2) if match else None
 
-def format_fetched_data_for_llm(fetched_data: List[Dict]) -> str:
-    """Formats the fetched URL/Lens data (from DB) into a string for the LLM context."""
-    if not fetched_data:
-        return ""
-
-    google_lens_parts = []
-    other_url_parts = []
-    other_url_counter = 1
-
-    # Sort by original index to maintain order
-    fetched_data.sort(key=lambda r: r.get('original_index', -1))
-
-    for result in fetched_data:
-        content = result.get('content')
-        result_type = result.get('type')
-        url = result.get('url', 'N/A')
-        index = result.get('original_index', -1)
-
-        if not content: # Skip items with no content (likely errors)
-            continue
-
-        if result_type == "google_lens_custom":
-            header = f"Custom Google Lens implementation results for image {index + 1}:\n"
-            google_lens_parts.append(header + str(content))
-        elif result_type == "google_lens_serpapi":
-            header = f"SerpAPI Google Lens fallback results for image {index + 1}:\n"
-            google_lens_parts.append(header + str(content))
-        elif result_type == "youtube":
-            content_str = f"\nurl {other_url_counter}: {url}\n"
-            content_str += f"url {other_url_counter} content:\n"
-            if isinstance(content, dict):
-                content_str += f"  title: {content.get('title', 'N/A')}\n"
-                content_str += f"  channel: {content.get('channel_name', 'N/A')}\n"
-                desc = content.get('description', 'N/A')
-                content_str += f"  description: {desc[:500]}{'...' if len(desc) > 500 else ''}\n"
-                transcript = content.get('transcript')
-                if transcript:
-                    content_str += f"  transcript: {transcript[:MAX_URL_CONTENT_LENGTH]}{'...' if len(transcript) > MAX_URL_CONTENT_LENGTH else ''}\n"
-                comments = content.get("comments")
-                if comments:
-                    content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n"
-            other_url_parts.append(content_str)
-            other_url_counter += 1
-        elif result_type == "reddit":
-            content_str = f"\nurl {other_url_counter}: {url}\n"
-            content_str += f"url {other_url_counter} content:\n"
-            if isinstance(content, dict):
-                content_str += f"  title: {content.get('title', 'N/A')}\n"
-                selftext = content.get('selftext')
-                if selftext:
-                    content_str += f"  content: {selftext[:MAX_URL_CONTENT_LENGTH]}{'...' if len(selftext) > MAX_URL_CONTENT_LENGTH else ''}\n"
-                comments = content.get("comments")
-                if comments:
-                    content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n"
-            other_url_parts.append(content_str)
-            other_url_counter += 1
-        elif result_type == "general":
-            content_str = f"\nurl {other_url_counter}: {url}\n"
-            content_str += f"url {other_url_counter} content:\n"
-            if isinstance(content, str):
-                content_str += f"  {content}\n"
-            other_url_parts.append(content_str)
-            other_url_counter += 1
-
-    combined_context = ""
-    if google_lens_parts or other_url_parts:
-        combined_context = "Answer the user's query based on the following:\n\n"
-        if google_lens_parts:
-            combined_context += "\n\n".join(google_lens_parts) + "\n\n"
-        if other_url_parts:
-            combined_context += "".join(other_url_parts)
-
-    return combined_context.strip()
-
-
-# --- Content Fetching Functions --- (Mostly unchanged, added logging)
+# --- Content Fetching Functions ---
 
 async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
     """Fetches the transcript for a video ID using youtube-transcript-api."""
-    logging.info(f"Fetching transcript for YouTube video ID: {video_id}")
     try:
         transcript_list = await asyncio.to_thread(ytt_api.list_transcripts, video_id)
         transcript = None
+        # Prioritize manual English, then generated English, then any manual, then any generated
         priorities = [
             (transcript_list.find_manually_created_transcript, ['en']),
             (transcript_list.find_generated_transcript, ['en']),
@@ -749,31 +561,31 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
             (transcript_list.find_generated_transcript, [lang.language_code for lang in transcript_list]),
         ]
         for find_method, langs in priorities:
-            if not langs: continue
+            # Ensure langs is not empty before calling find method
+            if not langs:
+                continue
             try:
+                # Use asyncio.to_thread for the synchronous find methods
                 transcript = await asyncio.to_thread(find_method, langs)
-                if transcript:
-                    logging.info(f"Found transcript for {video_id} (Lang: {transcript.language_code}, Generated: {transcript.is_generated})")
-                    break
-            except NoTranscriptFound: continue
+                if transcript: break
+            except NoTranscriptFound:
+                continue
             except Exception as e:
+                # Catch potential errors within the find methods themselves
                 logging.warning(f"Error during transcript find method {find_method.__name__} for {video_id}: {e}")
                 continue
 
+
         if transcript:
-            # youtube-transcript-api returns list of dicts
-            fetched_transcript_list = await asyncio.to_thread(transcript.fetch)
-            full_transcript = " ".join([entry.text for entry in fetched_transcript_list]) # never make this full_transcript = " ".join([entry['text'] for entry in fetched_transcript_list]) because 'FetchedTranscriptSnippet' object is not subscriptable 
-            logging.info(f"Successfully fetched transcript for {video_id} (Length: {len(full_transcript)})")
+            fetched_transcript = await asyncio.to_thread(transcript.fetch)
+            # Use attribute access (.text) instead of dictionary access (['text'])
+            full_transcript = " ".join([entry.text for entry in fetched_transcript])
             return full_transcript, None
         else:
-            logging.warning(f"No suitable transcript found for {video_id}")
             return None, "No suitable transcript found."
     except TranscriptsDisabled:
-        logging.warning(f"Transcripts disabled for YouTube video ID: {video_id}")
         return None, "Transcripts are disabled for this video."
-    except NoTranscriptFound:
-        logging.warning(f"No transcripts listed for YouTube video ID: {video_id}")
+    except NoTranscriptFound: # Catch case where list_transcripts finds nothing
         return None, "No transcripts listed for this video."
     except Exception as e:
         logging.error(f"Error fetching transcript for {video_id}: {type(e).__name__}: {e}")
@@ -782,17 +594,15 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
 async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Fetches video title, description, channel name, and comments using YouTube Data API."""
     if not api_key:
-        logging.warning(f"Cannot fetch YouTube details for {video_id}: API key not configured.")
         return None, "YouTube API key not configured."
 
-    logging.info(f"Fetching details for YouTube video ID: {video_id}")
     details = {}
     error_messages = []
 
     try:
         youtube = await asyncio.to_thread(build_google_api_client, 'youtube', 'v3', developerKey=api_key)
 
-        # Get video details
+        # Get video details (snippet)
         try:
             video_request = youtube.videos().list(part="snippet", id=video_id)
             video_response = await asyncio.to_thread(video_request.execute)
@@ -801,10 +611,8 @@ async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tu
                 details["title"] = snippet.get("title", "N/A")
                 details["description"] = snippet.get("description", "N/A")
                 details["channel_name"] = snippet.get("channelTitle", "N/A")
-                logging.info(f"Fetched video details for {video_id}")
             else:
                  error_messages.append("Video details not found.")
-                 logging.warning(f"Video details not found for {video_id}")
         except HttpError as e:
             error_reason = getattr(e, 'reason', str(e))
             status_code = getattr(e.resp, 'status', 'Unknown')
@@ -814,20 +622,25 @@ async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tu
             logging.exception(f"Unexpected error getting YouTube video details for {video_id}")
             error_messages.append(f"Unexpected error getting video details: {type(e).__name__}")
 
-        # Get top comments
+
+        # Get top comments (commentThreads) - Proceed even if details failed
         try:
             comment_request = youtube.commentThreads().list(
-                part="snippet", videoId=video_id, order="relevance", maxResults=10, textFormat="plainText"
+                part="snippet",
+                videoId=video_id,
+                order="relevance",
+                maxResults=10, # Reduced comment count
+                textFormat="plainText"
             )
             comment_response = await asyncio.to_thread(comment_request.execute)
             details["comments"] = [
                 item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
                 for item in comment_response.get("items", [])
             ]
-            logging.info(f"Fetched {len(details.get('comments',[]))} comments for {video_id}")
         except HttpError as e:
              error_reason = getattr(e, 'reason', str(e))
              status_code = getattr(e.resp, 'status', 'Unknown')
+             # Don't log 403 comment errors as harshly if comments are just disabled
              if status_code == 403 and 'commentsDisabled' in str(e):
                  logging.info(f"Comments disabled for YouTube video {video_id}")
                  error_messages.append("Comments disabled.")
@@ -838,19 +651,24 @@ async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tu
             logging.exception(f"Unexpected error getting YouTube comments for {video_id}")
             error_messages.append(f"Unexpected error getting comments: {type(e).__name__}")
 
+        # Return details if any were fetched, otherwise None
         final_details = details if details else None
         final_error = " ".join(error_messages) if error_messages else None
         return final_details, final_error
 
-    except HttpError as e:
+    except HttpError as e: # Catch errors during build_google_api_client itself
         error_reason = getattr(e, 'reason', str(e))
         status_code = getattr(e.resp, 'status', 'Unknown')
         logging.error(f"YouTube Data API Build/Auth error (Status: {status_code}): {error_reason}")
         if status_code == 403:
-             if "quotaExceeded" in str(e): return None, "YouTube API quota exceeded."
-             elif "accessNotConfigured" in str(e): return None, "YouTube API access not configured or key invalid."
-             else: return None, f"YouTube API permission error: {error_reason}"
-        else: return None, f"YouTube Data API HTTP error: {error_reason}"
+             if "quotaExceeded" in str(e):
+                 return None, "YouTube API quota exceeded."
+             elif "accessNotConfigured" in str(e):
+                 return None, "YouTube API access not configured or key invalid."
+             else:
+                 return None, f"YouTube API permission error: {error_reason}"
+        else:
+            return None, f"YouTube Data API HTTP error: {error_reason}"
     except Exception as e:
         logging.exception(f"Unexpected error initializing YouTube client or fetching details for {video_id}")
         return None, f"An unexpected error occurred: {e}"
@@ -862,6 +680,7 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
     if not video_id:
         return UrlFetchResult(url=url, content=None, error="Could not extract video ID.", type="youtube", original_index=index)
 
+    # Fetch transcript and details concurrently
     transcript_task = asyncio.create_task(get_transcript(video_id))
     details_task = asyncio.create_task(get_youtube_video_details(video_id, api_key))
 
@@ -871,9 +690,13 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
     combined_content = {}
     errors = [err for err in [transcript_error, details_error] if err]
 
-    if details: combined_content.update(details)
-    if transcript: combined_content["transcript"] = transcript
-    if not combined_content and not errors: errors.append("No content fetched.")
+    if details:
+        combined_content.update(details)
+    if transcript:
+        combined_content["transcript"] = transcript
+
+    if not combined_content and not errors:
+        errors.append("No content fetched.") # Ensure error if nothing was retrieved
 
     return UrlFetchResult(
         url=url,
@@ -886,38 +709,46 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
 async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id: str, client_secret: str, user_agent: str) -> UrlFetchResult:
     """Fetches content for a single Reddit submission URL."""
     if not all([client_id, client_secret, user_agent]):
-        logging.warning(f"Cannot fetch Reddit data for {url}: API credentials not configured.")
         return UrlFetchResult(url=url, content=None, error="Reddit API credentials not configured.", type="reddit", original_index=index)
 
-    logging.info(f"Fetching data for Reddit submission ID: {submission_id}")
-    reddit = None
+    reddit = None # Initialize outside try block
     try:
+        # Initialize asyncpraw.Reddit instance within the task
         reddit = asyncpraw.Reddit(
-            client_id=client_id, client_secret=client_secret, user_agent=user_agent, read_only=True
+            client_id=client_id,
+            client_secret=client_secret,
+            user_agent=user_agent,
+            read_only=True,
         )
+
         submission = await reddit.submission(id=submission_id)
-        await submission.load()
+        await submission.load() # Load submission data and comments
 
         content_data = {"title": submission.title}
-        if submission.selftext: content_data["selftext"] = submission.selftext
+        if submission.selftext:
+            content_data["selftext"] = submission.selftext
 
+        # Fetch top comments
         top_comments_text = []
         comment_limit = 10
-        await submission.comments.replace_more(limit=0)
+        await submission.comments.replace_more(limit=0) # Load only top-level comments
+
         comment_count = 0
         for top_level_comment in submission.comments.list():
-            if comment_count >= comment_limit: break
+            if comment_count >= comment_limit:
+                break
+            # Check if comment exists and is not deleted/removed before accessing body
             if hasattr(top_level_comment, 'body') and top_level_comment.body and top_level_comment.body not in ('[deleted]', '[removed]'):
                 comment_body_cleaned = top_level_comment.body.replace('\n', ' ').replace('\r', '')
                 top_comments_text.append(comment_body_cleaned)
                 comment_count += 1
-        if top_comments_text: content_data["comments"] = top_comments_text
 
-        logging.info(f"Successfully fetched Reddit data for {url} (Comments: {len(top_comments_text)})")
+        if top_comments_text:
+            content_data["comments"] = top_comments_text
+
         return UrlFetchResult(url=url, content=content_data, type="reddit", original_index=index)
 
     except (NotFound, Redirect):
-        logging.warning(f"Reddit submission not found or invalid URL: {url}")
         return UrlFetchResult(url=url, content=None, error="Submission not found or invalid URL.", type="reddit", original_index=index)
     except Forbidden as e:
          logging.warning(f"Reddit API Forbidden error for {url}: {e}")
@@ -929,54 +760,68 @@ async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id:
         logging.exception(f"Unexpected error fetching Reddit content for {url}")
         return UrlFetchResult(url=url, content=None, error=f"Unexpected error: {type(e).__name__}", type="reddit", original_index=index)
     finally:
-        if reddit: await reddit.close()
+        # Ensure the Reddit client is closed if it was initialized
+        if reddit:
+            await reddit.close()
 
 
 async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
     """Fetches and extracts text content from a general URL using BeautifulSoup."""
-    logging.info(f"Fetching general URL content: {url}")
     try:
+        # Add a User-Agent header to mimic a browser
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        async with httpx_client.stream("GET", url, headers=headers, timeout=15.0) as response:
+        async with httpx_client.stream("GET", url, headers=headers, timeout=15.0) as response: # Use stream for large pages
+            # Check status code early
             if response.status_code != 200:
+                 # Check for redirect loop explicitly
                  if response.status_code >= 300 and response.status_code < 400 and len(response.history) > 5:
-                     logging.warning(f"Too many redirects for URL {url}")
                      return UrlFetchResult(url=url, content=None, error=f"Too many redirects ({response.status_code}).", type="general", original_index=index)
-                 logging.warning(f"HTTP status {response.status_code} for URL {url}")
                  return UrlFetchResult(url=url, content=None, error=f"HTTP status {response.status_code}.", type="general", original_index=index)
 
+            # Check content type
             content_type = response.headers.get("content-type", "").lower()
             if "text/html" not in content_type:
-                logging.warning(f"Unsupported content type '{content_type}' for URL {url}")
                 return UrlFetchResult(url=url, content=None, error=f"Unsupported content type: {content_type}", type="general", original_index=index)
 
+            # Read content incrementally
             html_content = ""
             try:
                 async for chunk in response.aiter_bytes():
                     html_content += chunk.decode(response.encoding or 'utf-8', errors='replace')
-                    if len(html_content) > 5 * 1024 * 1024:
+                    if len(html_content) > 5 * 1024 * 1024: # Limit HTML size read to 5MB
                         logging.warning(f"HTML content truncated for URL {url} due to size limit.")
                         html_content = html_content[:5*1024*1024] + "..."
                         break
             except httpx.ReadTimeout:
-                 logging.warning(f"Timeout reading content for URL {url}")
                  return UrlFetchResult(url=url, content=None, error="Timeout while reading content.", type="general", original_index=index)
             except Exception as e:
                  logging.warning(f"Error decoding content for {url}: {e}")
                  return UrlFetchResult(url=url, content=None, error=f"Content decoding error: {type(e).__name__}", type="general", original_index=index)
 
+
+        # Parse with BeautifulSoup
         soup = BeautifulSoup(html_content, 'html.parser')
-        for script_or_style in soup(["script", "style"]): script_or_style.decompose()
+
+        # Remove script and style elements
+        for script_or_style in soup(["script", "style"]):
+            script_or_style.decompose()
+
+        # Get text content, trying main content areas first
         main_content = soup.find('main') or soup.find('article') or soup.find('body')
-        text = main_content.get_text(separator=' ', strip=True) if main_content else soup.get_text(separator=' ', strip=True)
+        if main_content:
+            text = main_content.get_text(separator=' ', strip=True)
+        else:
+            text = soup.get_text(separator=' ', strip=True) # Fallback to whole document
+
+        # Clean up whitespace
         text = re.sub(r'\s+', ' ', text).strip()
 
         if not text:
-            logging.warning(f"No text content found for URL {url}")
             return UrlFetchResult(url=url, content=None, error="No text content found.", type="general", original_index=index)
 
+        # Limit content length
         content = text[:MAX_URL_CONTENT_LENGTH] + ('...' if len(text) > MAX_URL_CONTENT_LENGTH else '')
-        logging.info(f"Successfully fetched general URL content for {url} (Length: {len(content)})")
+
         return UrlFetchResult(url=url, content=content, type="general", original_index=index)
 
     except httpx.RequestError as e:
@@ -988,18 +833,35 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
 
 # --- Custom Google Lens (Playwright) Implementation ---
 def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, profile_directory_name: str):
-    """Synchronous wrapper for the Playwright Google Lens logic."""
-    try: from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+    """
+    Synchronous wrapper for the Playwright Google Lens logic.
+    Uses Playwright to get Google Lens results for a given image URL using a specific Chrome profile.
+    Checks for "See exact matches", clicks if found, waits for the last result element, and extracts specific result divs.
+    Otherwise, waits for the last original result element and extracts results using the original span selector.
+
+    Args:
+        image_url: The URL of the image to search.
+        user_data_dir: Path to the main Chrome user data directory.
+        profile_directory_name: The name of the specific profile folder within user_data_dir.
+
+    Returns:
+        A list of strings containing the extracted result texts, or None if an error occurs.
+    """
+    # Check if Playwright is available
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
     except ImportError:
         logging.error("Playwright library not found. Cannot run custom Google Lens.")
-        return None
+        return None # Indicate failure due to missing dependency
 
     if not user_data_dir or not profile_directory_name:
         logging.error("Custom Google Lens: Chrome user_data_dir or profile_directory_name not provided.")
         return None
+
     if not os.path.exists(user_data_dir):
         logging.error(f"Custom Google Lens: Chrome user data directory not found at: {user_data_dir}")
         return None
+
     profile_path = os.path.join(user_data_dir, profile_directory_name)
     if not os.path.exists(profile_path):
         logging.error(f"Custom Google Lens: Specific profile directory not found at: {profile_path}")
@@ -1007,35 +869,52 @@ def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, pro
         return None
 
     results = []
-    context = None
+    context = None # Define context outside the try block for finally clause
+
     logging.info(f"Custom Google Lens: Launching Chrome using profile: '{profile_directory_name}'")
     logging.info(f"Custom Google Lens: User Data Directory: {user_data_dir}")
     logging.info(f"Custom Google Lens: Searching for image URL: {image_url}")
     logging.info("Custom Google Lens: INFO: Ensure Google Chrome using this specific profile is completely closed (check Task Manager).")
 
-    launch_args = ['--no-first-run', '--no-default-browser-check', f"--profile-directory={profile_directory_name}"]
+    # Arguments to specify the profile directory
+    launch_args = [
+        '--no-first-run',
+        '--no-default-browser-check',
+        f"--profile-directory={profile_directory_name}" # Tells Chrome which profile folder to use
+    ]
 
     with sync_playwright() as p:
         try:
+            # Launch browser using the persistent context with the specified user data directory AND profile arg
             context = p.chromium.launch_persistent_context(
-                user_data_dir, headless=False, channel="chrome", args=launch_args, slow_mo=50
+                user_data_dir, # Still need the parent directory path here
+                headless=False, # Set to True for server environments if needed, but might affect login state
+                channel="chrome",
+                args=launch_args, # Pass the arguments including the profile directory
+                slow_mo=50 # Slow down interactions slightly
             )
             page = context.new_page()
             page.set_default_timeout(CUSTOM_LENS_DEFAULT_TIMEOUT)
+
             logging.info("Custom Google Lens: Navigating to google.com...")
             page.goto("https://www.google.com/")
-            logging.info("Custom Google Lens: Waiting for and clicking the Lens icon...")
+
+            logging.info("Custom Google Lens: Waiting for and clicking the Lens (Search by image) icon...")
             lens_icon = page.locator(LENS_ICON_SELECTOR)
             lens_icon.wait_for(state="visible")
             lens_icon.click()
+
             logging.info("Custom Google Lens: Waiting for the image link input field...")
             paste_link_input = page.locator(PASTE_LINK_INPUT_SELECTOR)
             paste_link_input.wait_for(state="visible")
+
             logging.info("Custom Google Lens: Pasting the image URL...")
             paste_link_input.fill(image_url)
+
             logging.info("Custom Google Lens: Submitting the search (pressing Enter)...")
             page.wait_for_timeout(200)
             paste_link_input.press("Enter")
+
             logging.info("Custom Google Lens: Waiting for initial Lens results page to load...")
             try:
                  page.wait_for_selector(INITIAL_RESULTS_WAIT_SELECTOR, state="attached", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
@@ -1061,8 +940,10 @@ def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, pro
                         page.locator(EXACT_MATCH_RESULT_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
                         logging.info(f"Custom Google Lens: Exact match results likely loaded. Using selector: '{EXACT_MATCH_RESULT_SELECTOR}'")
                         final_result_selector = EXACT_MATCH_RESULT_SELECTOR
-                    except PlaywrightTimeoutError: logging.warning(f"Custom Google Lens: Clicked 'See exact matches' but timed out waiting for the last element of '{EXACT_MATCH_RESULT_SELECTOR}'.")
-                    except Exception as click_err: logging.error(f"Custom Google Lens: Error clicking 'See exact matches' or waiting after click: {click_err}")
+                    except PlaywrightTimeoutError:
+                        logging.warning(f"Custom Google Lens: Clicked 'See exact matches' but timed out waiting for the last element of '{EXACT_MATCH_RESULT_SELECTOR}'.")
+                    except Exception as click_err:
+                         logging.error(f"Custom Google Lens: Error clicking 'See exact matches' or waiting after click: {click_err}")
                 else:
                     logging.info("Custom Google Lens: 'See exact matches' not found or not visible within timeout.")
                     logging.info(f"Custom Google Lens: Looking for general results using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}' (waiting for last element)...")
@@ -1070,7 +951,9 @@ def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, pro
                         page.locator(ORIGINAL_RESULT_SPAN_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
                         logging.info(f"Custom Google Lens: General results likely loaded. Using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}'")
                         final_result_selector = ORIGINAL_RESULT_SPAN_SELECTOR
-                    except PlaywrightTimeoutError: logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
+                    except PlaywrightTimeoutError:
+                         logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
+
             except PlaywrightTimeoutError:
                  logging.warning(f"Custom Google Lens: Timeout checking visibility for '{SEE_EXACT_MATCHES_SELECTOR}'. Assuming it's not present.")
                  logging.info(f"Custom Google Lens: Looking for general results using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}' (waiting for last element)...")
@@ -1078,59 +961,77 @@ def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, pro
                      page.locator(ORIGINAL_RESULT_SPAN_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
                      logging.info(f"Custom Google Lens: General results likely loaded. Using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}'")
                      final_result_selector = ORIGINAL_RESULT_SPAN_SELECTOR
-                 except PlaywrightTimeoutError: logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
+                 except PlaywrightTimeoutError:
+                      logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
 
             if final_result_selector:
                 logging.info(f"Custom Google Lens: Extracting text using final selector: '{final_result_selector}'...")
                 page.wait_for_timeout(500)
                 result_elements = page.locator(final_result_selector).all()
-                if not result_elements: logging.info("Custom Google Lens: No result elements found matching the final selector.")
+
+                if not result_elements:
+                    logging.info("Custom Google Lens: No result elements found matching the final selector.")
+
                 for i, element in enumerate(result_elements):
                     try:
                         text = element.text_content()
-                        if text: results.append(' '.join(text.split()))
-                        else: logging.warning(f"Custom Google Lens: Found element {i+1} but it has no text content.")
-                    except Exception as e: logging.error(f"Custom Google Lens: Error extracting text from element {i+1}: {e}")
-            else: logging.info("Custom Google Lens: No suitable result selector was determined. Skipping extraction.")
+                        if text:
+                            cleaned_text = ' '.join(text.split())
+                            results.append(cleaned_text)
+                        else:
+                            logging.warning(f"Custom Google Lens: Found element {i+1} but it has no text content.")
+                    except Exception as e:
+                        logging.error(f"Custom Google Lens: Error extracting text from element {i+1}: {e}")
+            else:
+                 logging.info("Custom Google Lens: No suitable result selector was determined. Skipping extraction.")
+
             logging.info("Custom Google Lens: Finished extracting results.")
 
         except PlaywrightTimeoutError as e:
-            logging.error(f"Custom Google Lens: ERROR: A timeout occurred: {e}")
+            logging.error(f"Custom Google Lens: ERROR: A timeout occurred during the process: {e}")
             try:
                 if 'page' in locals() and page and not page.is_closed():
                     screenshot_path = "error_screenshot_timeout.png"
                     page.screenshot(path=screenshot_path)
                     logging.info(f"Custom Google Lens: Screenshot saved as {screenshot_path}")
-            except Exception as screen_err: logging.error(f"Custom Google Lens: Could not take screenshot on timeout error: {screen_err}")
-            return None
+            except Exception as screen_err:
+                logging.error(f"Custom Google Lens: Could not take screenshot on timeout error: {screen_err}")
+            return None # Indicate failure
         except Exception as e:
             logging.error(f"Custom Google Lens: An unexpected error occurred: {e}")
             if "Target page, context or browser has been closed" in str(e):
                  logging.error("Custom Google Lens: ERROR DETAILS: This 'TargetClosedError' usually means Google Chrome was already running with the specified profile.")
                  logging.error(f"Profile Folder: '{profile_directory_name}' within '{user_data_dir}'")
                  logging.error("Please ensure ALL Chrome processes using this profile are closed (check Task Manager) before running the script again.")
-            else: logging.exception("Custom Google Lens: Unexpected error details:")
+            else:
+                # Use logging.exception to include traceback
+                logging.exception("Custom Google Lens: Unexpected error details:")
             try:
                  if 'page' in locals() and page and not page.is_closed():
                     screenshot_path = "error_screenshot_unexpected.png"
                     page.screenshot(path=screenshot_path)
                     logging.info(f"Custom Google Lens: Screenshot saved as {screenshot_path}")
-            except Exception as screen_err: logging.error(f"Custom Google Lens: Could not take screenshot on unexpected error: {screen_err}")
-            return None
+            except Exception as screen_err:
+                logging.error(f"Custom Google Lens: Could not take screenshot on unexpected error: {screen_err}")
+            return None # Indicate failure
         finally:
             if context:
                 logging.info("Custom Google Lens: Closing browser context...")
                 try:
-                    if context.pages: context.close()
-                except Exception as close_err: logging.warning(f"Custom Google Lens: Note: Error during context close: {close_err}")
+                    if context.pages:
+                         context.close()
+                except Exception as close_err:
+                     logging.warning(f"Custom Google Lens: Note: Error during context close (might be expected if launch failed or browser closed): {close_err}")
+
     return results
+# --- End Custom Google Lens Implementation ---
+
 
 async def fetch_google_lens_serpapi_fallback(image_url: str, index: int) -> UrlFetchResult:
     """Fetches Google Lens results using SerpAPI with key rotation and retry (FALLBACK ONLY)."""
     service_name = "serpapi"
     all_keys = cfg.get("serpapi_api_keys", [])
     if not all_keys:
-        logging.warning(f"Cannot perform SerpAPI fallback for image {index+1}: No keys configured.")
         return UrlFetchResult(url=image_url, content=None, error="SerpAPI keys not configured for fallback.", type="google_lens_serpapi", original_index=index)
 
     available_keys = await get_available_keys(service_name, all_keys)
@@ -1139,228 +1040,256 @@ async def fetch_google_lens_serpapi_fallback(image_url: str, index: int) -> UrlF
     encountered_errors = []
 
     for key_index, api_key in enumerate(available_keys):
-        params = {"engine": "google_lens", "url": image_url, "api_key": api_key, "safe": "off"}
+        params = {
+            "engine": "google_lens",
+            "url": image_url,
+            "api_key": api_key,
+            "safe": "off", # As per original example
+        }
         logging.info(f"Attempting SerpAPI Google Lens fallback request for image {index+1} with key ...{api_key[-4:]} ({key_index+1}/{len(available_keys)})")
+
         try:
             search = GoogleSearch(params)
-            results = await asyncio.to_thread(search.get_dict)
+            results = await asyncio.to_thread(search.get_dict) # Blocking call in thread
+
+            # Check for API-level errors (e.g., invalid key, quota)
             if "error" in results:
                 error_msg = results["error"]
                 logging.warning(f"SerpAPI fallback error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
                 encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
+                # Check if it's a rate limit / quota error
                 if "rate limit" in error_msg.lower() or "quota" in error_msg.lower() or "plan limit" in error_msg.lower() or "ran out of searches" in error_msg.lower():
                     db_manager.add_key(api_key)
-                    continue
+                    continue # Try next key
                 elif "invalid api key" in error_msg.lower():
+                    # Don't retry with other keys if this one is definitively invalid
                     return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens_serpapi", original_index=index)
-                else: continue
+                else:
+                    # For other API errors, maybe retry? For now, continue to next key.
+                    continue
+
+            # Check for search-specific errors (e.g., couldn't process image)
             if results.get("search_metadata", {}).get("status", "").lower() == "error":
                  error_msg = results.get("search_metadata", {}).get("error", "Unknown search error")
                  logging.warning(f"SerpAPI fallback search error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
                  encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
+                 # These errors are usually not key-related, so maybe don't retry?
+                 # For now, let's return the error from the first key that hit this.
                  return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Search Error: {error_msg}", type="google_lens_serpapi", original_index=index)
 
+
+            # --- Success Case ---
             visual_matches = results.get("visual_matches", [])
             if not visual_matches:
-                logging.info(f"SerpAPI fallback for image {index+1} found no visual matches.")
                 return UrlFetchResult(url=image_url, content="No visual matches found (SerpAPI fallback).", type="google_lens_serpapi", original_index=index)
 
+            # Format the results concisely
             formatted_results = []
             for i, match in enumerate(visual_matches[:MAX_SERPAPI_RESULTS_DISPLAY]):
-                title, link, source = match.get("title", "N/A"), match.get("link", "#"), match.get("source", "")
-                result_line = f"- [{title}]({link})" + (f" (Source: {source})" if source else "")
+                title = match.get("title", "N/A")
+                link = match.get("link", "#")
+                source = match.get("source", "")
+                result_line = f"- [{title}]({link})"
+                if source:
+                    result_line += f" (Source: {source})"
                 formatted_results.append(result_line)
+
             content_str = "\n".join(formatted_results)
-            if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY: content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+            if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
+                content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
 
             logging.info(f"SerpAPI Google Lens fallback request successful for image {index+1} with key ...{api_key[-4:]}")
             return UrlFetchResult(url=image_url, content=content_str, type="google_lens_serpapi", original_index=index)
 
         except SerpApiClientException as e:
+            # Handle client-level exceptions (e.g., connection errors, timeouts)
             logging.warning(f"SerpAPI client exception during fallback for image {index+1} (key ...{api_key[-4:]}): {e}")
             encountered_errors.append(f"Key ...{api_key[-4:]}: Client Error - {e}")
-            if "429" in str(e) or "rate limit" in str(e).lower(): db_manager.add_key(api_key)
+            # Check if the exception indicates a rate limit (might need specific checks based on library behavior/status codes)
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                 db_manager.add_key(api_key)
+            # Retry with the next key for client exceptions
             continue
         except Exception as e:
             logging.exception(f"Unexpected error during SerpAPI fallback for image {index+1} (key ...{api_key[-4:]})")
             encountered_errors.append(f"Key ...{api_key[-4:]}: Unexpected Error - {type(e).__name__}")
+            # Retry with the next key for unexpected errors
             continue
 
+    # If loop finishes, all keys failed
     logging.error(f"All SerpAPI keys failed during fallback for Google Lens request for image {index+1}.")
-    final_error_msg = "All SerpAPI keys failed during fallback." + (f" Last error: {encountered_errors[-1]}" if encountered_errors else "")
+    final_error_msg = "All SerpAPI keys failed during fallback."
+    if encountered_errors:
+        final_error_msg += f" Last error: {encountered_errors[-1]}"
     return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens_serpapi", original_index=index)
 
 
 async def process_google_lens_image(image_url: str, index: int) -> UrlFetchResult:
-    """Processes a Google Lens request, trying custom first, then falling back to SerpAPI."""
+    """
+    Processes a Google Lens request for an image URL.
+    Tries the custom Playwright implementation first if configured.
+    Falls back to SerpAPI if the custom implementation fails or is not configured.
+    """
     custom_config = cfg.get("custom_google_lens_config")
     custom_results = None
     custom_error = None
     custom_impl_attempted = False
 
+    # 1. Try Custom Implementation
     if custom_config and custom_config.get("user_data_dir") and custom_config.get("profile_directory_name"):
-        user_data_dir, profile_name = custom_config["user_data_dir"], custom_config["profile_directory_name"]
+        user_data_dir = custom_config["user_data_dir"]
+        profile_name = custom_config["profile_directory_name"]
         logging.info(f"Attempting Google Lens request for image {index+1} using custom implementation (Profile: {profile_name})")
         custom_impl_attempted = True
         try:
-            custom_results = await asyncio.to_thread(_custom_get_google_lens_results_sync, image_url, user_data_dir, profile_name)
-            if custom_results is not None:
+            # Run the synchronous Playwright code in a separate thread
+            custom_results = await asyncio.to_thread(
+                _custom_get_google_lens_results_sync, # Call the internal sync function
+                image_url,
+                user_data_dir,
+                profile_name
+            )
+            if custom_results is not None: # Success (even if empty list)
                 logging.info(f"Custom Google Lens implementation successful for image {index+1}.")
-                if not custom_results: content_str = "No visual matches found (custom implementation)."
+                # Format results (similar to SerpAPI formatting)
+                if not custom_results:
+                     content_str = "No visual matches found (custom implementation)."
                 else:
-                    formatted_results = [f"- {res[:200]}{'...' if len(res) > 200 else ''}" for i, res in enumerate(custom_results[:MAX_SERPAPI_RESULTS_DISPLAY])]
+                    formatted_results = []
+                    # Assuming custom_results is a list of strings
+                    for i, result_text in enumerate(custom_results[:MAX_SERPAPI_RESULTS_DISPLAY]): # Use same display limit
+                        # Custom implementation doesn't provide links/sources easily, just text
+                        result_line = f"- {result_text}"
+                        formatted_results.append(result_line)
                     content_str = "\n".join(formatted_results)
-                    if len(custom_results) > MAX_SERPAPI_RESULTS_DISPLAY: content_str += f"\n- ... (and {len(custom_results) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+                    if len(custom_results) > MAX_SERPAPI_RESULTS_DISPLAY:
+                        content_str += f"\n- ... (and {len(custom_results) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+
                 return UrlFetchResult(url=image_url, content=content_str, type="google_lens_custom", original_index=index)
             else:
+                # Custom implementation returned None, indicating an error occurred within it
                 custom_error = "Custom implementation failed (returned None)."
                 logging.warning(f"Custom Google Lens implementation failed for image {index+1} (returned None). Falling back to SerpAPI.")
+
         except Exception as e:
             custom_error = f"Custom implementation raised an exception: {type(e).__name__}: {e}"
             logging.exception(f"Custom Google Lens implementation failed for image {index+1} with exception. Falling back to SerpAPI.")
+            # Fall through to SerpAPI fallback
     else:
         custom_error = "Custom Google Lens implementation not configured."
         logging.info("Custom Google Lens implementation not configured. Falling back to SerpAPI.")
+        # Fall through to SerpAPI fallback
 
+    # 2. Fallback to SerpAPI
     logging.info(f"Falling back to SerpAPI for Google Lens request for image {index+1}.")
+    # Call the refactored SerpAPI logic
     serpapi_result = await fetch_google_lens_serpapi_fallback(image_url, index)
 
+    # If SerpAPI also failed, report the custom error if it existed, otherwise SerpAPI error
     if serpapi_result.error:
-        if custom_impl_attempted and custom_error: final_error_msg = f"Custom Lens failed ({custom_error}). Fallback SerpAPI also failed: {serpapi_result.error}"
-        elif custom_error: final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
-        else: final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
+        # Determine the most relevant error to report
+        if custom_impl_attempted and custom_error:
+            final_error_msg = f"Custom Lens failed ({custom_error}). Fallback SerpAPI also failed: {serpapi_result.error}"
+        elif custom_error: # Custom not attempted or failed without exception, but SerpAPI failed
+            final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
+        else: # Should not happen if custom_error is always set when falling through, but safety
+             final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
+
         return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens_fallback_failed", original_index=index)
     else:
-        serpapi_result.type = "google_lens_serpapi"
+        # SerpAPI succeeded after custom failed or wasn't configured
+        serpapi_result.type = "google_lens_serpapi" # Ensure type is correct
         return serpapi_result
-
-
-# --- Payload Logging Helper ---
-def _sanitize_for_logging(data: Any) -> Any:
-    """Recursively sanitizes data structures for JSON logging."""
-    if isinstance(data, dict):
-        copied_dict = copy.deepcopy(data)
-        return {key: _sanitize_for_logging(value) for key, value in copied_dict.items()}
-    elif isinstance(data, list):
-        copied_list = copy.deepcopy(data)
-        return [_sanitize_for_logging(item) for item in copied_list]
-    elif isinstance(data, google_types.Part):
-        part_dict = {"type": "google_types.Part"}
-        if data.text is not None: part_dict["text"] = data.text
-        if data.inline_data is not None: part_dict["inline_data"] = {"mime_type": data.inline_data.mime_type, "data": f"<bytes len={len(data.inline_data.data)}>"}
-        if data.file_data is not None: part_dict["file_data"] = {"mime_type": data.file_data.mime_type, "file_uri": data.file_data.file_uri}
-        if data.function_call is not None: part_dict["function_call"] = {"name": data.function_call.name, "args": _sanitize_for_logging(data.function_call.args)}
-        if data.function_response is not None: part_dict["function_response"] = {"name": data.function_response.name, "response": _sanitize_for_logging(data.function_response.response)}
-        return part_dict
-    elif isinstance(data, google_types.Content):
-        return {"role": data.role, "parts": _sanitize_for_logging(data.parts)}
-    elif isinstance(data, google_types.Tool):
-        tool_dict = {"type": "google_types.Tool"}
-        if data.function_declarations: tool_dict["function_declarations"] = [{"name": f.name, "description": f.description} for f in data.function_declarations]
-        if data.google_search_retrieval: tool_dict["google_search_retrieval"] = _sanitize_for_logging(data.google_search_retrieval)
-        if data.code_execution: tool_dict["code_execution"] = {}
-        if data.google_search: tool_dict["google_search"] = {}
-        return tool_dict
-    elif isinstance(data, google_types.SafetySetting):
-        return {"category": data.category.name, "threshold": data.threshold.name}
-    elif isinstance(data, google_types.GenerateContentConfig):
-        config_dict = {"type": "google_types.GenerateContentConfig"}
-        for attr in ['temperature', 'top_p', 'top_k', 'candidate_count', 'max_output_tokens', 'stop_sequences', 'response_mime_type', 'response_schema', 'safety_settings', 'tools', 'tool_config', 'system_instruction', 'thinking_config']:
-            if hasattr(data, attr):
-                value = getattr(data, attr)
-                if value is not None: config_dict[attr] = _sanitize_for_logging(value)
-        return config_dict
-    elif isinstance(data, bytes): return f"<bytes len={len(data)}>"
-    elif isinstance(data, dict) and data.get("type") == "image_url": return data
-    elif hasattr(data, '__dict__') or hasattr(data, '__slots__'):
-        try: return _sanitize_for_logging(vars(data))
-        except TypeError: return f"<{type(data).__name__} object>"
-    else: return data
-
-def log_llm_payload(provider: str, model_name: str, args: Dict[str, Any]):
-    """Logs the sanitized payload being sent to the LLM."""
-    try:
-        payload_to_log = {"provider": provider, "model": model_name, **args}
-        sanitized_payload = _sanitize_for_logging(payload_to_log)
-        json_payload = json.dumps(sanitized_payload, indent=2, ensure_ascii=False)
-        logging.info(f"\n--- LLM Payload Sent ---\n{json_payload}\n------------------------")
-    except Exception as e:
-        logging.error(f"Error logging LLM payload: {e}")
-        logging.info(f"--- LLM Payload Sent (Raw Args Fallback) ---\nProvider: {provider}\nModel: {model_name}\nArgs: {args}\n------------------------")
 
 
 # --- Discord Event Handler ---
 @discord_client.event
 async def on_message(new_msg):
-    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent, custom_google_lens_config, history_db
+    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent, custom_google_lens_config
 
-    if new_msg.author.bot: return
+    # --- Basic Checks and Trigger ---
+    if new_msg.author.bot:
+        return
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
     allow_dms = cfg.get("allow_dms", True)
 
+    # Determine if the bot should process this message
     should_process = False
-    mentions_bot = False
-    contains_at_ai = False
-    original_content_for_processing = new_msg.content
+    mentions_bot = False # Initialize
+    contains_at_ai = False # Initialize
+    original_content_for_processing = new_msg.content # Keep original for keyword check
 
     if is_dm:
         if allow_dms:
             should_process = True
+            # Check if user explicitly mentioned bot or "at ai" in DM to start new chain
             mentions_bot = discord_client.user in new_msg.mentions
             contains_at_ai = AT_AI_PATTERN.search(original_content_for_processing) is not None
-        else: return
-    else:
+        else:
+            return # Block DMs if not allowed
+    else: # In a channel
         mentions_bot = discord_client.user in new_msg.mentions
         contains_at_ai = AT_AI_PATTERN.search(original_content_for_processing) is not None
-        if mentions_bot or contains_at_ai: should_process = True
+        if mentions_bot or contains_at_ai:
+            should_process = True
 
-    if not should_process: return
+    if not should_process:
+        return
 
     # --- Reload config & Check Global Reset ---
     cfg = get_config()
-    check_and_perform_global_reset()
-    youtube_api_key = cfg.get("youtube_api_key")
+    check_and_perform_global_reset() # Check/perform reset before processing message
+    youtube_api_key = cfg.get("youtube_api_key") # Still single key
     reddit_client_id = cfg.get("reddit_client_id")
     reddit_client_secret = cfg.get("reddit_client_secret")
     reddit_user_agent = cfg.get("reddit_user_agent")
-    custom_google_lens_config = cfg.get("custom_google_lens_config")
+    custom_google_lens_config = cfg.get("custom_google_lens_config") # Reload custom lens config
+    # SerpAPI keys are now handled by fetch_google_lens_serpapi_fallback
 
     # --- Permissions Check ---
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
-    permissions = cfg.get("permissions", {})
+    permissions = cfg.get("permissions", {}) # Default to empty dict
     user_perms = permissions.get("users", {"allowed_ids": [], "blocked_ids": []})
     role_perms = permissions.get("roles", {"allowed_ids": [], "blocked_ids": []})
     channel_perms = permissions.get("channels", {"allowed_ids": [], "blocked_ids": []})
+
     allowed_user_ids, blocked_user_ids = user_perms.get("allowed_ids", []), user_perms.get("blocked_ids", [])
     allowed_role_ids, blocked_role_ids = role_perms.get("allowed_ids", []), role_perms.get("blocked_ids", [])
     allowed_channel_ids, blocked_channel_ids = channel_perms.get("allowed_ids", []), channel_perms.get("blocked_ids", [])
 
+    # Determine if user is allowed (handles DM case implicitly via role_ids being empty)
     allow_all_users = not allowed_user_ids and not allowed_role_ids
     is_good_user = allow_all_users or new_msg.author.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
     is_bad_user = not is_good_user or new_msg.author.id in blocked_user_ids or any(id in blocked_role_ids for id in role_ids)
+
+    # Determine if channel is allowed (handles DM case via allow_dms check earlier)
     allow_all_channels = not allowed_channel_ids
     is_good_channel = allow_dms if is_dm else (allow_all_channels or any(id in allowed_channel_ids for id in channel_ids))
     is_bad_channel = not is_good_channel or any(id in blocked_channel_ids for id in channel_ids)
 
-    if is_bad_user or (not is_dm and is_bad_channel):
+    if is_bad_user or (not is_dm and is_bad_channel): # Apply channel block only if not DM
         logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
         return
 
     # --- LLM Provider/Model Selection ---
-    provider_slash_model = cfg.get("model", "openai/gpt-4.1")
-    try: provider, model_name = provider_slash_model.split("/", 1)
+    provider_slash_model = cfg.get("model", "openai/gpt-4.1") # Default model
+    try:
+        provider, model_name = provider_slash_model.split("/", 1)
     except ValueError:
-        logging.error(f"Invalid model format in config: '{provider_slash_model}'.")
+        logging.error(f"Invalid model format in config: '{provider_slash_model}'. Should be 'provider/model_name'.")
         await new_msg.reply(f"⚠️ Invalid model format in config: `{provider_slash_model}`", mention_author = False)
         return
 
     provider_config = cfg.get("providers", {}).get(provider, {})
-    all_api_keys = provider_config.get("api_keys", [])
-    base_url = provider_config.get("base_url")
+    all_api_keys = provider_config.get("api_keys", []) # Expecting a list now
+    base_url = provider_config.get("base_url") # Needed for OpenAI-compatible
+
     is_gemini = provider == "google"
-    keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
+
+    # Check if keys are required for this provider
+    keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"] # Add other keyless providers here
 
     if keys_required and not all_api_keys:
          logging.error(f"No API keys configured for provider '{provider}' in config.yaml.")
@@ -1376,208 +1305,396 @@ async def on_message(new_msg):
     split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
 
     # --- Clean Content and Check for Google Lens ---
-    cleaned_content = original_content_for_processing
+    cleaned_content = original_content_for_processing # Start with the original content
     if not is_dm and discord_client.user.mentioned_in(new_msg):
         cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
-    cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content)
-    cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip()
+    cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content) # Remove "at ai"
+    cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip() # Consolidate spaces
 
     use_google_lens = False
     image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
-    user_warnings = set()
+    user_warnings = set() # Initialize user_warnings here
 
     if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
         use_google_lens = True
+        # Remove the keyword itself from the content going to the LLM
         cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
         logging.info(f"Google Lens keyword detected for message {new_msg.id}")
+        # Check if either custom config or SerpAPI keys are available
         custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
         serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
         if not custom_lens_ok and not serpapi_keys_ok:
              logging.warning("Google Lens requested but neither custom implementation nor SerpAPI keys are configured.")
              user_warnings.add("⚠️ Google Lens requested but requires configuration (custom or SerpAPI).")
 
-    # --- URL Extraction and Task Creation ---
-    all_urls_with_indices = extract_urls_with_indices(cleaned_content)
-    fetch_tasks = []
-    processed_urls = set()
-    fetched_url_results_for_db: List[Dict] = [] # Store results for DB
 
+    # --- URL Extraction and Task Creation ---
+    all_urls_with_indices = extract_urls_with_indices(cleaned_content) # Use cleaned content for URL extraction now
+    fetch_tasks = []
+    processed_urls = set() # Avoid processing duplicates
+
+    # Add Google Lens tasks first if applicable
     if use_google_lens:
+        # Check again if configuration is missing, add warning if needed
         custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
         serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
-        if custom_lens_ok or serpapi_keys_ok:
+        if not custom_lens_ok and not serpapi_keys_ok:
+            # Warning already added above
+            pass
+        else:
             for i, attachment in enumerate(image_attachments):
+                # Use the new primary/fallback function
                 fetch_tasks.append(process_google_lens_image(attachment.url, i))
-        # Warning already added if neither configured
 
+    # Add other URL tasks
     for url, index in all_urls_with_indices:
-        if url in processed_urls: continue
+        if url in processed_urls:
+            continue
         processed_urls.add(url)
-        if is_youtube_url(url): fetch_tasks.append(fetch_youtube_data(url, index, youtube_api_key))
+
+        if is_youtube_url(url):
+            fetch_tasks.append(fetch_youtube_data(url, index, youtube_api_key))
         elif is_reddit_url(url):
             sub_id = extract_reddit_submission_id(url)
-            if sub_id: fetch_tasks.append(fetch_reddit_data(url, sub_id, index, reddit_client_id, reddit_client_secret, reddit_user_agent))
-            else: user_warnings.add(f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}...")
-        else: fetch_tasks.append(fetch_general_url_content(url, index))
+            if sub_id:
+                fetch_tasks.append(fetch_reddit_data(url, sub_id, index, reddit_client_id, reddit_client_secret, reddit_user_agent))
+            else:
+                user_warnings.add(f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}...")
+        else:
+            # Fetch general URL content
+            fetch_tasks.append(fetch_general_url_content(url, index))
+
+    # --- Build Message History ---
+    history = []
+    curr_msg = new_msg
+    while curr_msg is not None and len(history) < max_messages:
+        # Ensure node exists or create it
+        if curr_msg.id not in msg_nodes:
+             msg_nodes[curr_msg.id] = MsgNode() # Create node if missing (e.g., cache cleared)
+        curr_node = msg_nodes[curr_msg.id]
+
+        async with curr_node.lock:
+            # Populate node if it's empty (first time seeing this message)
+            if curr_node.text is None:
+                # Use the already cleaned content for the *new* message
+                content_to_store = cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
+
+                # Further clean mentions/at ai from older messages if needed (redundant if cleaned above, but safe)
+                is_dm_current = curr_msg.channel.type == discord.ChannelType.private
+                if not is_dm_current and discord_client.user.mentioned_in(curr_msg):
+                     content_to_store = content_to_store.replace(discord_client.user.mention, '').strip()
+                if curr_msg.id != new_msg.id: # Only remove "at ai" from older messages if it wasn't the trigger
+                    content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
+                    content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
+
+
+                # Process attachments (only for the current message node being processed)
+                current_attachments = curr_msg.attachments
+                good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
+                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
+
+                # Combine text content using the cleaned content
+                text_parts = [content_to_store] if content_to_store else []
+                text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
+                text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
+                text_parts.extend(filter(None, (getattr(embed.footer, 'text', None) for embed in curr_msg.embeds)))
+
+                # Add text from attachments
+                for att, resp in zip(good_attachments, attachment_responses):
+                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
+                        try:
+                            # Limit attachment text size
+                            attachment_text = resp.text[:max_text // 2] # Limit text attachment size
+                            if len(resp.text) > max_text // 2:
+                                attachment_text += "..."
+                                user_warnings.add(f"⚠️ Truncated text attachment: {att.filename}")
+                            text_parts.append(attachment_text)
+                        except Exception as e:
+                            logging.warning(f"Failed to decode text attachment {att.filename}: {e}")
+                            curr_node.has_bad_attachments = True
+                    elif isinstance(resp, Exception):
+                        logging.warning(f"Failed to fetch attachment {att.filename}: {resp}")
+                        curr_node.has_bad_attachments = True
+
+                curr_node.text = "\n".join(filter(None, text_parts))
+
+                # Process image attachments
+                image_parts = []
+                for att, resp in zip(good_attachments, attachment_responses):
+                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
+                        if is_gemini:
+                            # Use google.genai.types (imported as google_types)
+                            image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
+                        else:
+                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
+                    elif isinstance(resp, Exception):
+                        # Already logged warning above
+                        curr_node.has_bad_attachments = True
+
+                curr_node.images = image_parts
+                curr_node.role = "model" if curr_msg.author == discord_client.user else "user" # Use 'model' for Gemini assistant role
+                curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
+                curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
+
+                # Find parent message
+                try:
+                    parent_msg_obj = None
+                    # Check if the current message explicitly triggers the bot (mention or "at ai")
+                    # Use the variables calculated at the start of on_message if curr_msg is new_msg
+                    if curr_msg.id == new_msg.id:
+                        mentions_bot_in_current = mentions_bot
+                        contains_at_ai_in_current = contains_at_ai
+                    else: # Recalculate for older messages in the chain if needed
+                        mentions_bot_in_current = discord_client.user.mentioned_in(curr_msg)
+                        contains_at_ai_in_current = AT_AI_PATTERN.search(curr_msg.content) is not None
+
+                    is_explicit_trigger = mentions_bot_in_current or contains_at_ai_in_current
+
+                    # 1. Check reference (Explicit Reply always takes precedence)
+                    if curr_msg.reference and curr_msg.reference.message_id:
+                        try:
+                            parent_msg_obj = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(curr_msg.reference.message_id)
+                        except (discord.NotFound, discord.HTTPException) as e:
+                            logging.warning(f"Could not fetch referenced message {curr_msg.reference.message_id}: {e}")
+                            curr_node.fetch_parent_failed = True
+                    # 2. Check if it's the start of a thread (and not a reply within the thread)
+                    elif curr_msg.channel.type == discord.ChannelType.public_thread and not curr_msg.reference:
+                         try:
+                             # The starter message is the parent
+                             parent_msg_obj = curr_msg.channel.starter_message or await curr_msg.channel.parent.fetch_message(curr_msg.channel.id)
+                         except (discord.NotFound, discord.HTTPException, AttributeError) as e:
+                             logging.warning(f"Could not fetch thread starter message for thread {curr_msg.channel.id}: {e}")
+                             curr_node.fetch_parent_failed = True
+                    # 3. Check for automatic chaining ONLY IF not explicitly triggered by mention/@ai
+                    elif not is_explicit_trigger:
+                         prev_msg_in_channel = None
+                         try:
+                             # Use history instead of list comprehension for efficiency
+                             async for m in curr_msg.channel.history(before=curr_msg, limit=1):
+                                 prev_msg_in_channel = m
+                                 break # Get only the most recent one
+                         except (discord.Forbidden, discord.HTTPException) as e:
+                             logging.warning(f"Could not fetch history in channel {curr_msg.channel.id}: {e}")
+
+                         if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
+                             # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
+                             if (is_dm_current and prev_msg_in_channel.author == discord_client.user) or \
+                                (not is_dm_current and prev_msg_in_channel.author == curr_msg.author):
+                                 parent_msg_obj = prev_msg_in_channel
+
+                    curr_node.parent_msg = parent_msg_obj
+
+                except Exception as e:
+                    logging.exception(f"Error determining parent message for {curr_msg.id}")
+                    curr_node.fetch_parent_failed = True
+
+
+            # Prepare parts for the current message node for the LLM API
+            current_text_content = curr_node.text[:max_text] if curr_node.text else ""
+            current_images = curr_node.images[:max_images]
+
+            parts_for_api = []
+            if is_gemini:
+                if current_text_content:
+                    # Use google.genai.types (imported as google_types)
+                    parts_for_api.append(google_types.Part.from_text(text=current_text_content))
+                parts_for_api.extend(current_images)
+            else: # OpenAI format
+                if current_text_content:
+                    parts_for_api.append({"type": "text", "text": current_text_content})
+                parts_for_api.extend(current_images) # These are already dicts
+
+            # Add to history if parts exist
+            if parts_for_api:
+                message_data = {
+                    "role": curr_node.role # Use 'user' or 'model'/'assistant'
+                }
+                if is_gemini:
+                    # Ensure parts_for_api is always a list for Gemini
+                    if not isinstance(parts_for_api, list):
+                        parts_for_api = [parts_for_api]
+                    message_data["parts"] = parts_for_api
+                else:
+                    # OpenAI uses 'assistant' role for model responses
+                    if message_data["role"] == "model":
+                        message_data["role"] = "assistant"
+                    message_data["content"] = parts_for_api
+                    # Add name field if supported by provider
+                    if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
+                        message_data["name"] = str(curr_node.user_id)
+
+                history.append(message_data)
+
+            # Add warnings based on limits and errors for this specific node
+            if curr_node.text and len(curr_node.text) > max_text:
+                user_warnings.add(f"⚠️ Max {max_text:,} chars/msg")
+            if len(curr_node.images) > max_images:
+                user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
+            if curr_node.has_bad_attachments:
+                user_warnings.add("⚠️ Unsupported attachments")
+            if curr_node.fetch_parent_failed:
+                 user_warnings.add(f"⚠️ Couldn't fetch full history")
+            # Add warning if max messages reached *while processing this node*
+            if curr_node.parent_msg is not None and len(history) == max_messages:
+                 user_warnings.add(f"⚠️ Only using last {max_messages} messages")
+
+
+            # Move to the parent message for the next iteration
+            curr_msg = curr_node.parent_msg
+
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}):\n{new_msg.content}")
 
     # --- Fetch External Content Concurrently ---
+    url_fetch_results = []
     if fetch_tasks:
         results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
+                # This shouldn't happen if individual fetchers handle errors, but good fallback
                 logging.error(f"Unhandled exception during URL fetch: {result}")
                 user_warnings.add("⚠️ Unhandled error fetching URL content")
             elif isinstance(result, UrlFetchResult):
-                fetched_url_results_for_db.append(result.to_dict()) # Store dict representation
+                url_fetch_results.append(result)
                 if result.error:
+                    # Shorten URL in warning
                     short_url = result.url[:40] + "..." if len(result.url) > 40 else result.url
+                    # Don't add warning for fallback failure if custom succeeded
                     if result.type != "google_lens_fallback_failed":
                         user_warnings.add(f"⚠️ Error fetching {result.type} URL ({short_url}): {result.error}")
             else:
                  logging.error(f"Unexpected result type from URL fetch: {type(result)}")
 
-    # --- Determine Parent Message ID for DB ---
-    parent_message_id_for_db = None
-    try:
-        is_explicit_trigger = mentions_bot or contains_at_ai
-        if new_msg.reference and new_msg.reference.message_id:
-            parent_message_id_for_db = new_msg.reference.message_id
-        elif new_msg.channel.type == discord.ChannelType.public_thread and not new_msg.reference:
-            # Try fetching starter message ID if available
-            try:
-                starter_message = new_msg.channel.starter_message or await new_msg.channel.parent.fetch_message(new_msg.channel.id)
-                if starter_message:
-                    parent_message_id_for_db = starter_message.id
-                else: # Fallback to thread ID itself if starter message fetch fails
-                    parent_message_id_for_db = new_msg.channel.id
-            except (discord.NotFound, discord.HTTPException, AttributeError):
-                 logging.warning(f"Could not fetch starter message for thread {new_msg.channel.id}, using thread ID as parent.")
-                 parent_message_id_for_db = new_msg.channel.id # Use thread ID as parent
-        elif not is_explicit_trigger:
-            prev_msg_in_channel = None
-            async for m in new_msg.channel.history(before=new_msg, limit=1):
-                prev_msg_in_channel = m
-                break
-            if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
-                if (is_dm and prev_msg_in_channel.author == discord_client.user) or \
-                   (not is_dm and prev_msg_in_channel.author == new_msg.author):
-                    parent_message_id_for_db = prev_msg_in_channel.id
-    except Exception as e:
-        logging.exception(f"Error determining parent message ID for DB for {new_msg.id}")
-        user_warnings.add("⚠️ Couldn't determine parent message")
+
+    # --- Format External Content ---
+    google_lens_context_to_append = ""
+    other_url_context_to_append = ""
+
+    if url_fetch_results:
+        # Sort results by their original position in the message/attachments
+        url_fetch_results.sort(key=lambda r: r.original_index)
+
+        google_lens_parts = []
+        other_url_parts = []
+        other_url_counter = 1
+
+        for result in url_fetch_results:
+            if result.content: # Only include successful fetches
+                if result.type == "google_lens_custom":
+                    header = f"Custom Google Lens implementation results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "google_lens_serpapi":
+                    header = f"SerpAPI Google Lens fallback results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "youtube":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if isinstance(result.content, dict):
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
+                        desc = result.content.get('description', 'N/A')
+                        content_str += f"  description: {desc[:500]}{'...' if len(desc) > 500 else ''}\n"
+                        transcript = result.content.get('transcript')
+                        if transcript:
+                            content_str += f"  transcript: {transcript[:MAX_URL_CONTENT_LENGTH]}{'...' if len(transcript) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                elif result.type == "reddit":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if isinstance(result.content, dict):
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        selftext = result.content.get('selftext')
+                        if selftext:
+                            content_str += f"  content: {selftext[:MAX_URL_CONTENT_LENGTH]}{'...' if len(selftext) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                elif result.type == "general":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if isinstance(result.content, str):
+                        # Content is already limited string
+                        content_str += f"  {result.content}\n"
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                # Ignore google_lens_fallback_failed type here
+
+        if google_lens_parts:
+            google_lens_context_to_append = "\n\n".join(google_lens_parts) # Join with double newline
+
+        if other_url_parts:
+            other_url_context_to_append = "".join(other_url_parts)
+
+    # Combine context parts
+    combined_context = ""
+    if google_lens_context_to_append or other_url_context_to_append:
+        combined_context = "Answer the user's query based on the following:\n\n"
+        if google_lens_context_to_append:
+            combined_context += google_lens_context_to_append + "\n\n" # Add separator if both exist
+        if other_url_context_to_append:
+            combined_context += other_url_context_to_append
 
 
-    # --- Save User Message to DB ---
-    user_image_urls = [att.url for att in image_attachments] # Store URLs, not base64
-    history_db.save_message(
-        message_id=new_msg.id,
-        channel_id=new_msg.channel.id,
-        author_id=new_msg.author.id,
-        role='user',
-        timestamp=new_msg.created_at.timestamp(),
-        original_content=cleaned_content, # Store the cleaned user text
-        image_urls=user_image_urls,
-        fetched_url_data=fetched_url_results_for_db, # Store the fetched data
-        llm_response_content=None, # No LLM response for user message
-        parent_message_id=parent_message_id_for_db
-    )
+    # --- Prepare API Call ---
+    history_for_llm = history[::-1] # Reverse history for correct chronological order
 
-    # --- Build Message History from DB ---
-    history_from_db = history_db.load_conversation_history(new_msg.id, max_messages)
-    history_for_llm = []
-    processed_db_ids = set() # Track IDs processed from DB to avoid duplicates if fallback occurs
-
-    for db_msg_data in history_from_db:
-        message_id = db_msg_data['message_id']
-        processed_db_ids.add(message_id)
-
-        role = db_msg_data['role']
-        author_id = db_msg_data['author_id']
-        llm_response = db_msg_data['llm_response_content']
-        original_content = db_msg_data['original_content']
-        image_urls = db_msg_data['image_urls'] or []
-        fetched_data = db_msg_data['fetched_url_data'] or []
-
-        # Reconstruct the content that was sent to/received from the LLM
-        content_parts = []
-        text_content = ""
-
-        if role == 'user':
-            # Format fetched data and prepend to original content
-            formatted_fetched_context = format_fetched_data_for_llm(fetched_data)
-            text_content = original_content or ""
-            if formatted_fetched_context:
-                text_content = f"{formatted_fetched_context}\n\nUser's query:\n{text_content}"
-        elif role == 'assistant':
-            text_content = llm_response or "" # Use the stored LLM response
-
-        # Add text part
-        if text_content:
-            text_content = text_content[:max_text] # Apply max_text limit
+    # Prepend combined external content context if available
+    if combined_context:
+        context_header = combined_context + "\n\nUser's query:\n" # Use the formatted context
+        if history_for_llm and history_for_llm[0]['role'] == 'user':
+            first_user_msg = history_for_llm[0]
             if is_gemini:
-                content_parts.append(google_types.Part.from_text(text=text_content))
-            else:
-                content_parts.append({"type": "text", "text": text_content})
+                # Find or add text part in Gemini message
+                text_part_found = False
+                # Ensure 'parts' exists and is a list
+                if 'parts' not in first_user_msg or not isinstance(first_user_msg['parts'], list):
+                    first_user_msg['parts'] = []
 
-        # Add image parts (re-fetch and encode if needed, or handle differently)
-        if accept_images and image_urls:
-            image_count = 0
-            for img_url in image_urls:
-                if image_count >= max_images:
-                    user_warnings.add(f"⚠️ Max {max_images} images/msg")
-                    break
-                if is_gemini:
-                    # Fetch image bytes for Gemini
-                    try:
-                        async with httpx_client.stream("GET", img_url, timeout=10.0) as img_resp:
-                            if img_resp.status_code == 200:
-                                img_bytes = await img_resp.aread()
-                                mime_type = img_resp.headers.get("content-type", "image/jpeg") # Guess mime type
-                                content_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
-                                image_count += 1
-                            else:
-                                logging.warning(f"Failed to fetch image {img_url} for history: Status {img_resp.status_code}")
-                                user_warnings.add(f"⚠️ Couldn't fetch image: {img_url[:40]}...")
-                    except Exception as img_err:
-                        logging.warning(f"Error fetching image {img_url} for history: {img_err}")
-                        user_warnings.add(f"⚠️ Error fetching image: {img_url[:40]}...")
-                else: # OpenAI compatible (pass URL directly)
-                    content_parts.append({"type": "image_url", "image_url": {"url": img_url}})
-                    image_count += 1
+                for part in first_user_msg['parts']:
+                    # Use google.genai.types (imported as google_types)
+                    if isinstance(part, google_types.Part) and part.text is not None:
+                        part.text = context_header + part.text
+                        text_part_found = True
+                        break
+                if not text_part_found:
+                    # Use google.genai.types (imported as google_types)
+                    first_user_msg['parts'].insert(0, google_types.Part.from_text(text=context_header))
+            else: # OpenAI
+                # Ensure 'content' exists before modifying
+                if 'content' not in first_user_msg:
+                    first_user_msg['content'] = []
 
-        # Construct the message dictionary for the LLM API
-        if content_parts:
-            message_dict = {"role": "model" if role == 'assistant' and is_gemini else role} # Use 'model' for Gemini assistant
+                # Find or add text part in OpenAI message content list
+                if isinstance(first_user_msg['content'], list):
+                    text_part_found = False
+                    for part in first_user_msg['content']:
+                        if isinstance(part, dict) and part.get('type') == 'text':
+                            part['text'] = context_header + part.get('text', '')
+                            text_part_found = True
+                            break
+                    if not text_part_found:
+                        first_user_msg['content'].insert(0, {'type': 'text', 'text': context_header})
+                elif isinstance(first_user_msg['content'], str): # Handle case where content is just a string
+                     first_user_msg['content'] = context_header + first_user_msg['content']
+                else: # Fallback: create content list if it's missing or wrong type
+                     first_user_msg['content'] = [{'type': 'text', 'text': context_header}]
+
+        else:
+            # Insert context as a new user message if history is empty or starts with assistant/model
+            new_user_message_role = 'user'
             if is_gemini:
-                message_dict["parts"] = content_parts
+                 # Use google.genai.types (imported as google_types)
+                 history_for_llm.insert(0, {'role': new_user_message_role, 'parts': [google_types.Part.from_text(text=context_header)]})
             else:
-                if message_dict["role"] == "model": message_dict["role"] = "assistant" # OpenAI uses 'assistant'
-                message_dict["content"] = content_parts
-                if provider in PROVIDERS_SUPPORTING_USERNAMES and role == 'user':
-                    message_dict["name"] = str(author_id)
-            history_for_llm.append(message_dict)
-
-    # --- Fallback to API Fetching if DB History is Incomplete ---
-    # (This section is complex and requires careful merging of DB and API data.
-    # For now, we rely solely on the DB history loaded.)
-    if len(history_for_llm) < max_messages and history_from_db:
-        last_db_msg = history_from_db[-1]
-        parent_id_from_db = last_db_msg.get('parent_message_id')
-        if parent_id_from_db:
-            logging.info(f"DB history shorter than max_messages ({len(history_for_llm)}/{max_messages}). Fetching older messages via API if needed is not fully implemented here.")
-            user_warnings.add(f"⚠️ History might be incomplete (loaded {len(history_for_llm)} from DB).")
+                 history_for_llm.insert(0, {'role': new_user_message_role, 'content': context_header})
 
 
-    # --- Final History Preparation ---
-    history_for_llm = history_for_llm[::-1] # Reverse to chronological order for LLM
-
-    # Add warning if max messages reached
-    if len(history_from_db) >= max_messages:
-         user_warnings.add(f"⚠️ Only using last {max_messages} messages from history.")
-
-    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}):\n{new_msg.content}")
-
-    # --- System Prompt ---
+    # System Prompt
     system_prompt_text = None
     if system_prompt := cfg.get("system_prompt"):
         system_prompt_extras = [f"Today's date: {dt.now().strftime('%B %d %Y')}."]
@@ -1586,291 +1703,431 @@ async def on_message(new_msg):
         system_prompt_text = "\n".join([system_prompt] + system_prompt_extras)
 
     # --- Generate and Send Response with Retry ---
-    response_msgs = []
-    final_text = ""
+    response_msgs = [] # Keep track of messages sent by the bot for this request
+    final_text = ""    # Store the final aggregated text
     llm_call_successful = False
     llm_errors = []
-    final_view = None
+    final_view = None # Initialize final_view here
     grounding_metadata = None
     edit_task = None
 
-    embed = discord.Embed()
-    embed.set_footer(text=f"Model: {provider_slash_model}")
+    embed = discord.Embed() # Initialize embed here
+    embed.set_footer(text=f"Model: {provider_slash_model}") # Add the footer with the model name
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
-    try:
+    try: # Main try block for the core processing and API calls
+        # Get available keys for the selected provider
         available_llm_keys = await get_available_keys(provider, all_api_keys)
         random.shuffle(available_llm_keys)
         llm_db_manager = get_db_manager(provider)
 
-        if keys_required and not available_llm_keys:
+        if keys_required and not available_llm_keys: # Check if keys are actually needed and available
             logging.error(f"No available (non-rate-limited) API keys for provider '{provider}'.")
             await new_msg.reply(f"⚠️ No available API keys for provider `{provider}` right now.", mention_author = False)
-            return
+            return # Exit if no keys available and keys are required
 
+        # Loop even if no keys needed (e.g., Ollama) - use a dummy key placeholder
         keys_to_loop = available_llm_keys if keys_required else ["dummy_key"]
 
         for key_index, current_api_key in enumerate(keys_to_loop):
             key_display = f"...{current_api_key[-4:]}" if current_api_key != "dummy_key" else "N/A (keyless)"
             logging.info(f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index+1}/{len(keys_to_loop)})")
 
+            # Reset state for each attempt
             response_contents = []
+            # final_text = "" # Don't reset final_text here, aggregate across stream chunks
             finish_reason = None
             grounding_metadata = None
             llm_client = None
             api_config = None
             api_content_kwargs = {}
-            payload_args_for_logging = {}
 
-            try:
+            try: # Inner try for the specific API call attempt
+                # --- Initialize Client for this attempt ---
                 if is_gemini:
                     if current_api_key == "dummy_key": raise ValueError("Gemini requires an API key.")
+                    # Use google.genai (imported as google_genai)
                     llm_client = google_genai.Client(api_key=current_api_key)
+                    # Prepare Gemini specific args
                     gemini_contents = []
                     for msg in history_for_llm:
-                        role = msg["role"]
-                        parts = msg.get("parts", [])
+                        role = msg["role"] # Already 'user' or 'model'
+                        parts = msg.get("parts", []) # Default to empty list if parts missing
+                        # Ensure parts is a list, even if empty
                         if not isinstance(parts, list):
+                             logging.warning(f"Correcting non-list parts for Gemini message: {parts}")
+                             # Convert non-list to text part or empty list
+                             # Use google.genai.types (imported as google_types)
                              parts = [google_types.Part.from_text(text=str(parts))] if parts else []
+                        # Use google.genai.types (imported as google_types)
                         gemini_contents.append(google_types.Content(role=role, parts=parts))
+
                     api_content_kwargs["contents"] = gemini_contents
+
                     gemini_extra_params = cfg.get("extra_api_parameters", {}).copy()
-                    if "max_tokens" in gemini_extra_params: gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
-                    gemini_safety_settings_list = [google_types.SafetySetting(category=c, threshold=t) for c, t in GEMINI_SAFETY_SETTINGS_DICT.items()]
+                    if "max_tokens" in gemini_extra_params:
+                        gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
+
+                    # Use google.genai.types (imported as google_types)
+                    gemini_safety_settings_list = [
+                        google_types.SafetySetting(category=category, threshold=threshold)
+                        for category, threshold in GEMINI_SAFETY_SETTINGS_DICT.items()
+                    ]
+
+                    # Use google.genai.types (imported as google_types)
                     api_config = google_types.GenerateContentConfig(
                         **gemini_extra_params,
                         safety_settings=gemini_safety_settings_list,
-                        tools=[google_types.Tool(google_search=google_types.GoogleSearch())]
+                        tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
                     )
-                    if system_prompt_text: api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
-                    payload_args_for_logging = {"contents": api_content_kwargs["contents"], "config": api_config}
-                else:
+                    if system_prompt_text:
+                         # Use google.genai.types (imported as google_types)
+                         api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
+
+                else: # OpenAI compatible
                     api_key_to_use = current_api_key if current_api_key != "dummy_key" else None
                     llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
-                    openai_messages = history_for_llm[:]
-                    if system_prompt_text: openai_messages.insert(0, dict(role="system", content=system_prompt_text))
+                    # Prepare OpenAI specific args
+                    openai_messages = history_for_llm[:] # Copy history
+                    if system_prompt_text:
+                        openai_messages.insert(0, dict(role="system", content=system_prompt_text))
+
                     api_content_kwargs["messages"] = openai_messages
                     api_config = cfg.get("extra_api_parameters", {}).copy()
-                    api_config["stream"] = True
-                    payload_args_for_logging = {"messages": api_content_kwargs["messages"], "stream": True, **api_config}
+                    api_config["stream"] = True # Always stream for OpenAI
 
-                log_llm_payload(provider, model_name, payload_args_for_logging)
-
+                # --- Make API Call and Process Stream ---
                 async with new_msg.channel.typing():
                     stream_response = None
                     if is_gemini:
-                        if not llm_client: raise ValueError("Gemini client not initialized.")
+                        if not llm_client: raise ValueError("Gemini client not initialized for this key.")
+                        # Use google.genai.types (imported as google_types)
                         stream_response = await llm_client.aio.models.generate_content_stream(
-                            model=model_name, contents=api_content_kwargs["contents"], config=api_config
+                            model=model_name,
+                            contents=api_content_kwargs["contents"],
+                            config=api_config
                         )
                     else:
-                        if not llm_client: raise ValueError("OpenAI client not initialized.")
+                        if not llm_client: raise ValueError("OpenAI client not initialized for this key.")
                         stream_response = await llm_client.chat.completions.create(
-                            model=model_name, messages=api_content_kwargs["messages"], **api_config
+                            model=model_name,
+                            messages=api_content_kwargs["messages"],
+                            **api_config
                         )
 
+                    # --- Stream Processing Loop (Inside Retry Loop) ---
                     async for chunk in stream_response:
                         new_content_chunk = ""
                         chunk_finish_reason = None
                         chunk_grounding_metadata = None
-                        try:
+
+                        try: # Inner try for stream processing errors
                             if is_gemini:
-                                if hasattr(chunk, 'text') and chunk.text: new_content_chunk = chunk.text
+                                # Extract Gemini data
+                                if hasattr(chunk, 'text') and chunk.text:
+                                    new_content_chunk = chunk.text
                                 if hasattr(chunk, 'candidates') and chunk.candidates:
                                      candidate = chunk.candidates[0]
                                      if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
-                                          reason_map = {google_types.FinishReason.STOP: "stop", google_types.FinishReason.MAX_TOKENS: "length", google_types.FinishReason.SAFETY: "safety", google_types.FinishReason.RECITATION: "recitation"}
+                                          # Map Gemini finish reason if needed, default to 'stop' if successful
+                                          # Use google.genai.types (imported as google_types)
+                                          reason_map = {
+                                               google_types.FinishReason.STOP: "stop",
+                                               google_types.FinishReason.MAX_TOKENS: "length",
+                                               google_types.FinishReason.SAFETY: "safety",
+                                               google_types.FinishReason.RECITATION: "recitation",
+                                               # Add other mappings as needed
+                                          }
+                                          # Use FINISH_REASON_UNSPECIFIED as a successful stop condition too
                                           chunk_finish_reason = reason_map.get(candidate.finish_reason, "stop" if candidate.finish_reason in (google_types.FinishReason.FINISH_REASON_UNSPECIFIED, google_types.FinishReason.STOP) else str(candidate.finish_reason))
-                                     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata: chunk_grounding_metadata = candidate.grounding_metadata
-                            else:
+                                     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                                          chunk_grounding_metadata = candidate.grounding_metadata
+                            else: # OpenAI
                                 if chunk.choices:
                                     delta = chunk.choices[0].delta
                                     chunk_finish_reason = chunk.choices[0].finish_reason
-                                    if delta and delta.content: new_content_chunk = delta.content
+                                    if delta and delta.content:
+                                        new_content_chunk = delta.content
 
-                            if chunk_finish_reason: finish_reason = chunk_finish_reason
-                            if chunk_grounding_metadata: grounding_metadata = chunk_grounding_metadata
+                            # Update overall finish reason and grounding metadata
+                            if chunk_finish_reason:
+                                finish_reason = chunk_finish_reason
+                            if chunk_grounding_metadata:
+                                grounding_metadata = chunk_grounding_metadata # Keep the latest
 
+                            # --- ADD SAFETY CHECK HERE ---
                             if finish_reason and finish_reason.lower() == "safety":
-                                logging.warning(f"Response Blocked (finish_reason=SAFETY) with key {key_display}")
+                                logging.warning(f"Gemini Response Blocked (finish_reason=SAFETY) with key {key_display}")
                                 llm_errors.append(f"Key {key_display}: Response Blocked (Safety)")
-                                llm_call_successful = False
+                                llm_call_successful = False # Mark as unsuccessful
+
+                                # Edit the last message to show it was blocked if possible
                                 if not use_plain_responses and response_msgs:
                                     try:
+                                        # Ensure embed description exists before appending
                                         current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
-                                        embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip() + "\n\n⚠️ Response blocked by safety filters."
+                                        embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip() # Remove indicator
+                                        embed.description += "\n\n⚠️ Response blocked by safety filters."
                                         embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
                                         embed.color = EMBED_COLOR_ERROR
-                                        if edit_task and not edit_task.done(): await edit_task
-                                        await response_msgs[-1].edit(embed=embed, view=None)
-                                    except Exception as edit_err: logging.error(f"Failed to edit message to show safety block: {edit_err}")
-                                break # Break inner stream loop
+                                        # Ensure previous edit task is awaited if exists
+                                        if edit_task and not edit_task.done():
+                                            await edit_task
+                                        await response_msgs[-1].edit(embed=embed, view=None) # Edit final state
+                                    except Exception as edit_err:
+                                        logging.error(f"Failed to edit message to show safety block: {edit_err}")
+                                        # Fallback reply will happen outside the loop if llm_call_successful is False
+                                else:
+                                     # Reply will happen outside the loop if llm_call_successful is False
+                                     pass # No immediate reply needed here for plain text
 
-                            if new_content_chunk: response_contents.append(new_content_chunk)
+                                # Break both inner stream loop and outer retry loop
+                                break # Break inner stream loop (will trigger outer break below)
+                            # --- END SAFETY CHECK ---
 
+                            # Append content if not empty
+                            if new_content_chunk:
+                                response_contents.append(new_content_chunk)
+
+                            # --- Real-time Editing Logic (Common for both) ---
                             if not use_plain_responses:
                                 current_full_text = "".join(response_contents)
-                                if not current_full_text and not finish_reason: continue
+                                if not current_full_text and not finish_reason: # Skip empty intermediate chunks
+                                     continue
+
+                                # Create view only on the final chunk if needed
                                 view_to_attach = None
                                 is_final_chunk = finish_reason is not None
                                 if is_final_chunk:
+                                    # Check if any button should be added
                                     has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None))
                                     has_text = bool(current_full_text)
                                     if has_sources or has_text:
-                                        view_to_attach = ResponseActionView(grounding_metadata=grounding_metadata, full_response_text=current_full_text, model_name=provider_slash_model)
-                                        if not view_to_attach or len(view_to_attach.children) == 0: view_to_attach = None
+                                        view_to_attach = ResponseActionView(
+                                            grounding_metadata=grounding_metadata,
+                                            full_response_text=current_full_text,
+                                            model_name=provider_slash_model
+                                        )
+                                        # Remove view if it ended up having no buttons
+                                        if not view_to_attach or len(view_to_attach.children) == 0:
+                                            view_to_attach = None
+
 
                                 current_msg_index = (len(current_full_text) - 1) // split_limit if current_full_text else 0
                                 start_next_msg = current_msg_index >= len(response_msgs)
+
                                 ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
 
                                 if start_next_msg or ready_to_edit or is_final_chunk:
-                                    if edit_task is not None: await edit_task
+                                    if edit_task is not None:
+                                        await edit_task # Wait for previous edit
+
+                                    # Finalize previous message if splitting
                                     if start_next_msg and response_msgs:
                                         prev_msg_index = current_msg_index - 1
-                                        prev_msg_text = current_full_text[prev_msg_index * split_limit : current_msg_index * split_limit][:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
-                                        embed.description = prev_msg_text or "..."
+                                        prev_msg_text = current_full_text[prev_msg_index * split_limit : current_msg_index * split_limit]
+                                        prev_msg_text = prev_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)] # Ensure limit
+                                        embed.description = prev_msg_text or "..." # No indicator, handle empty
                                         embed.color = EMBED_COLOR_COMPLETE
-                                        try: await response_msgs[prev_msg_index].edit(embed=embed, view=None)
-                                        except discord.HTTPException as e: logging.error(f"Failed to finalize previous message {prev_msg_index}: {e}")
+                                        try:
+                                            # Remove view from previous message
+                                            await response_msgs[prev_msg_index].edit(embed=embed, view=None)
+                                        except discord.HTTPException as e:
+                                            logging.error(f"Failed to finalize previous message {prev_msg_index}: {e}")
 
-                                    current_display_text = current_full_text[current_msg_index * split_limit : (current_msg_index + 1) * split_limit][:MAX_EMBED_DESCRIPTION_LENGTH]
-                                    is_successful_finish = finish_reason and finish_reason.lower() in ("stop", "end_turn")
+                                    # Prepare current message segment
+                                    current_display_text = current_full_text[current_msg_index * split_limit : (current_msg_index + 1) * split_limit]
+                                    current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH] # Truncate
+
+                                    # Set embed content and color
                                     embed.description = (current_display_text or "...") if is_final_chunk else ((current_display_text or "...") + STREAMING_INDICATOR)
+                                    is_successful_finish = finish_reason and finish_reason.lower() in ("stop", "end_turn") # Define success
                                     embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
 
+                                    # Create or Edit the current message
                                     if start_next_msg:
                                         reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                        # Clear previous response messages if starting over due to retry
                                         if key_index > 0:
                                             logging.info(f"Clearing previous response messages due to retry (Key index: {key_index})")
                                             for old_msg in response_msgs:
                                                 try: await old_msg.delete()
-                                                except discord.HTTPException: pass
-                                            response_msgs = []
+                                                except discord.HTTPException: pass # Ignore if already deleted
+                                            response_msgs = [] # Reset the list
                                         response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
                                         response_msgs.append(response_msg)
-                                        # Don't add to msg_nodes here, save to DB later
+                                        msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                        await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
                                     elif response_msgs and current_msg_index < len(response_msgs):
                                         edit_task = asyncio.create_task(response_msgs[current_msg_index].edit(embed=embed, view=view_to_attach))
-                                    elif not response_msgs and is_final_chunk:
+                                    elif not response_msgs and is_final_chunk: # Handle case where response is short and finishes immediately
                                          reply_to_msg = new_msg
                                          response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
                                          response_msgs.append(response_msg)
-                                         # Don't add to msg_nodes here, save to DB later
+                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                         await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
+
+
                                     last_task_time = dt.now().timestamp()
 
-                            if finish_reason: break # Exit inner stream loop
+                            # Break inner stream loop if finished
+                            if finish_reason:
+                                break # Exit inner stream loop
 
-                        except APIConnectionError as stream_err:
+                        except APIConnectionError as stream_err: # Catch connection errors during streaming
                             logging.warning(f"Connection error during streaming with key {key_display}: {stream_err}")
                             llm_errors.append(f"Key {key_display}: Stream Connection Error - {stream_err}")
+                            # Break inner stream loop and proceed to retry with next key
                             break
-                        except APIError as stream_err:
+                        except APIError as stream_err: # Catch other API errors during streaming (OpenAI specific)
                             logging.warning(f"API error during streaming with key {key_display}: {stream_err}")
                             llm_errors.append(f"Key {key_display}: Stream API Error - {stream_err}")
+                            # Check if it's a rate limit error during stream
                             if isinstance(stream_err, RateLimitError):
                                 if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
+                            # Break inner stream loop and proceed to retry with next key
                             break
-                        except google_api_exceptions.GoogleAPIError as stream_err:
+                        except google_api_exceptions.GoogleAPIError as stream_err: # Catch Google API errors during streaming
                             logging.warning(f"Google API error during streaming with key {key_display}: {stream_err}")
                             llm_errors.append(f"Key {key_display}: Stream Google API Error - {stream_err}")
+                            # Check if it's a rate limit error during stream
                             if isinstance(stream_err, google_api_exceptions.ResourceExhausted):
                                 if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
+                            # Break inner stream loop and proceed to retry with next key
                             break
-                        except Exception as stream_err:
+                        except Exception as stream_err: # Catch unexpected errors during streaming
                             logging.exception(f"Unexpected error during streaming with key {key_display}")
                             llm_errors.append(f"Key {key_display}: Unexpected Stream Error - {type(stream_err).__name__}")
+                            # Break inner stream loop and proceed to retry with next key
                             break
+                    # --- End Stream Processing Loop ---
 
-                    if finish_reason and finish_reason.lower() == "safety": break # Break outer retry loop
+                    # --- ADD OUTER BREAK FOR SAFETY ---
+                    if finish_reason and finish_reason.lower() == "safety":
+                        break # Break outer retry loop immediately if safety blocked
+                    # --- END OUTER BREAK ---
 
-                    if finish_reason and finish_reason.lower() != "safety":
+                    # If the stream finished without breaking due to an error (and wasn't safety)
+                    if finish_reason and finish_reason.lower() != "safety": # Check it wasn't safety
                         llm_call_successful = True
                         logging.info(f"LLM request successful with key {key_display}")
-                        break
+                        break # Exit the outer retry loop
 
+            # --- Handle API Call Errors for the current key ---
             except (RateLimitError, google_api_exceptions.ResourceExhausted) as e:
                 logging.warning(f"Rate limit hit for provider '{provider}' with key {key_display}. Error: {e}")
                 if current_api_key != "dummy_key": llm_db_manager.add_key(current_api_key)
                 llm_errors.append(f"Key {key_display}: Rate Limited")
-                continue
+                continue # Try next key
             except (AuthenticationError, google_api_exceptions.PermissionDenied) as e:
                 logging.error(f"Authentication failed for provider '{provider}' with key {key_display}. Error: {e}")
                 llm_errors.append(f"Key {key_display}: Authentication Failed")
+                # Don't retry with other keys if auth fails for this one specifically
                 llm_call_successful = False; break
             except (APIConnectionError, google_api_exceptions.ServiceUnavailable, google_api_exceptions.DeadlineExceeded) as e:
                 logging.warning(f"Connection/Service error for provider '{provider}' with key {key_display}. Error: {e}")
                 llm_errors.append(f"Key {key_display}: Connection/Service Error - {type(e).__name__}")
-                continue
+                continue # Try next key
             except (BadRequestError, google_api_exceptions.InvalidArgument) as e:
                  logging.error(f"Bad request error for provider '{provider}' with key {key_display}. Error: {e}")
                  llm_errors.append(f"Key {key_display}: Bad Request - {e}")
+                 # Bad requests are unlikely to be fixed by changing keys, stop retrying.
                  llm_call_successful = False; break
-            except APIError as e:
+            # Removed BlockedPromptError and StopCandidateError handlers
+            except APIError as e: # Catch other OpenAI API errors
                 logging.exception(f"OpenAI API Error for key {key_display}")
                 llm_errors.append(f"Key {key_display}: API Error - {type(e).__name__}: {e}")
-                continue
-            except google_api_exceptions.GoogleAPICallError as e:
+                continue # Try next key for general API errors
+            except google_api_exceptions.GoogleAPICallError as e: # Catch other Google API errors
                 logging.exception(f"Google API Call Error for key {key_display}")
                 llm_errors.append(f"Key {key_display}: Google API Error - {type(e).__name__}: {e}")
-                continue
-            except Exception as e:
+                continue # Try next key
+            except Exception as e: # Catch other unexpected errors
                 logging.exception(f"Unexpected error during LLM call with key {key_display}")
                 llm_errors.append(f"Key {key_display}: Unexpected Error - {type(e).__name__}: {e}")
-                continue
+                continue # Try next key
+            # No finally block needed here for the inner try
 
-        # --- Post-Retry Loop Processing ---
+        # --- Post-Retry Loop Processing --- (Still inside the main try)
         if not llm_call_successful:
+            # This block executes only if the loop finished without success
             logging.error(f"All LLM API keys failed for provider '{provider}'. Errors: {llm_errors}")
             error_message = f"⚠️ All API keys for provider `{provider}` failed."
             if llm_errors:
+                # Show the last error encountered
                 last_error_short = str(llm_errors[-1])
                 error_message += f"\nLast error: `{last_error_short[:100]}{'...' if len(last_error_short) > 100 else ''}`"
+
+            # Edit the last message OR reply with the final error
             if not use_plain_responses and response_msgs:
                  try:
+                     # Ensure embed description exists before appending
                      current_desc = response_msgs[-1].embeds[0].description if response_msgs[-1].embeds else ""
-                     embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip() + f"\n\n{error_message}"
+                     embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                     embed.description += f"\n\n{error_message}"
                      embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
                      embed.color = EMBED_COLOR_ERROR
-                     await response_msgs[-1].edit(embed=embed, view=None)
+                     await response_msgs[-1].edit(embed=embed, view=None) # Remove view on final error
                  except Exception as edit_err:
                      logging.error(f"Failed to edit message to show final error: {edit_err}")
-                     await new_msg.reply(error_message, mention_author = False)
-            else: await new_msg.reply(error_message, mention_author = False)
+                     await new_msg.reply(error_message, mention_author = False) # Fallback reply
+            else:
+                # If plain responses were used, or no messages were sent yet, just reply
+                await new_msg.reply(error_message, mention_author = False)
+            # Do NOT return here, let finally run
 
         else: # If successful
             final_text = "".join(response_contents)
+
+            # Create the final view (if needed) after successful generation
             final_view = None
             if not use_plain_responses:
                 has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None))
                 has_text = bool(final_text)
                 if has_sources or has_text:
-                    final_view = ResponseActionView(grounding_metadata=grounding_metadata, full_response_text=final_text, model_name=provider_slash_model)
-                    if not final_view or len(final_view.children) == 0: final_view = None
+                    final_view = ResponseActionView(
+                        grounding_metadata=grounding_metadata,
+                        full_response_text=final_text,
+                        model_name=provider_slash_model
+                    )
+                    # Remove view if it ended up having no buttons
+                    if not final_view or len(final_view.children) == 0:
+                        final_view = None
 
+            # Handle plain text responses (final output)
             if use_plain_responses:
                  final_messages_content = [final_text[i:i+2000] for i in range(0, len(final_text), 2000)]
                  if not final_messages_content: final_messages_content.append("...")
+
+                 # Delete previous potentially failed attempts if retried and successful
+                 # This assumes response_msgs was cleared correctly before the successful attempt
+                 # No explicit deletion needed here if logic inside stream loop is correct
+
                  temp_response_msgs = []
                  for i, content in enumerate(final_messages_content):
                      reply_to_msg = new_msg if not temp_response_msgs else temp_response_msgs[-1]
+                     # Plain responses don't get views
                      response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=None, mention_author = False)
                      temp_response_msgs.append(response_msg)
-                     # Save assistant message to DB
-                     history_db.save_message(
-                         message_id=response_msg.id, channel_id=response_msg.channel.id, author_id=discord_client.user.id,
-                         role='assistant', timestamp=response_msg.created_at.timestamp(), original_content=None,
-                         image_urls=None, fetched_url_data=None,
-                         llm_response_content=final_text if i == len(final_messages_content) - 1 else content, # Store full text in last segment
-                         parent_message_id=reply_to_msg.id
-                     )
-                 response_msgs = temp_response_msgs
+                     # Create node and acquire lock immediately
+                     msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                     node = msg_nodes[response_msg.id]
+                     await node.lock.acquire()
+                     # Store full text in the last node for plain responses
+                     if i == len(final_messages_content) - 1:
+                         node.full_response_text = final_text
+                 response_msgs = temp_response_msgs # Update the main list
 
+            # Final edit for embed messages (if not already handled by final chunk logic)
             elif not use_plain_responses and response_msgs:
                  if edit_task is not None and not edit_task.done(): await edit_task
+
                  final_msg_index = len(response_msgs) - 1
-                 final_msg_text = final_text[final_msg_index * split_limit : (final_msg_index + 1) * split_limit][:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
+                 final_msg_text = final_text[final_msg_index * split_limit : (final_msg_index + 1) * split_limit]
+                 # Ensure final text doesn't exceed limit even without indicator
+                 final_msg_text = final_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
+
                  embed.description = final_msg_text or "..."
                  embed.color = EMBED_COLOR_COMPLETE
                  try:
@@ -1879,22 +2136,18 @@ async def on_message(new_msg):
                      current_description = last_msg.embeds[0].description if last_msg.embeds else ""
                      current_color = last_msg.embeds[0].color if last_msg.embeds else None
                      current_view_exists = bool(last_msg.components)
+
+                     # Check if edit is needed: view changed, content changed, or color changed
                      if (final_view and not current_view_exists) or (not final_view and current_view_exists): needs_edit = True
                      elif current_description != embed.description or current_color != embed.color: needs_edit = True
-                     elif not last_msg.embeds: needs_edit = True
-                     if needs_edit: await last_msg.edit(embed=embed, view=final_view)
+                     elif not last_msg.embeds: needs_edit = True # Should not happen, but safety check
 
-                     # Save/Update assistant message in DB (store full response in last message)
-                     for i, msg in enumerate(response_msgs):
-                         segment_text = final_text[i * split_limit : (i + 1) * split_limit]
-                         is_last = (i == len(response_msgs) - 1)
-                         history_db.save_message(
-                             message_id=msg.id, channel_id=msg.channel.id, author_id=discord_client.user.id,
-                             role='assistant', timestamp=msg.created_at.timestamp(), original_content=None,
-                             image_urls=None, fetched_url_data=None,
-                             llm_response_content=final_text if is_last else segment_text, # Store full text in last segment
-                             parent_message_id=new_msg.id if i == 0 else response_msgs[i-1].id
-                         )
+                     if needs_edit:
+                         await last_msg.edit(embed=embed, view=final_view)
+
+                     # Store full text in the last node for embed responses
+                     if last_msg.id in msg_nodes:
+                         msg_nodes[last_msg.id].full_response_text = final_text
 
                  except discord.HTTPException as e: logging.error(f"Failed final edit on message {final_msg_index}: {e}")
                  except IndexError: logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}")
@@ -1904,28 +2157,54 @@ async def on_message(new_msg):
                  embed.color = EMBED_COLOR_COMPLETE
                  response_msg = await new_msg.reply(embed=embed, view=final_view, mention_author = False)
                  response_msgs.append(response_msg)
-                 # Save assistant message to DB
-                 history_db.save_message(
-                     message_id=response_msg.id, channel_id=response_msg.channel.id, author_id=discord_client.user.id,
-                     role='assistant', timestamp=response_msg.created_at.timestamp(), original_content=None,
-                     image_urls=None, fetched_url_data=None, llm_response_content=final_text or "...",
-                     parent_message_id=new_msg.id
-                 )
+                 # Create node and acquire lock immediately
+                 msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                 node = msg_nodes[response_msg.id]
+                 await node.lock.acquire()
+                 # Store full text (which is empty or just "...")
+                 node.full_response_text = final_text
+
 
     except Exception as outer_e:
+        # Catch any unexpected errors in the main processing block
         logging.exception("Unhandled error during message processing.")
-        try: await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", mention_author = False)
-        except discord.HTTPException: pass
+        try:
+            await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", mention_author = False)
+        except discord.HTTPException:
+            pass # Ignore if we can't even reply
 
-    finally: # --- Runtime Cache Management ---
+    finally: # --- Cleanup and Cache Management --- (Associated with the main try)
+        # Release locks for all response messages created in this run
+        logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
+        for response_msg in response_msgs:
+            if response_msg and response_msg.id in msg_nodes: # Check if response_msg is not None
+                node = msg_nodes[response_msg.id]
+                # Text/full_response_text is now stored during the success path
+                if node.lock.locked():
+                    try:
+                        logging.debug(f"Releasing lock for message node {response_msg.id}")
+                        node.lock.release()
+                    except RuntimeError:
+                        logging.warning(f"Attempted to release an already unlocked lock for node {response_msg.id}")
+                        pass
+                else:
+                     logging.debug(f"Lock for message node {response_msg.id} was not locked in finally block.")
+            elif response_msg:
+                 logging.warning(f"Response message {response_msg.id} not found in msg_nodes during cleanup.")
+
+        # Delete oldest MsgNodes from the cache
         if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
             nodes_to_delete = sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
-            logging.info(f"Runtime cache limit reached ({num_nodes}/{MAX_MESSAGE_NODES}). Removing {len(nodes_to_delete)} oldest nodes.")
+            logging.info(f"Cache limit reached ({num_nodes}/{MAX_MESSAGE_NODES}). Removing {len(nodes_to_delete)} oldest nodes.")
             for msg_id in nodes_to_delete:
+                # Before popping, ensure the lock is released if it exists and is locked
                 node_to_delete = msg_nodes.get(msg_id)
                 if node_to_delete and hasattr(node_to_delete, 'lock') and node_to_delete.lock.locked():
-                    try: node_to_delete.lock.release()
-                    except RuntimeError: pass
+                    try:
+                        node_to_delete.lock.release()
+                        logging.debug(f"Released lock for node {msg_id} before cache eviction.")
+                    except RuntimeError:
+                        pass # Ignore if already unlocked
                 msg_nodes.pop(msg_id, None)
 
 # --- Main Function ---
@@ -1941,9 +2220,10 @@ async def main():
     except Exception as e:
         logging.critical(f"Error starting Discord client: {e}")
     finally:
+        # Close all database connections on shutdown
         logging.info("Closing database connections...")
-        history_db.close() # Close history DB
-        for manager in db_managers.values(): manager.close() # Close rate limit DBs
+        for manager in db_managers.values():
+            manager.close()
         logging.info("Database connections closed.")
 
 if __name__ == "__main__":
