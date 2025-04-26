@@ -80,8 +80,6 @@ MAX_MESSAGE_NODES = 500
 MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
-MAX_URL_CONTENT_LENGTH = 100000 # Limit for scraped web content per URL
-MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image (used for both custom and SerpAPI)
 
 # --- URL Regex Patterns ---
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
@@ -587,7 +585,7 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
             # Use attribute access (.text) instead of dictionary access (['text'])
             # Use .to_dict() to get the raw list of dictionaries for easier processing later if needed
             raw_transcript_data = await asyncio.to_thread(fetched_transcript.to_raw_data)
-            full_transcript = " ".join([entry['text'] for entry in raw_transcript_data])
+            full_transcript = " ".join([entry['text'] for entry in raw_transcript_data]) # No truncation
             return full_transcript, None
         else:
             return None, "No suitable transcript found."
@@ -617,7 +615,7 @@ async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tu
             if video_response.get("items"):
                 snippet = video_response["items"][0]["snippet"]
                 details["title"] = snippet.get("title", "N/A")
-                details["description"] = snippet.get("description", "N/A")
+                details["description"] = snippet.get("description", "N/A") # No truncation
                 details["channel_name"] = snippet.get("channelTitle", "N/A")
             else:
                  error_messages.append("Video details not found.")
@@ -637,7 +635,7 @@ async def get_youtube_video_details(video_id: str, api_key: Optional[str]) -> Tu
                 part="snippet",
                 videoId=video_id,
                 order="relevance",
-                maxResults=10, # Reduced comment count
+                maxResults=10, # Keep comment count limited for API quota reasons
                 textFormat="plainText"
             )
             comment_response = await asyncio.to_thread(comment_request.execute)
@@ -734,22 +732,22 @@ async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id:
 
         content_data = {"title": submission.title}
         if submission.selftext:
-            content_data["selftext"] = submission.selftext
+            content_data["selftext"] = submission.selftext # No truncation
 
-        # Fetch top comments
+        # Fetch all top-level comments (no limit)
         top_comments_text = []
-        comment_limit = 10
-        await submission.comments.replace_more(limit=0) # Load only top-level comments
+        # comment_limit = 10 # Removed limit
+        await submission.comments.replace_more(limit=0) # Load only top-level comments, replace_more is needed
 
-        comment_count = 0
+        # comment_count = 0 # No longer needed
         for top_level_comment in submission.comments.list():
-            if comment_count >= comment_limit:
-                break
+            # if comment_count >= comment_limit: # Removed limit check
+            #     break
             # Check if comment exists and is not deleted/removed before accessing body
             if hasattr(top_level_comment, 'body') and top_level_comment.body and top_level_comment.body not in ('[deleted]', '[removed]'):
                 comment_body_cleaned = top_level_comment.body.replace('\n', ' ').replace('\r', '')
-                top_comments_text.append(comment_body_cleaned)
-                comment_count += 1
+                top_comments_text.append(comment_body_cleaned) # No truncation
+                # comment_count += 1 # No longer needed
 
         if top_comments_text:
             content_data["comments"] = top_comments_text
@@ -827,8 +825,8 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
         if not text:
             return UrlFetchResult(url=url, content=None, error="No text content found.", type="general", original_index=index)
 
-        # Limit content length
-        content = text[:MAX_URL_CONTENT_LENGTH] + ('...' if len(text) > MAX_URL_CONTENT_LENGTH else '')
+        # No longer limit content length here
+        content = text
 
         return UrlFetchResult(url=url, content=content, type="general", original_index=index)
 
@@ -1093,7 +1091,7 @@ async def fetch_google_lens_serpapi_fallback(image_url: str, index: int) -> UrlF
 
             # Format the results concisely
             formatted_results = []
-            for i, match in enumerate(visual_matches[:MAX_SERPAPI_RESULTS_DISPLAY]):
+            for i, match in enumerate(visual_matches): # No display limit
                 title = match.get("title", "N/A")
                 link = match.get("link", "#")
                 source = match.get("source", "")
@@ -1101,10 +1099,7 @@ async def fetch_google_lens_serpapi_fallback(image_url: str, index: int) -> UrlF
                 if source:
                     result_line += f" (Source: {source})"
                 formatted_results.append(result_line)
-
-            content_str = "\n".join(formatted_results)
-            if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
-                content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+            content_str = "\n".join(formatted_results) # No "and more" line
 
             logging.info(f"SerpAPI Google Lens fallback request successful for image {index+1} with key ...{api_key[-4:]}")
             return UrlFetchResult(url=image_url, content=content_str, type="google_lens_serpapi", original_index=index)
@@ -1164,14 +1159,12 @@ async def process_google_lens_image(image_url: str, index: int) -> UrlFetchResul
                      content_str = "No visual matches found (custom implementation)."
                 else:
                     formatted_results = []
-                    # Assuming custom_results is a list of strings
-                    for i, result_text in enumerate(custom_results[:MAX_SERPAPI_RESULTS_DISPLAY]): # Use same display limit
+                    # Assuming custom_results is a list of strings - No display limit
+                    for i, result_text in enumerate(custom_results):
                         # Custom implementation doesn't provide links/sources easily, just text
                         result_line = f"- {result_text}"
                         formatted_results.append(result_line)
                     content_str = "\n".join(formatted_results)
-                    if len(custom_results) > MAX_SERPAPI_RESULTS_DISPLAY:
-                        content_str += f"\n- ... (and {len(custom_results) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
 
                 return UrlFetchResult(url=image_url, content=content_str, type="google_lens_custom", original_index=index)
             else:
@@ -1419,14 +1412,14 @@ async def on_message(new_msg):
                     if isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
-                        desc = result.content.get('description', 'N/A')
-                        content_str += f"  description: {desc[:500]}{'...' if len(desc) > 500 else ''}\n"
+                        desc = result.content.get('description', 'N/A') # No truncation
+                        content_str += f"  description: {desc}\n"
                         transcript = result.content.get('transcript')
                         if transcript:
-                            content_str += f"  transcript: {transcript[:MAX_URL_CONTENT_LENGTH]}{'...' if len(transcript) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                            content_str += f"  transcript: {transcript}\n" # No truncation
                         comments = result.content.get("comments")
                         if comments:
-                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c}" for c in comments]) + "\n" # No truncation or limit
                     other_url_parts.append(content_str)
                     other_url_counter += 1
                 elif result.type == "reddit":
@@ -1435,18 +1428,18 @@ async def on_message(new_msg):
                     if isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         selftext = result.content.get('selftext')
-                        if selftext:
-                            content_str += f"  content: {selftext[:MAX_URL_CONTENT_LENGTH]}{'...' if len(selftext) > MAX_URL_CONTENT_LENGTH else ''}\n"
+                        if selftext: # No truncation
+                            content_str += f"  content: {selftext}\n"
                         comments = result.content.get("comments")
-                        if comments:
-                            content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
+                        if comments: # No truncation or limit
+                            content_str += f"  top comments:\n" + "\n".join([f"    - {c}" for c in comments]) + "\n" # No truncation or limit
                     other_url_parts.append(content_str)
                     other_url_counter += 1
                 elif result.type == "general":
                     content_str = f"\nurl {other_url_counter}: {result.url}\n"
                     content_str += f"url {other_url_counter} content:\n"
                     if isinstance(result.content, str):
-                        # Content is already limited string
+                        # Content is no longer limited during fetch
                         content_str += f"  {result.content}\n"
                     other_url_parts.append(content_str)
                     other_url_counter += 1
@@ -1506,11 +1499,8 @@ async def on_message(new_msg):
                 for att, resp in zip(good_attachments, attachment_responses):
                     if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
                         try:
-                            # Limit attachment text size
-                            attachment_text = resp.text[:max_text // 2] # Limit text attachment size
-                            if len(resp.text) > max_text // 2:
-                                attachment_text += "..."
-                                user_warnings.add(f"⚠️ Truncated text attachment: {att.filename}")
+                            # No longer limit attachment text size here
+                            attachment_text = resp.text
                             text_parts.append(attachment_text)
                         except Exception as e:
                             logging.warning(f"Failed to decode text attachment {att.filename}: {e}")
@@ -1604,8 +1594,8 @@ async def on_message(new_msg):
             if curr_node.text:
                 current_text_content += curr_node.text
 
-            # Limit the combined text content
-            current_text_content = current_text_content[:max_text] if current_text_content else ""
+            # Limit the combined text content *before* sending to API
+            current_text_content = current_text_content[:max_text] if current_text_content else "" # Keep this final node limit
             current_images = curr_node.images[:max_images] # Apply max_images limit
 
             parts_for_api = []
@@ -1641,7 +1631,7 @@ async def on_message(new_msg):
 
             # Add warnings based on limits and errors for this specific node
             if curr_node.text and len(curr_node.text) > max_text: # Check original text length
-                user_warnings.add(f"⚠️ Max {max_text:,} chars/msg")
+                user_warnings.add(f"⚠️ Max {max_text:,} chars/msg node") # Clarify warning
             if len(curr_node.images) > max_images:
                 user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
             if curr_node.has_bad_attachments:
@@ -1656,7 +1646,7 @@ async def on_message(new_msg):
             # Move to the parent message for the next iteration
             curr_msg = curr_node.parent_msg
 
-    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}):\n{new_msg.content}")
+    logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}")
 
 
     # --- Prepare API Call ---
