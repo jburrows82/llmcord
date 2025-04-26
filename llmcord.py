@@ -6,10 +6,12 @@ import logging
 import os
 import random
 import sqlite3
+import sys # Added for custom lens error printing
 import time
 from typing import Literal, Optional, List, Dict, Any, Tuple, Union, Set
 import io
 import re
+import traceback # Added for custom lens error printing
 import urllib.parse
 import json
 
@@ -32,6 +34,22 @@ from serpapi import GoogleSearch # Import SerpAPI client
 from serpapi.serp_api_client_exception import SerpApiClientException # Import SerpAPI exception
 import yaml
 from bs4 import BeautifulSoup # Added for general URL scraping
+
+# Import Playwright for custom Google Lens
+try:
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+except ImportError:
+    logging.error("Playwright not found. Custom Google Lens implementation will not work.")
+    logging.error("Install it using: pip install playwright")
+    logging.error("Then install browsers: python -m playwright install chrome")
+    # Define dummy classes/functions if playwright is missing to avoid immediate crashes
+    class PlaywrightTimeoutError(Exception): pass
+    def sync_playwright():
+        class DummyContextManager:
+            def __enter__(self): return None
+            def __exit__(self, exc_type, exc_val, exc_tb): pass
+        return DummyContextManager()
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,7 +81,7 @@ MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)
 MAX_URL_CONTENT_LENGTH = 100000 # Limit for scraped web content per URL
-MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image
+MAX_SERPAPI_RESULTS_DISPLAY = 5 # Limit number of visual matches shown per image (used for both custom and SerpAPI)
 
 # --- URL Regex Patterns ---
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
@@ -77,6 +95,18 @@ GOOGLE_LENS_PATTERN = re.compile(rf'^{GOOGLE_LENS_KEYWORD}\s+', re.IGNORECASE)
 RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
 DB_FOLDER = "ratelimit_dbs"
+
+# --- Custom Google Lens (Playwright) Configuration ---
+# Selectors (These might change if Google updates their site)
+LENS_ICON_SELECTOR = '[aria-label="Search by image"]'
+PASTE_LINK_INPUT_SELECTOR = 'input[placeholder="Paste image link"]'
+SEE_EXACT_MATCHES_SELECTOR = 'div.ndigne.ZwRhJd.RiJqbb:has-text("See exact matches")'
+EXACT_MATCH_RESULT_SELECTOR = 'div.ZhosBf.T7iOye.MBI8Pd.dctkEf'
+INITIAL_RESULTS_WAIT_SELECTOR = "div#rso"
+ORIGINAL_RESULT_SPAN_SELECTOR = 'span.Yt787'
+# Timeouts
+CUSTOM_LENS_DEFAULT_TIMEOUT = 60000
+CUSTOM_LENS_SHORT_TIMEOUT = 5000
 
 # --- Custom Exceptions ---
 class AllKeysFailedError(Exception):
@@ -195,8 +225,6 @@ def check_and_perform_global_reset():
     if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
         logging.info("Performing global 24-hour rate limit database reset.")
         # Ensure all potential DB managers are instantiated before resetting
-        # (This relies on services being used at least once, or pre-defined)
-        # A more robust way might be to scan the config for all services with keys
         services_in_config = set()
         providers = cfg.get("providers", {})
         for provider_name, provider_cfg in providers.items():
@@ -284,6 +312,21 @@ def get_config(filename="config.yaml"):
                  logging.error("Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
                  config_data["serpapi_api_keys"] = []
 
+            # Validate custom Google Lens config (optional)
+            custom_lens_cfg = config_data.get("custom_google_lens_config")
+            if custom_lens_cfg:
+                if not isinstance(custom_lens_cfg, dict):
+                    logging.error("Config Error: 'custom_google_lens_config' must be a dictionary. Disabling custom Lens.")
+                    config_data["custom_google_lens_config"] = None
+                else:
+                    if not custom_lens_cfg.get("user_data_dir"):
+                        logging.warning("Config Warning: 'user_data_dir' missing in 'custom_google_lens_config'. Custom Lens may not work.")
+                    if not custom_lens_cfg.get("profile_directory_name"):
+                        logging.warning("Config Warning: 'profile_directory_name' missing in 'custom_google_lens_config'. Custom Lens may not work.")
+            else:
+                 logging.info("Optional 'custom_google_lens_config' not found in config.yaml. SerpAPI will be used for Google Lens.")
+
+
             return config_data
 
     except FileNotFoundError:
@@ -300,7 +343,8 @@ youtube_api_key = cfg.get("youtube_api_key") # YouTube still uses single key for
 reddit_client_id = cfg.get("reddit_client_id")
 reddit_client_secret = cfg.get("reddit_client_secret")
 reddit_user_agent = cfg.get("reddit_user_agent")
-# SerpAPI keys are now handled by the retry logic
+# SerpAPI keys are now handled by the fallback logic
+custom_google_lens_config = cfg.get("custom_google_lens_config") # Load custom lens config
 
 if not cfg.get("bot_token"):
     logging.error("CRITICAL: bot_token is not set in config.yaml")
@@ -339,7 +383,7 @@ class UrlFetchResult:
     url: str
     content: Optional[Union[str, Dict[str, Any]]] # This is the required argument
     error: Optional[str] = None
-    type: Literal["youtube", "reddit", "general", "google_lens"] = "general"
+    type: Literal["youtube", "reddit", "general", "google_lens_custom", "google_lens_serpapi", "google_lens_fallback_failed"] = "general"
     original_index: int = -1
 
 # --- Discord UI ---
@@ -634,7 +678,6 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
     """Fetches transcript and details for a single YouTube URL."""
     video_id = extract_video_id(url)
     if not video_id:
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error="Could not extract video ID.", type="youtube", original_index=index)
 
     # Fetch transcript and details concurrently
@@ -666,7 +709,6 @@ async def fetch_youtube_data(url: str, index: int, api_key: Optional[str]) -> Ur
 async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id: str, client_secret: str, user_agent: str) -> UrlFetchResult:
     """Fetches content for a single Reddit submission URL."""
     if not all([client_id, client_secret, user_agent]):
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error="Reddit API credentials not configured.", type="reddit", original_index=index)
 
     reddit = None # Initialize outside try block
@@ -707,19 +749,15 @@ async def fetch_reddit_data(url: str, submission_id: str, index: int, client_id:
         return UrlFetchResult(url=url, content=content_data, type="reddit", original_index=index)
 
     except (NotFound, Redirect):
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error="Submission not found or invalid URL.", type="reddit", original_index=index)
     except Forbidden as e:
          logging.warning(f"Reddit API Forbidden error for {url}: {e}")
-         # Add content=None
          return UrlFetchResult(url=url, content=None, error="Reddit API access forbidden.", type="reddit", original_index=index)
     except AsyncPrawRequestException as e:
         logging.warning(f"Reddit API Request error for {url}: {e}")
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error=f"Reddit API request error: {type(e).__name__}", type="reddit", original_index=index)
     except Exception as e:
         logging.exception(f"Unexpected error fetching Reddit content for {url}")
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error=f"Unexpected error: {type(e).__name__}", type="reddit", original_index=index)
     finally:
         # Ensure the Reddit client is closed if it was initialized
@@ -737,15 +775,12 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
             if response.status_code != 200:
                  # Check for redirect loop explicitly
                  if response.status_code >= 300 and response.status_code < 400 and len(response.history) > 5:
-                     # Add content=None
                      return UrlFetchResult(url=url, content=None, error=f"Too many redirects ({response.status_code}).", type="general", original_index=index)
-                 # Add content=None
                  return UrlFetchResult(url=url, content=None, error=f"HTTP status {response.status_code}.", type="general", original_index=index)
 
             # Check content type
             content_type = response.headers.get("content-type", "").lower()
             if "text/html" not in content_type:
-                # Add content=None
                 return UrlFetchResult(url=url, content=None, error=f"Unsupported content type: {content_type}", type="general", original_index=index)
 
             # Read content incrementally
@@ -758,11 +793,9 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
                         html_content = html_content[:5*1024*1024] + "..."
                         break
             except httpx.ReadTimeout:
-                 # Add content=None
                  return UrlFetchResult(url=url, content=None, error="Timeout while reading content.", type="general", original_index=index)
             except Exception as e:
                  logging.warning(f"Error decoding content for {url}: {e}")
-                 # Add content=None
                  return UrlFetchResult(url=url, content=None, error=f"Content decoding error: {type(e).__name__}", type="general", original_index=index)
 
 
@@ -784,7 +817,6 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
         text = re.sub(r'\s+', ' ', text).strip()
 
         if not text:
-            # Add content=None
             return UrlFetchResult(url=url, content=None, error="No text content found.", type="general", original_index=index)
 
         # Limit content length
@@ -794,20 +826,213 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
 
     except httpx.RequestError as e:
         logging.warning(f"HTTPX RequestError fetching {url}: {type(e).__name__}")
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error=f"Request failed: {type(e).__name__}", type="general", original_index=index)
     except Exception as e:
         logging.exception(f"Unexpected error fetching general URL {url}")
-        # Add content=None
         return UrlFetchResult(url=url, content=None, error=f"Unexpected error: {type(e).__name__}", type="general", original_index=index)
 
-async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFetchResult:
-    """Fetches Google Lens results for an image URL using SerpAPI with key rotation and retry."""
+# --- Custom Google Lens (Playwright) Implementation ---
+def _custom_get_google_lens_results_sync(image_url: str, user_data_dir: str, profile_directory_name: str):
+    """
+    Synchronous wrapper for the Playwright Google Lens logic.
+    Uses Playwright to get Google Lens results for a given image URL using a specific Chrome profile.
+    Checks for "See exact matches", clicks if found, waits for the last result element, and extracts specific result divs.
+    Otherwise, waits for the last original result element and extracts results using the original span selector.
+
+    Args:
+        image_url: The URL of the image to search.
+        user_data_dir: Path to the main Chrome user data directory.
+        profile_directory_name: The name of the specific profile folder within user_data_dir.
+
+    Returns:
+        A list of strings containing the extracted result texts, or None if an error occurs.
+    """
+    # Check if Playwright is available
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+    except ImportError:
+        logging.error("Playwright library not found. Cannot run custom Google Lens.")
+        return None # Indicate failure due to missing dependency
+
+    if not user_data_dir or not profile_directory_name:
+        logging.error("Custom Google Lens: Chrome user_data_dir or profile_directory_name not provided.")
+        return None
+
+    if not os.path.exists(user_data_dir):
+        logging.error(f"Custom Google Lens: Chrome user data directory not found at: {user_data_dir}")
+        return None
+
+    profile_path = os.path.join(user_data_dir, profile_directory_name)
+    if not os.path.exists(profile_path):
+        logging.error(f"Custom Google Lens: Specific profile directory not found at: {profile_path}")
+        logging.error(f"Please ensure '{profile_directory_name}' is the correct folder name inside '{user_data_dir}'.")
+        return None
+
+    results = []
+    context = None # Define context outside the try block for finally clause
+
+    logging.info(f"Custom Google Lens: Launching Chrome using profile: '{profile_directory_name}'")
+    logging.info(f"Custom Google Lens: User Data Directory: {user_data_dir}")
+    logging.info(f"Custom Google Lens: Searching for image URL: {image_url}")
+    logging.info("Custom Google Lens: INFO: Ensure Google Chrome using this specific profile is completely closed (check Task Manager).")
+
+    # Arguments to specify the profile directory
+    launch_args = [
+        '--no-first-run',
+        '--no-default-browser-check',
+        f"--profile-directory={profile_directory_name}" # Tells Chrome which profile folder to use
+    ]
+
+    with sync_playwright() as p:
+        try:
+            # Launch browser using the persistent context with the specified user data directory AND profile arg
+            context = p.chromium.launch_persistent_context(
+                user_data_dir, # Still need the parent directory path here
+                headless=False, # Set to True for server environments if needed, but might affect login state
+                channel="chrome",
+                args=launch_args, # Pass the arguments including the profile directory
+                slow_mo=50 # Slow down interactions slightly
+            )
+            page = context.new_page()
+            page.set_default_timeout(CUSTOM_LENS_DEFAULT_TIMEOUT)
+
+            logging.info("Custom Google Lens: Navigating to google.com...")
+            page.goto("https://www.google.com/")
+
+            logging.info("Custom Google Lens: Waiting for and clicking the Lens (Search by image) icon...")
+            lens_icon = page.locator(LENS_ICON_SELECTOR)
+            lens_icon.wait_for(state="visible")
+            lens_icon.click()
+
+            logging.info("Custom Google Lens: Waiting for the image link input field...")
+            paste_link_input = page.locator(PASTE_LINK_INPUT_SELECTOR)
+            paste_link_input.wait_for(state="visible")
+
+            logging.info("Custom Google Lens: Pasting the image URL...")
+            paste_link_input.fill(image_url)
+
+            logging.info("Custom Google Lens: Submitting the search (pressing Enter)...")
+            page.wait_for_timeout(200)
+            paste_link_input.press("Enter")
+
+            logging.info("Custom Google Lens: Waiting for initial Lens results page to load...")
+            try:
+                 page.wait_for_selector(INITIAL_RESULTS_WAIT_SELECTOR, state="attached", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
+                 logging.info("Custom Google Lens: Initial results container found.")
+            except PlaywrightTimeoutError:
+                 logging.warning(f"Custom Google Lens: Timed out waiting for initial results container ('{INITIAL_RESULTS_WAIT_SELECTOR}').")
+                 current_url = page.url
+                 if "google.com/search?" not in current_url or ("lens" not in current_url and "source=lns" not in current_url):
+                     logging.warning(f"Custom Google Lens: Current URL doesn't look like a Lens results page: {current_url}")
+                 pass
+
+            logging.info(f"Custom Google Lens: Checking for '{SEE_EXACT_MATCHES_SELECTOR}'...")
+            see_exact_matches_button = page.locator(SEE_EXACT_MATCHES_SELECTOR)
+            final_result_selector = None
+            result_elements = []
+
+            try:
+                if see_exact_matches_button.is_visible(timeout=CUSTOM_LENS_SHORT_TIMEOUT):
+                    logging.info("Custom Google Lens: Found 'See exact matches', clicking it...")
+                    try:
+                        see_exact_matches_button.click()
+                        logging.info("Custom Google Lens: Waiting for exact match results to load (waiting for last element)...")
+                        page.locator(EXACT_MATCH_RESULT_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
+                        logging.info(f"Custom Google Lens: Exact match results likely loaded. Using selector: '{EXACT_MATCH_RESULT_SELECTOR}'")
+                        final_result_selector = EXACT_MATCH_RESULT_SELECTOR
+                    except PlaywrightTimeoutError:
+                        logging.warning(f"Custom Google Lens: Clicked 'See exact matches' but timed out waiting for the last element of '{EXACT_MATCH_RESULT_SELECTOR}'.")
+                    except Exception as click_err:
+                         logging.error(f"Custom Google Lens: Error clicking 'See exact matches' or waiting after click: {click_err}")
+                else:
+                    logging.info("Custom Google Lens: 'See exact matches' not found or not visible within timeout.")
+                    logging.info(f"Custom Google Lens: Looking for general results using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}' (waiting for last element)...")
+                    try:
+                        page.locator(ORIGINAL_RESULT_SPAN_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
+                        logging.info(f"Custom Google Lens: General results likely loaded. Using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}'")
+                        final_result_selector = ORIGINAL_RESULT_SPAN_SELECTOR
+                    except PlaywrightTimeoutError:
+                         logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
+
+            except PlaywrightTimeoutError:
+                 logging.warning(f"Custom Google Lens: Timeout checking visibility for '{SEE_EXACT_MATCHES_SELECTOR}'. Assuming it's not present.")
+                 logging.info(f"Custom Google Lens: Looking for general results using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}' (waiting for last element)...")
+                 try:
+                     page.locator(ORIGINAL_RESULT_SPAN_SELECTOR).last.wait_for(state="visible", timeout=CUSTOM_LENS_DEFAULT_TIMEOUT)
+                     logging.info(f"Custom Google Lens: General results likely loaded. Using selector: '{ORIGINAL_RESULT_SPAN_SELECTOR}'")
+                     final_result_selector = ORIGINAL_RESULT_SPAN_SELECTOR
+                 except PlaywrightTimeoutError:
+                      logging.warning(f"Custom Google Lens: Fallback check for the last original result ('{ORIGINAL_RESULT_SPAN_SELECTOR}') also timed out.")
+
+            if final_result_selector:
+                logging.info(f"Custom Google Lens: Extracting text using final selector: '{final_result_selector}'...")
+                page.wait_for_timeout(500)
+                result_elements = page.locator(final_result_selector).all()
+
+                if not result_elements:
+                    logging.info("Custom Google Lens: No result elements found matching the final selector.")
+
+                for i, element in enumerate(result_elements):
+                    try:
+                        text = element.text_content()
+                        if text:
+                            cleaned_text = ' '.join(text.split())
+                            results.append(cleaned_text)
+                        else:
+                            logging.warning(f"Custom Google Lens: Found element {i+1} but it has no text content.")
+                    except Exception as e:
+                        logging.error(f"Custom Google Lens: Error extracting text from element {i+1}: {e}")
+            else:
+                 logging.info("Custom Google Lens: No suitable result selector was determined. Skipping extraction.")
+
+            logging.info("Custom Google Lens: Finished extracting results.")
+
+        except PlaywrightTimeoutError as e:
+            logging.error(f"Custom Google Lens: ERROR: A timeout occurred during the process: {e}")
+            try:
+                if 'page' in locals() and page and not page.is_closed():
+                    screenshot_path = "error_screenshot_timeout.png"
+                    page.screenshot(path=screenshot_path)
+                    logging.info(f"Custom Google Lens: Screenshot saved as {screenshot_path}")
+            except Exception as screen_err:
+                logging.error(f"Custom Google Lens: Could not take screenshot on timeout error: {screen_err}")
+            return None # Indicate failure
+        except Exception as e:
+            logging.error(f"Custom Google Lens: An unexpected error occurred: {e}")
+            if "Target page, context or browser has been closed" in str(e):
+                 logging.error("Custom Google Lens: ERROR DETAILS: This 'TargetClosedError' usually means Google Chrome was already running with the specified profile.")
+                 logging.error(f"Profile Folder: '{profile_directory_name}' within '{user_data_dir}'")
+                 logging.error("Please ensure ALL Chrome processes using this profile are closed (check Task Manager) before running the script again.")
+            else:
+                # Use logging.exception to include traceback
+                logging.exception("Custom Google Lens: Unexpected error details:")
+            try:
+                 if 'page' in locals() and page and not page.is_closed():
+                    screenshot_path = "error_screenshot_unexpected.png"
+                    page.screenshot(path=screenshot_path)
+                    logging.info(f"Custom Google Lens: Screenshot saved as {screenshot_path}")
+            except Exception as screen_err:
+                logging.error(f"Custom Google Lens: Could not take screenshot on unexpected error: {screen_err}")
+            return None # Indicate failure
+        finally:
+            if context:
+                logging.info("Custom Google Lens: Closing browser context...")
+                try:
+                    if context.pages:
+                         context.close()
+                except Exception as close_err:
+                     logging.warning(f"Custom Google Lens: Note: Error during context close (might be expected if launch failed or browser closed): {close_err}")
+
+    return results
+# --- End Custom Google Lens Implementation ---
+
+
+async def fetch_google_lens_serpapi_fallback(image_url: str, index: int) -> UrlFetchResult:
+    """Fetches Google Lens results using SerpAPI with key rotation and retry (FALLBACK ONLY)."""
     service_name = "serpapi"
     all_keys = cfg.get("serpapi_api_keys", [])
     if not all_keys:
-        # Add content=None
-        return UrlFetchResult(url=image_url, content=None, error="SerpAPI keys not configured.", type="google_lens", original_index=index)
+        return UrlFetchResult(url=image_url, content=None, error="SerpAPI keys not configured for fallback.", type="google_lens_serpapi", original_index=index)
 
     available_keys = await get_available_keys(service_name, all_keys)
     random.shuffle(available_keys)
@@ -819,9 +1044,9 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
             "engine": "google_lens",
             "url": image_url,
             "api_key": api_key,
-            "safe": "off",
+            "safe": "off", # As per original example
         }
-        logging.info(f"Attempting SerpAPI Google Lens request for image {index+1} with key ...{api_key[-4:]} ({key_index+1}/{len(available_keys)})")
+        logging.info(f"Attempting SerpAPI Google Lens fallback request for image {index+1} with key ...{api_key[-4:]} ({key_index+1}/{len(available_keys)})")
 
         try:
             search = GoogleSearch(params)
@@ -830,7 +1055,7 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
             # Check for API-level errors (e.g., invalid key, quota)
             if "error" in results:
                 error_msg = results["error"]
-                logging.warning(f"SerpAPI error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
+                logging.warning(f"SerpAPI fallback error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
                 encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
                 # Check if it's a rate limit / quota error
                 if "rate limit" in error_msg.lower() or "quota" in error_msg.lower() or "plan limit" in error_msg.lower() or "ran out of searches" in error_msg.lower():
@@ -838,8 +1063,7 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
                     continue # Try next key
                 elif "invalid api key" in error_msg.lower():
                     # Don't retry with other keys if this one is definitively invalid
-                    # Add content=None
-                    return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens", original_index=index)
+                    return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Error: Invalid API Key (...{api_key[-4:]})", type="google_lens_serpapi", original_index=index)
                 else:
                     # For other API errors, maybe retry? For now, continue to next key.
                     continue
@@ -847,18 +1071,17 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
             # Check for search-specific errors (e.g., couldn't process image)
             if results.get("search_metadata", {}).get("status", "").lower() == "error":
                  error_msg = results.get("search_metadata", {}).get("error", "Unknown search error")
-                 logging.warning(f"SerpAPI search error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
+                 logging.warning(f"SerpAPI fallback search error for image {index+1} (key ...{api_key[-4:]}): {error_msg}")
                  encountered_errors.append(f"Key ...{api_key[-4:]}: {error_msg}")
                  # These errors are usually not key-related, so maybe don't retry?
                  # For now, let's return the error from the first key that hit this.
-                 # Add content=None
-                 return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Search Error: {error_msg}", type="google_lens", original_index=index)
+                 return UrlFetchResult(url=image_url, content=None, error=f"SerpAPI Search Error: {error_msg}", type="google_lens_serpapi", original_index=index)
 
 
             # --- Success Case ---
             visual_matches = results.get("visual_matches", [])
             if not visual_matches:
-                return UrlFetchResult(url=image_url, content="No visual matches found.", type="google_lens", original_index=index)
+                return UrlFetchResult(url=image_url, content="No visual matches found (SerpAPI fallback).", type="google_lens_serpapi", original_index=index)
 
             # Format the results concisely
             formatted_results = []
@@ -875,12 +1098,12 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
             if len(visual_matches) > MAX_SERPAPI_RESULTS_DISPLAY:
                 content_str += f"\n- ... (and {len(visual_matches) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
 
-            logging.info(f"SerpAPI Google Lens request successful for image {index+1} with key ...{api_key[-4:]}")
-            return UrlFetchResult(url=image_url, content=content_str, type="google_lens", original_index=index)
+            logging.info(f"SerpAPI Google Lens fallback request successful for image {index+1} with key ...{api_key[-4:]}")
+            return UrlFetchResult(url=image_url, content=content_str, type="google_lens_serpapi", original_index=index)
 
         except SerpApiClientException as e:
             # Handle client-level exceptions (e.g., connection errors, timeouts)
-            logging.warning(f"SerpAPI client exception for image {index+1} (key ...{api_key[-4:]}): {e}")
+            logging.warning(f"SerpAPI client exception during fallback for image {index+1} (key ...{api_key[-4:]}): {e}")
             encountered_errors.append(f"Key ...{api_key[-4:]}: Client Error - {e}")
             # Check if the exception indicates a rate limit (might need specific checks based on library behavior/status codes)
             if "429" in str(e) or "rate limit" in str(e).lower():
@@ -888,24 +1111,101 @@ async def fetch_google_lens_data_with_retry(image_url: str, index: int) -> UrlFe
             # Retry with the next key for client exceptions
             continue
         except Exception as e:
-            logging.exception(f"Unexpected error fetching Google Lens data for image {index+1} (key ...{api_key[-4:]})")
+            logging.exception(f"Unexpected error during SerpAPI fallback for image {index+1} (key ...{api_key[-4:]})")
             encountered_errors.append(f"Key ...{api_key[-4:]}: Unexpected Error - {type(e).__name__}")
             # Retry with the next key for unexpected errors
             continue
 
     # If loop finishes, all keys failed
-    logging.error(f"All SerpAPI keys failed for Google Lens request for image {index+1}.")
-    final_error_msg = "All SerpAPI keys failed."
+    logging.error(f"All SerpAPI keys failed during fallback for Google Lens request for image {index+1}.")
+    final_error_msg = "All SerpAPI keys failed during fallback."
     if encountered_errors:
         final_error_msg += f" Last error: {encountered_errors[-1]}"
-    # Add content=None
-    return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens", original_index=index)
+    return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens_serpapi", original_index=index)
+
+
+async def process_google_lens_image(image_url: str, index: int) -> UrlFetchResult:
+    """
+    Processes a Google Lens request for an image URL.
+    Tries the custom Playwright implementation first if configured.
+    Falls back to SerpAPI if the custom implementation fails or is not configured.
+    """
+    custom_config = cfg.get("custom_google_lens_config")
+    custom_results = None
+    custom_error = None
+    custom_impl_attempted = False
+
+    # 1. Try Custom Implementation
+    if custom_config and custom_config.get("user_data_dir") and custom_config.get("profile_directory_name"):
+        user_data_dir = custom_config["user_data_dir"]
+        profile_name = custom_config["profile_directory_name"]
+        logging.info(f"Attempting Google Lens request for image {index+1} using custom implementation (Profile: {profile_name})")
+        custom_impl_attempted = True
+        try:
+            # Run the synchronous Playwright code in a separate thread
+            custom_results = await asyncio.to_thread(
+                _custom_get_google_lens_results_sync, # Call the internal sync function
+                image_url,
+                user_data_dir,
+                profile_name
+            )
+            if custom_results is not None: # Success (even if empty list)
+                logging.info(f"Custom Google Lens implementation successful for image {index+1}.")
+                # Format results (similar to SerpAPI formatting)
+                if not custom_results:
+                     content_str = "No visual matches found (custom implementation)."
+                else:
+                    formatted_results = []
+                    # Assuming custom_results is a list of strings
+                    for i, result_text in enumerate(custom_results[:MAX_SERPAPI_RESULTS_DISPLAY]): # Use same display limit
+                        # Custom implementation doesn't provide links/sources easily, just text
+                        result_line = f"- {result_text}"
+                        formatted_results.append(result_line)
+                    content_str = "\n".join(formatted_results)
+                    if len(custom_results) > MAX_SERPAPI_RESULTS_DISPLAY:
+                        content_str += f"\n- ... (and {len(custom_results) - MAX_SERPAPI_RESULTS_DISPLAY} more)"
+
+                return UrlFetchResult(url=image_url, content=content_str, type="google_lens_custom", original_index=index)
+            else:
+                # Custom implementation returned None, indicating an error occurred within it
+                custom_error = "Custom implementation failed (returned None)."
+                logging.warning(f"Custom Google Lens implementation failed for image {index+1} (returned None). Falling back to SerpAPI.")
+
+        except Exception as e:
+            custom_error = f"Custom implementation raised an exception: {type(e).__name__}: {e}"
+            logging.exception(f"Custom Google Lens implementation failed for image {index+1} with exception. Falling back to SerpAPI.")
+            # Fall through to SerpAPI fallback
+    else:
+        custom_error = "Custom Google Lens implementation not configured."
+        logging.info("Custom Google Lens implementation not configured. Falling back to SerpAPI.")
+        # Fall through to SerpAPI fallback
+
+    # 2. Fallback to SerpAPI
+    logging.info(f"Falling back to SerpAPI for Google Lens request for image {index+1}.")
+    # Call the refactored SerpAPI logic
+    serpapi_result = await fetch_google_lens_serpapi_fallback(image_url, index)
+
+    # If SerpAPI also failed, report the custom error if it existed, otherwise SerpAPI error
+    if serpapi_result.error:
+        # Determine the most relevant error to report
+        if custom_impl_attempted and custom_error:
+            final_error_msg = f"Custom Lens failed ({custom_error}). Fallback SerpAPI also failed: {serpapi_result.error}"
+        elif custom_error: # Custom not attempted or failed without exception, but SerpAPI failed
+            final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
+        else: # Should not happen if custom_error is always set when falling through, but safety
+             final_error_msg = f"SerpAPI fallback failed: {serpapi_result.error}"
+
+        return UrlFetchResult(url=image_url, content=None, error=final_error_msg, type="google_lens_fallback_failed", original_index=index)
+    else:
+        # SerpAPI succeeded after custom failed or wasn't configured
+        serpapi_result.type = "google_lens_serpapi" # Ensure type is correct
+        return serpapi_result
 
 
 # --- Discord Event Handler ---
 @discord_client.event
 async def on_message(new_msg):
-    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent
+    global msg_nodes, last_task_time, cfg, youtube_api_key, reddit_client_id, reddit_client_secret, reddit_user_agent, custom_google_lens_config
 
     # --- Basic Checks and Trigger ---
     if new_msg.author.bot:
@@ -944,7 +1244,8 @@ async def on_message(new_msg):
     reddit_client_id = cfg.get("reddit_client_id")
     reddit_client_secret = cfg.get("reddit_client_secret")
     reddit_user_agent = cfg.get("reddit_user_agent")
-    # SerpAPI keys are now handled by fetch_google_lens_data_with_retry
+    custom_google_lens_config = cfg.get("custom_google_lens_config") # Reload custom lens config
+    # SerpAPI keys are now handled by fetch_google_lens_serpapi_fallback
 
     # --- Permissions Check ---
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
@@ -1012,31 +1313,38 @@ async def on_message(new_msg):
 
     use_google_lens = False
     image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
+    user_warnings = set() # Initialize user_warnings here
 
     if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
         use_google_lens = True
         # Remove the keyword itself from the content going to the LLM
         cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
         logging.info(f"Google Lens keyword detected for message {new_msg.id}")
-        if not cfg.get("serpapi_api_keys"): # Check if list exists and is not empty
-             logging.warning("Google Lens requested but serpapi_api_keys list is missing or empty in config.yaml.")
-             # user_warnings.add("⚠️ Google Lens requested but SerpAPI keys are missing.") # Add warning later
+        # Check if either custom config or SerpAPI keys are available
+        custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
+        serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
+        if not custom_lens_ok and not serpapi_keys_ok:
+             logging.warning("Google Lens requested but neither custom implementation nor SerpAPI keys are configured.")
+             user_warnings.add("⚠️ Google Lens requested but requires configuration (custom or SerpAPI).")
 
 
     # --- URL Extraction and Task Creation ---
-    user_warnings = set()
     all_urls_with_indices = extract_urls_with_indices(cleaned_content) # Use cleaned content for URL extraction now
     fetch_tasks = []
     processed_urls = set() # Avoid processing duplicates
 
     # Add Google Lens tasks first if applicable
     if use_google_lens:
-        if not cfg.get("serpapi_api_keys"):
-            user_warnings.add("⚠️ Google Lens requested but SerpAPI keys are missing.")
+        # Check again if configuration is missing, add warning if needed
+        custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
+        serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
+        if not custom_lens_ok and not serpapi_keys_ok:
+            # Warning already added above
+            pass
         else:
             for i, attachment in enumerate(image_attachments):
-                # Use the new retry wrapper function
-                fetch_tasks.append(fetch_google_lens_data_with_retry(attachment.url, i))
+                # Use the new primary/fallback function
+                fetch_tasks.append(process_google_lens_image(attachment.url, i))
 
     # Add other URL tasks
     for url, index in all_urls_with_indices:
@@ -1250,7 +1558,9 @@ async def on_message(new_msg):
                 if result.error:
                     # Shorten URL in warning
                     short_url = result.url[:40] + "..." if len(result.url) > 40 else result.url
-                    user_warnings.add(f"⚠️ Error fetching {result.type} URL ({short_url}): {result.error}")
+                    # Don't add warning for fallback failure if custom succeeded
+                    if result.type != "google_lens_fallback_failed":
+                        user_warnings.add(f"⚠️ Error fetching {result.type} URL ({short_url}): {result.error}")
             else:
                  logging.error(f"Unexpected result type from URL fetch: {type(result)}")
 
@@ -1269,14 +1579,16 @@ async def on_message(new_msg):
 
         for result in url_fetch_results:
             if result.content: # Only include successful fetches
-                if result.type == "google_lens":
-                    # Use original_index + 1 as the image number
-                    header = f"SerpAPI's Google Lens API results for image {result.original_index + 1}:\n"
-                    google_lens_parts.append(header + str(result.content)) # Ensure content is string
-                else:
+                if result.type == "google_lens_custom":
+                    header = f"Custom Google Lens implementation results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "google_lens_serpapi":
+                    header = f"SerpAPI Google Lens fallback results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "youtube":
                     content_str = f"\nurl {other_url_counter}: {result.url}\n"
                     content_str += f"url {other_url_counter} content:\n"
-                    if result.type == "youtube" and isinstance(result.content, dict):
+                    if isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
                         desc = result.content.get('description', 'N/A')
@@ -1287,7 +1599,12 @@ async def on_message(new_msg):
                         comments = result.content.get("comments")
                         if comments:
                             content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                    elif result.type == "reddit" and isinstance(result.content, dict):
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                elif result.type == "reddit":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if isinstance(result.content, dict):
                         content_str += f"  title: {result.content.get('title', 'N/A')}\n"
                         selftext = result.content.get('selftext')
                         if selftext:
@@ -1295,12 +1612,17 @@ async def on_message(new_msg):
                         comments = result.content.get("comments")
                         if comments:
                             content_str += f"  top comments:\n" + "\n".join([f"    - {c[:150]}{'...' if len(c) > 150 else ''}" for c in comments[:5]]) + "\n" # Limit comments shown
-                    elif result.type == "general" and isinstance(result.content, str):
-                        # Content is already limited string
-                        content_str += f"  {result.content}\n"
-
                     other_url_parts.append(content_str)
                     other_url_counter += 1
+                elif result.type == "general":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\n"
+                    content_str += f"url {other_url_counter} content:\n"
+                    if isinstance(result.content, str):
+                        # Content is already limited string
+                        content_str += f"  {result.content}\n"
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                # Ignore google_lens_fallback_failed type here
 
         if google_lens_parts:
             google_lens_context_to_append = "\n\n".join(google_lens_parts) # Join with double newline
