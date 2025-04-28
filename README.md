@@ -67,22 +67,22 @@ Or run a local model with:
 - Handles multiple URLs within the same message concurrently.
 - Basic error handling included (timeouts, non-HTML content, fetch errors).
 
-### Google Lens Integration (Custom Primary, SerpAPI Fallback)
-- **Primary Implementation (Custom/Playwright):**
+### Google Lens Integration (SerpAPI Primary, Custom Fallback)
+- **Primary Implementation (SerpAPI):**
   - Trigger image analysis by starting your query with `googlelens` (case-insensitive) after mentioning the bot or using `at ai` (e.g., `@BotName googlelens what is this?` or `at ai googlelens identify this object`).
   - Requires image(s) to be attached to the message.
-  - The bot uses **Playwright** (integrated within `llmcord.py`) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search. This mimics human interaction for potentially better results or bypassing certain restrictions.
-  - **Requires configuration** of your Chrome user data directory and profile name in `config.yaml` (see below).
-  - **Requires Playwright and its browser drivers to be installed** (`pip install playwright` and `python -m playwright install chrome`).
-- **Fallback Implementation (SerpAPI):**
-  - If the custom Playwright implementation fails (due to configuration errors, Playwright issues, or Google changes), the bot automatically falls back to using **SerpAPI's Google Lens API**.
-- Requires image(s) to be attached to the message.
+  - The bot uses **SerpAPI's Google Lens API** to fetch visual matches and related content for each image concurrently.
+  - **Requires SerpAPI API keys** configured in `config.yaml`.
+  - **Multiple API Key Support:** Configure multiple SerpAPI keys in `config.yaml`.
+  - **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails (e.g., rate limit), it automatically retries with another key.
+- **Fallback Implementation (Custom/Playwright):**
+  - If the primary SerpAPI implementation fails (e.g., all keys are rate-limited, API errors), the bot automatically falls back to using a **custom Playwright implementation**.
+  - This fallback uses Playwright (integrated within `llmcord.py`) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search. This mimics human interaction.
+  - **Requires configuration** of your Chrome user data directory and profile name in `config.yaml` for the fallback functionality.
+  - **Requires Playwright and its browser drivers to be installed** (`pip install playwright` and `python -m playwright install chrome`) for the fallback functionality.
 - Fetches visual matches and related content for each image concurrently.
-- Appends the formatted results (indicating source: custom or SerpAPI) to your original query before sending it to the LLM, providing visual context for analysis or identification.
+- Appends the formatted results (indicating source: SerpAPI or Custom) to your original query before sending it to the LLM, providing visual context for analysis or identification.
 - Handles multiple image attachments in a single query.
-- **Requires SerpAPI API keys** configured in `config.yaml` for the fallback functionality.
-- **Multiple API Key Support:** Configure multiple SerpAPI keys in `config.yaml`.
-- **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails (e.g., rate limit), it automatically retries with another key.
 
 ### Robust Rate Limit Handling
 - **Persistent Cooldown:** Rate-limited API keys (LLM providers & SerpAPI) are automatically detected and put on a 24-hour cooldown to prevent reuse.
@@ -148,15 +148,15 @@ Or run a local model with:
 
 | Setting | Description |
 | --- | --- |
-| **serpapi_api_keys** | **Required for Google Lens fallback.** A **list** of API keys from [SerpApi](https://serpapi.com/manage-api-key). The bot will rotate through these keys and retry if one fails (e.g., due to rate limits) *if the primary custom implementation fails*. |
+| **serpapi_api_keys** | **Required for the primary Google Lens implementation.** A **list** of API keys from [SerpApi](https://serpapi.com/manage-api-key). The bot will rotate through these keys and retry if one fails (e.g., due to rate limits). |
 
 ### Custom Google Lens (Playwright) settings:
 
 | Setting | Description |
 | --- | --- |
-| **custom_google_lens_config** | **Required for the primary Google Lens implementation.** Contains settings for the Playwright-based custom Google Lens scraper. |
-| **user_data_dir** | (Inside `custom_google_lens_config`) The **full path** to your main Google Chrome `User Data` directory. This is the parent folder containing all profile folders (like `Default`, `Profile 1`, etc.). Find examples in `config-example.yaml`. |
-| **profile_directory_name** | (Inside `custom_google_lens_config`) The **name of the specific profile folder** you want the bot to use (e.g., `Default`, `Profile 1`, `Profile 7`). Find this folder inside `user_data_dir` or via `chrome://version` -> `Profile Path` (use the last part of the path). **Ensure Chrome is fully closed for this profile before running the bot.** |
+| **custom_google_lens_config** | **Required for the Google Lens fallback implementation.** Contains settings for the Playwright-based custom Google Lens scraper. |
+| **user_data_dir** | (Inside `custom_google_lens_config`) The **full path** to your main Google Chrome `User Data` directory. This is the parent folder containing all profile folders (like `Default`, `Profile 1`, etc.). Find examples in `config-example.yaml`. **Required for fallback.** |
+| **profile_directory_name** | (Inside `custom_google_lens_config`) The **name of the specific profile folder** you want the bot to use (e.g., `Default`, `Profile 1`, `Profile 7`). Find this folder inside `user_data_dir` or via `chrome://version` -> `Profile Path` (use the last part of the path). **Ensure Chrome is fully closed for this profile before running the bot.** **Required for fallback.** |
 
 ### LLM settings:
 
@@ -172,7 +172,7 @@ Or run a local model with:
    python -m pip install -U -r requirements.txt
    ```
    *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results`, and `playwright`)*
-   *(Note: You also need Playwright's browser drivers: `python -m playwright install chrome`)*
+   *(Note: For the Google Lens fallback, you also need Playwright's browser drivers: `python -m playwright install chrome`)*
 
 4. Run the bot:
 
@@ -201,7 +201,7 @@ Or run a local model with:
 
 - General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements.
 
-- Google Lens processing primarily uses a custom Playwright implementation integrated within `llmcord.py`. Ensure Chrome is closed for the specified profile. If this fails, it falls back to SerpAPI, which counts towards your SerpAPI plan's search credits. The bot rotates SerpAPI keys and handles rate limits across your provided keys during fallback.
+- Google Lens processing primarily uses SerpAPI. Ensure you have valid SerpAPI keys configured. If SerpAPI fails (e.g., all keys rate-limited), it falls back to a custom Playwright implementation. For the fallback to work, ensure Playwright is installed (`pip install playwright`), Chrome drivers are installed (`python -m playwright install chrome`), and the Chrome profile configuration (`user_data_dir`, `profile_directory_name`) is correctly set in `config.yaml`. Ensure Chrome is closed for the specified profile when the fallback is triggered.
 
 - **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt`). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
 

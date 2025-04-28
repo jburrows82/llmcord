@@ -8,4 +8,4 @@ google-api-python-client
 asyncpraw
 beautifulsoup4
 google-search-results # SerpAPI library
-playwright # Added for custom Google Lens
+playwright # Added for custom Google Lens fallback
