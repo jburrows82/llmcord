@@ -60,8 +60,8 @@ logging.basicConfig(
 )
 
 # --- Constants and Configuration ---
-VISION_MODEL_TAGS = ("gpt-4", "o3", "o4", "claude-3", "gemini", "gemma", "llama", "pixtral", "mistral-small", "vision", "vl", "flash")
-PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
+VISION_MODEL_TAGS = ("gpt-4", "o3", "o4", "claude-3", "gemini", "gemma", "llama", "pixtral", "mistral-small", "vision", "vl", "flash", "grok")
+PROVIDERS_SUPPORTING_USERNAMES = ("openai")
 
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
@@ -115,12 +115,20 @@ AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-04-17",
         "gemini-2.5-pro-exp-03-25",
-        # Add other Google models here as needed
+        "gemini-2.0-flash",
     ],
-    # Add other providers and their models here
-    # "openai": ["gpt-4.1", "gpt-4o-mini"],
-}
+    "openai": [
+        "gpt-4.1",
+    ],
+    "x-ai": [
+        "grok-3",
+    ],
+} # dont modify anything in AVAILABLE_MODELS unless i say so
 user_model_preferences = {} # {user_id: "provider/model_name"}
+
+# --- Keywords for Model Override ---
+DEEP_SEARCH_KEYWORDS = ["deepsearch", "deepersearch"]
+DEEP_SEARCH_MODEL = "x-ai/grok-3"
 
 # --- Custom Exceptions ---
 class AllKeysFailedError(Exception):
@@ -1456,6 +1464,7 @@ async def on_message(new_msg):
     # --- Basic Checks and Trigger ---
     if new_msg.author.bot:
         return
+    start_time = time.time() # Start timer for processing
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
     allow_dms = cfg.get("allow_dms", True)
@@ -1519,31 +1528,88 @@ async def on_message(new_msg):
         logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
         return
 
-    # --- LLM Provider/Model Selection (User Specific) ---
-    user_id = new_msg.author.id
-    default_model = cfg.get("model", "google/gemini-2.5-flash-preview-04-17") # Default to a valid Google model if config is missing/invalid
-    provider_slash_model = user_model_preferences.get(user_id, default_model)
+    # --- Clean Content and Check for Google Lens ---
+    cleaned_content = original_content_for_processing # Start with the original content
+    if not is_dm and discord_client.user.mentioned_in(new_msg):
+        cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
+    cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content) # Remove "at ai"
+    cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip() # Consolidate spaces
+    logging.debug(f"Cleaned content for keyword/URL check: '{cleaned_content}'")
 
+    use_google_lens = False
+    image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
+    user_warnings = set() # Initialize user_warnings here
+
+    if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
+        # Check if either custom config or SerpAPI keys are available BEFORE setting use_google_lens
+        custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
+        serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
+        if not serpapi_keys_ok and not custom_lens_ok:
+             logging.warning("Google Lens requested but neither SerpAPI keys nor custom implementation are configured.")
+             user_warnings.add("⚠️ Google Lens requested but requires configuration (SerpAPI or custom).")
+             # Do not set use_google_lens = True if neither is configured
+        else:
+            use_google_lens = True
+            # Remove the keyword itself from the content going to the LLM
+            cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
+            logging.info(f"Google Lens keyword detected for message {new_msg.id}. Prioritizing SerpAPI.")
+
+    # --- LLM Provider/Model Selection (Default/User Preference) ---
+    user_id = new_msg.author.id
+    default_model_str = cfg.get("model", "google/gemini-2.0-flash") # Updated default
+    provider_slash_model = user_model_preferences.get(user_id, default_model_str)
+
+    # --- Override Model based on Keywords ---
+    final_provider_slash_model = provider_slash_model # Start with the preferred/default
+    deep_search_triggered = False
+    if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
+        target_model_str = DEEP_SEARCH_MODEL
+        target_provider, target_model_name = target_model_str.split("/", 1)
+        # Check if Google Lens was also triggered
+        if use_google_lens:
+            logging.warning(f"Both 'deepsearch'/'deepersearch' and 'googlelens' keywords detected. Prioritizing deep search model override ('{target_model_str}'). Google Lens will not be used for this query.")
+            use_google_lens = False # Disable Google Lens if deep search is triggered
+
+        # Check if x-ai provider and keys are configured
+        xai_provider_config = cfg.get("providers", {}).get(target_provider, {})
+        xai_keys = xai_provider_config.get("api_keys", [])
+        # Check if the target model is listed as available
+        is_target_available = target_provider in AVAILABLE_MODELS and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
+
+        if xai_provider_config and xai_keys and is_target_available:
+            final_provider_slash_model = target_model_str
+            deep_search_triggered = True
+            logging.info(f"Keywords {DEEP_SEARCH_KEYWORDS} detected in query from user {user_id}. Overriding model to {final_provider_slash_model}.")
+        else:
+            warning_reason = ""
+            if not xai_provider_config: warning_reason = f"provider '{target_provider}' not configured"
+            elif not xai_keys: warning_reason = f"no API keys for provider '{target_provider}'"
+            elif not is_target_available: warning_reason = f"model '{target_model_str}' not listed in AVAILABLE_MODELS"
+            logging.warning(f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({warning_reason}). Using original model: {provider_slash_model}")
+            user_warnings.add(f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason}).")
+
+    # --- Validate Final Model Selection ---
     try:
-        provider, model_name = provider_slash_model.split("/", 1)
-        # Validate if the selected provider/model is still valid according to AVAILABLE_MODELS
-        # This handles cases where config might change or user preference is outdated
+        provider, model_name = final_provider_slash_model.split("/", 1)
+        # Validate the FINAL selected provider/model
         if provider not in AVAILABLE_MODELS or model_name not in AVAILABLE_MODELS.get(provider, []):
-             logging.warning(f"User {user_id}'s preferred model '{provider_slash_model}' is invalid or no longer available. Falling back to default: {default_model}")
-             provider_slash_model = default_model
-             provider, model_name = provider_slash_model.split("/", 1) # Reparse default
+             logging.warning(f"Final model '{final_provider_slash_model}' is invalid or no longer available. Falling back to default: {default_model_str}")
+             final_provider_slash_model = default_model_str
+             provider, model_name = final_provider_slash_model.split("/", 1) # Reparse default
 
     except ValueError:
-        logging.error(f"Invalid model format for user {user_id} or config default: '{provider_slash_model}'. Using hardcoded default.")
+        logging.error(f"Invalid model format for final selection '{final_provider_slash_model}'. Using hardcoded default.")
         # Fallback to a known good default if parsing fails completely
-        provider_slash_model = "google/gemini-2.5-flash-preview-04-17"
-        provider, model_name = provider_slash_model.split("/", 1)
-        # Optionally clear the invalid user preference
-        if user_id in user_model_preferences:
+        final_provider_slash_model = "google/gemini-2.0-flash" # Use updated default
+        provider, model_name = final_provider_slash_model.split("/", 1)
+        # Optionally clear the invalid user preference if it wasn't overridden
+        if user_id in user_model_preferences and not deep_search_triggered and user_model_preferences[user_id] != default_model_str:
+            logging.info(f"Clearing invalid model preference '{user_model_preferences[user_id]}' for user {user_id}.")
             del user_model_preferences[user_id]
 
-    logging.info(f"Using model '{provider_slash_model}' for user {user_id}")
+    logging.info(f"Final model selected for user {user_id}: '{final_provider_slash_model}'")
 
+    # --- Get Config for the FINAL Provider ---
     provider_config = cfg.get("providers", {}).get(provider, {})
     all_api_keys = provider_config.get("api_keys", []) # Expecting a list now
     base_url = provider_config.get("base_url") # Needed for OpenAI-compatible
@@ -1554,57 +1620,43 @@ async def on_message(new_msg):
     keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"] # Add other keyless providers here
 
     if keys_required and not all_api_keys:
-         logging.error(f"No API keys configured for provider '{provider}' in config.yaml.")
+         logging.error(f"No API keys configured for the selected provider '{provider}' in config.yaml.")
          await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", mention_author = False)
          return
 
-    # --- Configuration Values ---
+    # --- Configuration Values (use final provider/model) ---
     accept_images = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
     max_text = cfg.get("max_text", 100000)
-    max_images = cfg.get("max_images", 5) if accept_images else 0
+    # Max images depends on whether we are using Google Lens or a vision model
+    if use_google_lens:
+        max_images = cfg.get("max_images", 5) # Use config limit for Lens
+    elif accept_images:
+        max_images = cfg.get("max_images", 5) # Use config limit for vision models
+    else:
+        max_images = 0 # No images if not Lens and not vision model
+
     max_messages = cfg.get("max_messages", 25)
     use_plain_responses = cfg.get("use_plain_responses", False)
     split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
 
-    # --- Clean Content and Check for Google Lens ---
-    cleaned_content = original_content_for_processing # Start with the original content
-    if not is_dm and discord_client.user.mentioned_in(new_msg):
-        cleaned_content = cleaned_content.replace(discord_client.user.mention, '').strip()
-    cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content) # Remove "at ai"
-    cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip() # Consolidate spaces
-
-    use_google_lens = False
-    image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
-    user_warnings = set() # Initialize user_warnings here
-
-    if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
-        use_google_lens = True
-        # Remove the keyword itself from the content going to the LLM
-        cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
-        logging.info(f"Google Lens keyword detected for message {new_msg.id}. Prioritizing SerpAPI.")
-        # Check if either custom config or SerpAPI keys are available
-        custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
-        serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
-        if not serpapi_keys_ok and not custom_lens_ok:
-             logging.warning("Google Lens requested but neither SerpAPI keys nor custom implementation are configured.")
-             user_warnings.add("⚠️ Google Lens requested but requires configuration (SerpAPI or custom).")
-
-
-    # --- Check for Empty Query ---
-    # Check if the textual content is empty AFTER removing triggers/keywords
+    # --- Check for Empty Query AGAIN after keyword processing ---
+    # Calculate is_text_empty based on the final cleaned_content
     is_text_empty = not cleaned_content.strip()
-    # Check if there are any meaningful attachments (images for vision models, text files)
-    has_meaningful_attachments = any(
-        att.content_type and (att.content_type.startswith("image/") or att.content_type.startswith("text/"))
+    # Re-evaluate meaningful attachments based on final `accept_images` and `use_google_lens`
+    has_meaningful_attachments_final = any(
+        att.content_type and (
+            (att.content_type.startswith("image/") and (accept_images or use_google_lens)) # Image is meaningful if model accepts or Lens is used
+            or att.content_type.startswith("text/")
+        )
         for att in new_msg.attachments
     )
     # Check if it's a reply
     is_reply = bool(new_msg.reference)
 
     # Trigger error ONLY IF text is empty AND there are no meaningful attachments AND it's not a reply
-    if is_text_empty and not has_meaningful_attachments and not is_reply:
-        logging.info(f"Empty query detected from user {new_msg.author.id} in channel {new_msg.channel.id}. Not a reply and no meaningful attachments.")
-        await new_msg.reply("Your query is empty. Please reply to a message to reference it or don't send an empty query.", mention_author=False)
+    if is_text_empty and not has_meaningful_attachments_final and not is_reply:
+        logging.info(f"Empty query detected from user {new_msg.author.id} in channel {new_msg.channel.id}. Not a reply and no meaningful attachments after keyword processing.")
+        await new_msg.reply("Your query is empty. Please provide text, attach relevant files/images, or reply to a message.", mention_author=False)
         return # Stop processing
 
     # --- URL Extraction and Task Creation ---
@@ -1648,7 +1700,7 @@ async def on_message(new_msg):
 
     # --- Process Google Lens Images Sequentially ---
     if use_google_lens:
-        # Check again if configuration is missing for BOTH, add warning if needed
+        # Check again if configuration is missing for BOTH (redundant check, but safe)
         custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
         serpapi_keys_ok = bool(cfg.get("serpapi_api_keys"))
         if not serpapi_keys_ok and not custom_lens_ok:
@@ -1656,7 +1708,11 @@ async def on_message(new_msg):
             pass
         else:
             logging.info(f"Processing {len(image_attachments)} Google Lens images sequentially...")
-            for i, attachment in enumerate(image_attachments):
+            # Limit the number of images processed by Lens based on max_images
+            lens_images_to_process = image_attachments[:max_images]
+            if len(image_attachments) > max_images:
+                user_warnings.add(f"⚠️ Only processing first {max_images} images for Google Lens.")
+            for i, attachment in enumerate(lens_images_to_process):
                 logging.info(f"Starting Google Lens processing for image {i+1}/{len(image_attachments)}...")
                 try:
                     # Await each image processing call directly
@@ -1786,7 +1842,7 @@ async def on_message(new_msg):
                 # Process attachments (only for the current message node being processed)
                 current_attachments = curr_msg.attachments
                 good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))]
-                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
+                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url, timeout=30.0) for att in good_attachments], return_exceptions=True) # Increased timeout for attachments
 
                 # Combine text content using the cleaned content
                 text_parts = [content_to_store] if content_to_store else []
@@ -1810,18 +1866,26 @@ async def on_message(new_msg):
 
                 curr_node.text = "\n".join(filter(None, text_parts))
 
-                # Process image attachments
+                # Process image attachments for the LLM (only if not using Google Lens for this message)
                 image_parts = []
-                for att, resp in zip(good_attachments, attachment_responses):
-                    if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
-                        if is_gemini:
-                            # Use google.genai.types (imported as google_types)
-                            image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
-                        else:
-                            image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
-                    elif isinstance(resp, Exception):
-                        # Already logged warning above
-                        curr_node.has_bad_attachments = True
+                images_processed_count = 0
+                # Check if this specific message triggered Google Lens
+                is_lens_trigger_message = curr_msg.id == new_msg.id and use_google_lens
+
+                if accept_images and not is_lens_trigger_message: # Only process images if model accepts AND Lens wasn't triggered for *this* message
+                    for att, resp in zip(good_attachments, attachment_responses):
+                        if images_processed_count >= max_images:
+                            curr_node.has_bad_attachments = True # Mark as bad if limit reached
+                            break
+                        if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
+                            if is_gemini:
+                                image_parts.append(google_types.Part.from_bytes(data=resp.content, mime_type=att.content_type))
+                            else: # OpenAI compatible
+                                image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(resp.content).decode('utf-8')}")))
+                            images_processed_count += 1 # Increment count only for successful image processing
+                        elif isinstance(resp, Exception):
+                            # Already logged warning above
+                            curr_node.has_bad_attachments = True
 
                 curr_node.images = image_parts
                 curr_node.role = "model" if curr_msg.author == discord_client.user else "user" # Use 'model' for Gemini assistant role
@@ -1895,7 +1959,7 @@ async def on_message(new_msg):
 
             # Limit the combined text content *before* sending to API
             current_text_content = current_text_content[:max_text] if current_text_content else "" # Keep this final node limit
-            current_images = curr_node.images[:max_images] # Apply max_images limit
+            current_images = curr_node.images # Images already limited during node creation
 
             parts_for_api = []
             if is_gemini:
@@ -1917,14 +1981,19 @@ async def on_message(new_msg):
                     if not isinstance(parts_for_api, list):
                         parts_for_api = [parts_for_api]
                     message_data["parts"] = parts_for_api
-                else:
-                    # OpenAI uses 'assistant' role for model responses
+                else: # OpenAI compatible
+                    # --- START FIX ---
                     if message_data["role"] == "model":
                         message_data["role"] = "assistant"
-                    message_data["content"] = parts_for_api
-                    # Add name field if supported by provider
-                    if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
-                        message_data["name"] = str(curr_node.user_id)
+                        # Assistant content should be a simple string for OpenAI compatible APIs
+                        # Use the already extracted and potentially limited current_text_content
+                        message_data["content"] = current_text_content
+                    else: # User role - keep the list format for potential multi-modal input
+                        message_data["content"] = parts_for_api
+                        # Add name field if supported by provider and it's a user message
+                        if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.user_id is not None:
+                            message_data["name"] = str(curr_node.user_id)
+                    # --- END FIX ---
 
                 history.append(message_data)
 
@@ -1982,11 +2051,12 @@ async def on_message(new_msg):
     llm_errors = []
     final_view = None # Initialize final_view here
     grounding_metadata = None
-    edit_task = None
+    edit_task = None   # Task for the current edit operation
+    last_task_time = 0 # Timestamp of the last edit/send task start
     last_error_type = None # Track the type of the last error (safety, recitation, etc.)
 
     embed = discord.Embed() # Initialize embed here
-    embed.set_footer(text=f"Model: {provider_slash_model}") # Add the footer with the model name
+    embed.set_footer(text=f"Model: {final_provider_slash_model}") # Add the footer with the model name
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
@@ -2055,7 +2125,7 @@ async def on_message(new_msg):
                     # Use google.genai.types (imported as google_types)
                     api_config = google_types.GenerateContentConfig(
                         **gemini_extra_params,
-                        safety_settings=gemini_safety_settings_list,
+                        safety_settings=gemini_safety_settings_list, # Use the list here
                         tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
                     )
                     if system_prompt_text:
@@ -2270,7 +2340,7 @@ async def on_message(new_msg):
                                 is_final_chunk = finish_reason is not None
 
                                 if not current_full_text and not is_final_chunk: # Skip empty intermediate chunks
-                                     continue
+                                    continue
 
                                 # Create view only on the final chunk if needed
                                 view_to_attach = None
@@ -2282,7 +2352,7 @@ async def on_message(new_msg):
                                         view_to_attach = ResponseActionView(
                                             grounding_metadata=grounding_metadata,
                                             full_response_text=current_full_text,
-                                            model_name=provider_slash_model
+                                            model_name=final_provider_slash_model # Use final model name
                                         )
                                         # Remove view if it ended up having no buttons
                                         if not view_to_attach or len(view_to_attach.children) == 0:
@@ -2292,7 +2362,7 @@ async def on_message(new_msg):
                                 start_next_msg = current_msg_index >= len(response_msgs)
 
                                 ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
-
+                                logging.debug(f"Stream edit check: start_next={start_next_msg}, ready_to_edit={ready_to_edit}, is_final={is_final_chunk}, current_idx={current_msg_index}, len_msgs={len(response_msgs)}")
                                 if start_next_msg or ready_to_edit or is_final_chunk:
                                     if edit_task is not None:
                                         await edit_task # Wait for previous edit
@@ -2346,13 +2416,15 @@ async def on_message(new_msg):
                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                                         await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
                                     elif response_msgs and current_msg_index < len(response_msgs):
+                                        logging.debug(f"Creating edit task for message index {current_msg_index}")
                                         edit_task = asyncio.create_task(response_msgs[current_msg_index].edit(embed=embed, view=view_to_attach))
                                     elif not response_msgs and is_final_chunk: # Handle case where response is short and finishes immediately
-                                         reply_to_msg = new_msg
-                                         response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
-                                         response_msgs.append(response_msg)
-                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                                         await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
+                                          reply_to_msg = new_msg
+                                          response_msg = await reply_to_msg.reply(embed=embed, view=view_to_attach, mention_author = False)
+                                          response_msgs.append(response_msg)
+                                          logging.debug(f"Sent initial short final response: {response_msg.id}")
+                                          msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                          await msg_nodes[response_msg.id].lock.acquire() # Acquire lock here
 
 
                                     last_task_time = dt.now().timestamp()
@@ -2554,8 +2626,8 @@ async def on_message(new_msg):
                 if has_sources or has_text:
                     final_view = ResponseActionView(
                         grounding_metadata=grounding_metadata,
-                        full_response_text=final_text,
-                        model_name=provider_slash_model
+                        full_response_text=final_text, # Use final aggregated text
+                        model_name=final_provider_slash_model
                     )
                     # Remove view if it ended up having no buttons
                     if not final_view or len(final_view.children) == 0:
@@ -2587,7 +2659,7 @@ async def on_message(new_msg):
 
             # Final edit for embed messages (if not already handled by final chunk logic)
             elif not use_plain_responses and response_msgs:
-                 if edit_task is not None and not edit_task.done(): await edit_task
+                 if edit_task is not None and not edit_task.done(): await edit_task # Wait for last edit task
 
                  final_msg_index = len(response_msgs) - 1
                  final_msg_text = final_text[final_msg_index * split_limit : (final_msg_index + 1) * split_limit]
@@ -2598,6 +2670,7 @@ async def on_message(new_msg):
                  embed.color = EMBED_COLOR_COMPLETE
                  try:
                      last_msg = response_msgs[final_msg_index]
+                     logging.debug(f"Attempting final edit for message index {final_msg_index} (ID: {last_msg.id})")
                      needs_edit = False
                      current_description = last_msg.embeds[0].description if last_msg.embeds else ""
                      current_color = last_msg.embeds[0].color if last_msg.embeds else None
@@ -2609,6 +2682,7 @@ async def on_message(new_msg):
                      elif not last_msg.embeds: needs_edit = True # Should not happen, but safety check
 
                      if needs_edit:
+                         logging.debug(f"Final edit needed for message {last_msg.id}. Editing...")
                          await last_msg.edit(embed=embed, view=final_view)
 
                      # Store full text in the last node for embed responses
@@ -2616,7 +2690,7 @@ async def on_message(new_msg):
                          msg_nodes[last_msg.id].full_response_text = final_text
 
                  except discord.HTTPException as e: logging.error(f"Failed final edit on message {final_msg_index}: {e}")
-                 except IndexError: logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}")
+                 except IndexError: logging.error(f"IndexError during final edit for index {final_msg_index}, response_msgs len: {len(response_msgs)}", exc_info=True)
 
             elif not use_plain_responses and not response_msgs: # Handle empty successful response
                  embed.description = "..."
@@ -2672,6 +2746,9 @@ async def on_message(new_msg):
                     except RuntimeError:
                         pass # Ignore if already unlocked
                 msg_nodes.pop(msg_id, None)
+
+        end_time = time.time()
+        logging.info(f"Finished processing message {new_msg.id}. Total time: {end_time - start_time:.2f} seconds.")
 
 # --- Main Function ---
 async def main():
