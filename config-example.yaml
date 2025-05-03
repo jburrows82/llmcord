@@ -33,6 +33,21 @@ reddit_client_id:
 reddit_client_secret:
 reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
 
+# Optional: Proxy configuration for youtube-transcript-api to avoid IP blocks
+# See: https://github.com/jdepoix/youtube-transcript-api#working-around-ip-bans-requestblocked-or-ipblocked-exception
+# Uncomment and configure ONE of the types below if you experience transcript fetch errors (ParseError, RequestBlocked, etc.)
+# proxy_config:
+#   type: "webshare" # Recommended for reliability. Requires a Webshare "Residential" proxy plan.
+#   # For webshare:
+#   username: "YOUR_WEBSHARE_USERNAME" # Find in your Webshare Proxy Settings
+#   password: "YOUR_WEBSHARE_PASSWORD" # Find in your Webshare Proxy Settings
+# --- OR ---
+# proxy_config:
+#   type: "generic"
+#   # For generic:
+#   http_url: "http://user:pass@your_proxy_host:port" # Your HTTP proxy URL
+#   https_url: "https://user:pass@your_proxy_host:port" # Your HTTPS proxy URL (often same as http_url)
+
 # SerpAPI settings (NOW A FALLBACK):
 # Get API keys from SerpApi: https://serpapi.com/manage-api-key
 # Provide a list of keys for rotation and retries

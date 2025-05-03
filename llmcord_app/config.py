@@ -1,0 +1,111 @@
+import yaml
+import logging
+import os
+
+def get_config(filename="config.yaml"):
+    """Loads, validates, and returns the configuration from a YAML file."""
+    try:
+        with open(filename, "r", encoding='utf-8') as file: # Specify encoding
+            config_data = yaml.safe_load(file)
+            if not isinstance(config_data, dict):
+                logging.error(f"CRITICAL: {filename} is not a valid YAML dictionary.")
+                exit()
+
+            # --- Config Validation & Key Normalization ---
+            # Ensure providers have api_keys (plural) as a list
+            providers = config_data.get("providers", {})
+            if not isinstance(providers, dict):
+                logging.warning(f"Config Warning: 'providers' section is not a dictionary. Treating as empty.")
+                providers = {}
+                config_data["providers"] = providers # Fix in loaded data
+
+            for name, provider_cfg in providers.items():
+                if provider_cfg and isinstance(provider_cfg, dict): # Check if provider config exists and is a dict
+                    single_key = provider_cfg.get("api_key")
+                    key_list = provider_cfg.get("api_keys")
+
+                    if single_key and not key_list:
+                        logging.warning(f"Config Warning: Provider '{name}' uses deprecated 'api_key'. Converting to 'api_keys' list. Please update {filename}.")
+                        provider_cfg["api_keys"] = [single_key]
+                        del provider_cfg["api_key"]
+                    elif single_key and key_list:
+                         logging.warning(f"Config Warning: Provider '{name}' has both 'api_key' and 'api_keys'. Using 'api_keys'. Please remove 'api_key' from {filename}.")
+                         del provider_cfg["api_key"]
+                    elif key_list is None: # Handle case where api_keys is explicitly null or missing
+                         # Allow providers without keys (like Ollama)
+                         provider_cfg["api_keys"] = []
+                    elif not isinstance(key_list, list):
+                         logging.error(f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty.")
+                         provider_cfg["api_keys"] = []
+                elif provider_cfg is not None:
+                     logging.warning(f"Config Warning: Provider '{name}' configuration is not a dictionary. Ignoring provider.")
+                     # Optionally remove invalid provider config: del providers[name] or set providers[name] = {}
+
+            # Handle SerpAPI key(s)
+            single_serp_key = config_data.get("serpapi_api_key")
+            serp_key_list = config_data.get("serpapi_api_keys")
+            if single_serp_key and not serp_key_list:
+                logging.warning(f"Config Warning: Found 'serpapi_api_key'. Converting to 'serpapi_api_keys' list. Please update {filename}.")
+                config_data["serpapi_api_keys"] = [single_serp_key]
+                del config_data["serpapi_api_key"]
+            elif single_serp_key and serp_key_list:
+                 logging.warning(f"Config Warning: Found both 'serpapi_api_key' and 'serpapi_api_keys'. Using 'serpapi_api_keys'. Please remove 'serpapi_api_key' from {filename}.")
+                 del config_data["serpapi_api_key"]
+            elif serp_key_list is None: # Handle case where serpapi_api_keys is explicitly null or missing
+                 config_data["serpapi_api_keys"] = []
+            elif not isinstance(serp_key_list, list):
+                 logging.error(f"Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
+                 config_data["serpapi_api_keys"] = []
+
+            # Validate custom Google Lens config (optional)
+            custom_lens_cfg = config_data.get("custom_google_lens_config")
+            if custom_lens_cfg:
+                if not isinstance(custom_lens_cfg, dict):
+                    logging.error("Config Error: 'custom_google_lens_config' must be a dictionary. Disabling custom Lens.")
+                    config_data["custom_google_lens_config"] = None
+                else:
+                    user_data_dir = custom_lens_cfg.get("user_data_dir")
+                    profile_name = custom_lens_cfg.get("profile_directory_name")
+                    if not user_data_dir:
+                        logging.warning("Config Warning: 'user_data_dir' missing in 'custom_google_lens_config'. Custom Lens fallback may not work.")
+                    elif not os.path.exists(user_data_dir):
+                         logging.warning(f"Config Warning: 'user_data_dir' path does not exist: '{user_data_dir}'. Custom Lens fallback will likely fail.")
+
+                    if not profile_name:
+                        logging.warning("Config Warning: 'profile_directory_name' missing in 'custom_google_lens_config'. Custom Lens fallback may not work.")
+                    elif user_data_dir and os.path.exists(user_data_dir) and not os.path.exists(os.path.join(user_data_dir, profile_name)):
+                         logging.warning(f"Config Warning: Profile directory '{profile_name}' not found inside '{user_data_dir}'. Custom Lens fallback will likely fail.")
+
+            else:
+                 logging.info(f"Optional 'custom_google_lens_config' not found in {filename}. SerpAPI will be used for Google Lens if configured.")
+
+            # Basic check for essential Discord config
+            if not config_data.get("bot_token"):
+                logging.error(f"CRITICAL: bot_token is not set in {filename}")
+                # Don't exit here, let the main script handle it after logging
+            if not config_data.get("client_id"):
+                 logging.warning(f"client_id not found in {filename}. Cannot generate invite URL.")
+
+            # Ensure permissions structure exists
+            if "permissions" not in config_data:
+                config_data["permissions"] = {}
+            perms = config_data["permissions"]
+            for key in ["users", "roles", "channels"]:
+                if key not in perms:
+                    perms[key] = {}
+                if "allowed_ids" not in perms[key]:
+                    perms[key]["allowed_ids"] = []
+                if "blocked_ids" not in perms[key]:
+                    perms[key]["blocked_ids"] = []
+
+            return config_data
+
+    except FileNotFoundError:
+        logging.error(f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it.")
+        exit()
+    except yaml.YAMLError as e:
+        logging.error(f"CRITICAL: Error parsing {filename}: {e}")
+        exit()
+    except Exception as e:
+        logging.error(f"CRITICAL: Unexpected error loading config from {filename}: {e}")
+        exit()

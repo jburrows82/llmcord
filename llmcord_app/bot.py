@@ -1,0 +1,1013 @@
+import asyncio
+import base64
+from datetime import datetime as dt, timezone
+import logging
+import os
+import re
+import time
+from typing import Dict, Optional, Set, List, Any
+import traceback # Keep for detailed error logging if needed
+
+import discord
+from discord import app_commands
+# Use google.genai.types
+from google.genai import types as google_types
+
+import httpx
+
+# Import from our modules
+# Remove the incorrect import of cfg
+from .config import get_config
+from .constants import (
+    EMBED_COLOR_COMPLETE, EMBED_COLOR_INCOMPLETE, EMBED_COLOR_ERROR,
+    STREAMING_INDICATOR, EDIT_DELAY_SECONDS, MAX_MESSAGE_NODES,
+    MAX_EMBED_DESCRIPTION_LENGTH, AT_AI_PATTERN, GOOGLE_LENS_PATTERN,
+    GOOGLE_LENS_KEYWORD, VISION_MODEL_TAGS, AVAILABLE_MODELS,
+    DEEP_SEARCH_KEYWORDS, DEEP_SEARCH_MODEL, PROVIDERS_SUPPORTING_USERNAMES,
+    AllKeysFailedError
+)
+# Corrected import: Use the models module directly
+from . import models # Import the models module
+from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
+from .ui import ResponseActionView
+from .utils import (
+    extract_urls_with_indices, is_youtube_url, is_reddit_url,
+    extract_video_id, extract_reddit_submission_id
+)
+from .content_fetchers import (
+    fetch_youtube_data, fetch_reddit_data, fetch_general_url_content,
+    process_google_lens_image
+)
+from .llm_handler import generate_response_stream
+from .commands import set_model_command, get_user_model_preference # Import command logic and preference getter
+
+
+# --- Discord Client Setup ---
+class LLMCordClient(discord.Client):
+    def __init__(self, *, intents: discord.Intents, activity: discord.CustomActivity, config: Dict):
+        super().__init__(intents=intents, activity=activity)
+        self.tree = app_commands.CommandTree(self)
+        # Use the correct MsgNode class from the models module
+        self.msg_nodes: Dict[int, models.MsgNode] = {} # Message cache
+        self.last_task_time: float = 0 # For stream editing delay
+        self.config = config # Store loaded config
+        self.httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True) # HTTP client for attachments/web
+
+        # Initialize content fetcher modules that need config
+        from .content_fetchers.youtube import initialize_ytt_api
+        initialize_ytt_api(self.config.get("proxy_config"))
+
+    async def setup_hook(self):
+        """Sync slash commands when the bot is ready."""
+        # Register the command function with the tree
+        self.tree.add_command(app_commands.Command(
+            name="model",
+            description="Set your preferred LLM provider and model.",
+            callback=set_model_command
+        ))
+        # Sync commands
+        await self.tree.sync()
+        logging.info(f'Synced slash commands for {self.user}.')
+
+    async def on_ready(self):
+        """Called when the bot is ready and logged in."""
+        logging.info(f'Logged in as {self.user}')
+        # Initial check/reset of rate limits
+        check_and_perform_global_reset(self.config)
+
+    async def on_message(self, new_msg: discord.Message):
+        """Handles incoming messages."""
+        # --- Basic Checks and Trigger ---
+        if new_msg.author.bot or new_msg.author == self.user:
+            return
+        start_time = time.time()
+
+        is_dm = isinstance(new_msg.channel, discord.DMChannel)
+        allow_dms = self.config.get("allow_dms", True)
+
+        # Determine if the bot should process this message
+        should_process = False
+        mentions_bot = self.user.mentioned_in(new_msg)
+        contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
+        original_content_for_processing = new_msg.content
+
+        if is_dm:
+            if allow_dms:
+                # In DMs, process unless it's a reply *not* to the bot and doesn't trigger
+                is_reply_to_bot = new_msg.reference and new_msg.reference.resolved and new_msg.reference.resolved.author == self.user
+                is_reply_to_user = new_msg.reference and new_msg.reference.resolved and new_msg.reference.resolved.author != self.user
+
+                if is_reply_to_user and not (mentions_bot or contains_at_ai):
+                    should_process = False # Don't process replies to other users unless explicitly triggered
+                else:
+                    should_process = True # Process direct messages, replies to bot, or explicitly triggered replies
+            else:
+                return # Block DMs if not allowed
+        elif mentions_bot or contains_at_ai:
+            should_process = True
+
+        if not should_process:
+            return
+
+        # --- Reload config & Check Global Reset ---
+        # Config is now an instance variable, consider if reloading is needed per message
+        # self.config = get_config() # Uncomment if hot-reloading is desired
+        check_and_perform_global_reset(self.config)
+        youtube_api_key = self.config.get("youtube_api_key")
+        reddit_client_id = self.config.get("reddit_client_id")
+        reddit_client_secret = self.config.get("reddit_client_secret")
+        reddit_user_agent = self.config.get("reddit_user_agent")
+        custom_google_lens_config = self.config.get("custom_google_lens_config")
+
+        # --- Permissions Check ---
+        if not self._is_allowed(new_msg, is_dm):
+            logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
+            return
+
+        # --- Clean Content and Check for Google Lens ---
+        cleaned_content = original_content_for_processing
+        if not is_dm and mentions_bot:
+            cleaned_content = cleaned_content.replace(self.user.mention, '').strip()
+        cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content).strip()
+        cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip()
+        logging.debug(f"Cleaned content for keyword/URL check: '{cleaned_content}'")
+
+        use_google_lens = False
+        image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
+        user_warnings = set()
+
+        if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
+            custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
+            serpapi_keys_ok = bool(self.config.get("serpapi_api_keys"))
+            if not serpapi_keys_ok and not custom_lens_ok:
+                 logging.warning("Google Lens requested but neither SerpAPI keys nor custom implementation are configured.")
+                 user_warnings.add("⚠️ Google Lens requested but requires configuration (SerpAPI or custom).")
+            else:
+                use_google_lens = True
+                cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
+                logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
+
+        # --- LLM Provider/Model Selection ---
+        user_id = new_msg.author.id
+        default_model_str = self.config.get("model", "google/gemini-2.0-flash")
+        provider_slash_model = get_user_model_preference(user_id, default_model_str) # Use function from commands.py
+
+        # --- Override Model based on Keywords ---
+        final_provider_slash_model = provider_slash_model
+        deep_search_triggered = False
+        if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
+            target_model_str = DEEP_SEARCH_MODEL
+            target_provider, target_model_name = target_model_str.split("/", 1)
+            if use_google_lens:
+                logging.warning(f"Both 'deepsearch'/'deepersearch' and 'googlelens' detected. Prioritizing deep search ('{target_model_str}'). Google Lens disabled.")
+                use_google_lens = False
+
+            xai_provider_config = self.config.get("providers", {}).get(target_provider, {})
+            xai_keys = xai_provider_config.get("api_keys", [])
+            is_target_available = target_provider in AVAILABLE_MODELS and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
+
+            if xai_provider_config and xai_keys and is_target_available:
+                final_provider_slash_model = target_model_str
+                deep_search_triggered = True
+                logging.info(f"Keywords {DEEP_SEARCH_KEYWORDS} detected. Overriding model to {final_provider_slash_model}.")
+            else:
+                warning_reason = ""
+                if not xai_provider_config: warning_reason = f"provider '{target_provider}' not configured"
+                elif not xai_keys: warning_reason = f"no API keys for provider '{target_provider}'"
+                elif not is_target_available: warning_reason = f"model '{target_model_str}' not listed in AVAILABLE_MODELS"
+                logging.warning(f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({warning_reason}). Using original: {provider_slash_model}")
+                user_warnings.add(f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason}).")
+
+        # --- Validate Final Model Selection ---
+        try:
+            provider, model_name = final_provider_slash_model.split("/", 1)
+            if provider not in AVAILABLE_MODELS or model_name not in AVAILABLE_MODELS.get(provider, []):
+                 logging.warning(f"Final model '{final_provider_slash_model}' is invalid/unavailable. Falling back to default: {default_model_str}")
+                 final_provider_slash_model = default_model_str
+                 provider, model_name = final_provider_slash_model.split("/", 1)
+        except ValueError:
+            logging.error(f"Invalid model format for final selection '{final_provider_slash_model}'. Using hardcoded default.")
+            final_provider_slash_model = "google/gemini-2.0-flash"
+            provider, model_name = final_provider_slash_model.split("/", 1)
+            # Consider clearing invalid user preference here if needed
+
+        logging.info(f"Final model selected for user {user_id}: '{final_provider_slash_model}'")
+
+        # --- Get Config for the FINAL Provider ---
+        provider_config = self.config.get("providers", {}).get(provider, {})
+        if not isinstance(provider_config, dict): # Ensure provider_config is a dict
+            logging.error(f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed.")
+            await new_msg.reply(f"⚠️ Configuration error for provider `{provider}`.", mention_author=False)
+            return
+        all_api_keys = provider_config.get("api_keys", []) # Expecting a list
+
+        is_gemini = provider == "google"
+        keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
+
+        if keys_required and not all_api_keys:
+             logging.error(f"No API keys configured for the selected provider '{provider}' in config.yaml.")
+             await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", mention_author = False)
+             return
+
+        # --- Configuration Values ---
+        accept_images = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
+        max_text = self.config.get("max_text", 100000)
+        if use_google_lens:
+            max_images = self.config.get("max_images", 5)
+        elif accept_images:
+            max_images = self.config.get("max_images", 5)
+        else:
+            max_images = 0
+        max_messages = self.config.get("max_messages", 25)
+        use_plain_responses = self.config.get("use_plain_responses", False)
+        split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
+
+        # --- Check for Empty Query AGAIN ---
+        is_text_empty = not cleaned_content.strip()
+        has_meaningful_attachments_final = any(
+            att.content_type and (
+                (att.content_type.startswith("image/") and (accept_images or use_google_lens))
+                or att.content_type.startswith("text/")
+            )
+            for att in new_msg.attachments
+        )
+        is_reply = bool(new_msg.reference)
+
+        if is_text_empty and not has_meaningful_attachments_final and not is_reply:
+            logging.info(f"Empty query detected from user {new_msg.author.id}. Not a reply and no meaningful attachments.")
+            await new_msg.reply("Your query is empty. Please provide text, attach relevant files/images, or reply to a message.", mention_author=False)
+            return
+
+        # --- URL Extraction and Content Fetching ---
+        url_fetch_results = await self._fetch_external_content(
+            cleaned_content, image_attachments, use_google_lens, max_images, user_warnings
+        )
+
+        # --- Format External Content ---
+        combined_context = self._format_external_content(url_fetch_results)
+
+        # --- Build Message History ---
+        history_for_llm = await self._build_message_history(
+            new_msg, cleaned_content, combined_context, max_messages, max_text, max_images,
+            accept_images, use_google_lens, is_gemini, provider, user_warnings
+        )
+
+        if not history_for_llm:
+            logging.warning(f"Message history is empty for message {new_msg.id}. Cannot proceed.")
+            # Send warnings if any were generated during history building
+            if user_warnings:
+                warning_msg = "\n".join(sorted(list(user_warnings)))
+                await new_msg.reply(f"Could not process request. Issues found:\n{warning_msg}", mention_author=False)
+            else:
+                await new_msg.reply("Could not process request (failed to build message history).", mention_author=False)
+            return
+
+        logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}")
+
+        # --- Prepare API Call ---
+        system_prompt_text = self._prepare_system_prompt(is_gemini, provider)
+        extra_api_params = self.config.get("extra_api_parameters", {}).copy()
+
+        # --- Generate and Send Response ---
+        response_msgs = []
+        final_text = ""
+        llm_call_successful = False
+        final_view = None
+        grounding_metadata = None
+        edit_task = None
+        self.last_task_time = 0 # Reset last task time for this message
+
+        embed = discord.Embed()
+        embed.set_footer(text=f"Model: {final_provider_slash_model}")
+        for warning in sorted(user_warnings):
+            embed.add_field(name=warning, value="", inline=False)
+
+        try:
+            async with new_msg.channel.typing():
+                stream_generator = generate_response_stream(
+                    provider=provider,
+                    model_name=model_name,
+                    history_for_llm=history_for_llm,
+                    system_prompt_text=system_prompt_text,
+                    provider_config=provider_config,
+                    extra_params=extra_api_params
+                )
+
+                async for text_chunk, finish_reason, chunk_grounding_metadata, error_message in stream_generator:
+                    if error_message: # Handle non-retryable errors yielded by the generator
+                        logging.error(f"LLM stream failed with non-retryable error: {error_message}")
+                        # Update embed/message with the error
+                        if not use_plain_responses and response_msgs:
+                            try:
+                                # Make sure there's an embed to modify
+                                if response_msgs[-1].embeds:
+                                    current_desc = response_msgs[-1].embeds[0].description or ""
+                                else:
+                                    current_desc = "" # Start fresh if no embed exists
+                                    embed = discord.Embed(color=EMBED_COLOR_ERROR) # Create embed if needed
+
+                                embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                                embed.description += f"\n\n⚠️ Error: {error_message}"
+                                embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                                embed.color = EMBED_COLOR_ERROR
+                                await response_msgs[-1].edit(embed=embed, view=None)
+                            except Exception as edit_err:
+                                logging.error(f"Failed to edit message to show stream error: {edit_err}")
+                                await new_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
+                        else:
+                            await new_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
+                        llm_call_successful = False
+                        break # Stop processing stream
+
+                    if chunk_grounding_metadata:
+                        grounding_metadata = chunk_grounding_metadata
+
+                    if text_chunk:
+                        final_text += text_chunk
+
+                    # --- Real-time Editing Logic ---
+                    if not use_plain_responses:
+                        is_final_chunk = finish_reason is not None
+                        if not final_text and not is_final_chunk: continue # Skip empty intermediate chunks
+
+                        current_msg_index = (len(final_text) - 1) // split_limit if final_text else 0
+                        start_next_msg = current_msg_index >= len(response_msgs)
+
+                        # Check if enough time has passed OR if it's the final chunk OR starting a new message
+                        ready_to_edit = (
+                            (edit_task is None or edit_task.done()) and
+                            (dt.now().timestamp() - self.last_task_time >= EDIT_DELAY_SECONDS)
+                        )
+
+                        if start_next_msg or ready_to_edit or is_final_chunk:
+                            if edit_task is not None and not edit_task.done():
+                                try:
+                                    await edit_task # Wait for previous edit
+                                except asyncio.CancelledError:
+                                    logging.warning("Previous edit task cancelled.")
+                                except Exception as e:
+                                    logging.error(f"Error waiting for previous edit task: {e}")
+                                edit_task = None # Reset task after waiting or if done
+
+                            # Finalize previous message if splitting
+                            if start_next_msg and response_msgs:
+                                prev_msg_index = current_msg_index - 1
+                                if prev_msg_index >= 0 and prev_msg_index < len(response_msgs):
+                                    prev_msg_text = final_text[prev_msg_index * split_limit : current_msg_index * split_limit]
+                                    prev_msg_text = prev_msg_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
+                                    # Use a temporary embed object for modification
+                                    temp_embed = discord.Embed.from_dict(response_msgs[prev_msg_index].embeds[0].to_dict()) if response_msgs[prev_msg_index].embeds else discord.Embed()
+                                    temp_embed.description = prev_msg_text or "..."
+                                    temp_embed.color = EMBED_COLOR_COMPLETE
+                                    try:
+                                        await response_msgs[prev_msg_index].edit(embed=temp_embed, view=None)
+                                    except discord.HTTPException as e:
+                                        logging.error(f"Failed to finalize previous message {prev_msg_index}: {e}")
+                                else:
+                                     logging.warning(f"Invalid prev_msg_index {prev_msg_index} while splitting.")
+
+
+                            # Prepare current message segment
+                            current_display_text = final_text[current_msg_index * split_limit : (current_msg_index + 1) * split_limit]
+                            current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH]
+
+                            # Determine color and view
+                            view_to_attach = None
+                            # Check for successful finish (Gemini UNSPECIFIED is also success)
+                            is_successful_finish = finish_reason and (finish_reason.lower() in ("stop", "end_turn") or (is_gemini and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)))
+                            is_blocked = finish_reason and finish_reason.lower() in ("safety", "recitation", "other")
+
+                            # Use a temporary embed for the current segment
+                            current_segment_embed = discord.Embed()
+                            # Copy footer and fields from the initial embed
+                            current_segment_embed.set_footer(text=embed.footer.text if embed.footer else "")
+                            for field in embed.fields:
+                                current_segment_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+
+                            current_segment_embed.description = (current_display_text or "...") if is_final_chunk else ((current_display_text or "...") + STREAMING_INDICATOR)
+
+                            if is_final_chunk and is_blocked:
+                                current_segment_embed.description = (current_display_text or "...").replace(STREAMING_INDICATOR, "").strip()
+                                if finish_reason.lower() == "safety":
+                                    current_segment_embed.description += "\n\n⚠️ Response blocked by safety filters."
+                                elif finish_reason.lower() == "recitation":
+                                    current_segment_embed.description += "\n\n⚠️ Response stopped due to recitation."
+                                else: # Other
+                                    current_segment_embed.description += "\n\n⚠️ Response blocked (Reason: Other)."
+                                current_segment_embed.description = current_segment_embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                                current_segment_embed.color = EMBED_COLOR_ERROR
+                                view_to_attach = None
+                            else:
+                                current_segment_embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
+                                if is_final_chunk and is_successful_finish: # Only add view on successful final chunk
+                                    has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None) or getattr(grounding_metadata, 'search_entry_point', None))
+                                    has_text_content = bool(final_text)
+                                    if has_sources or has_text_content:
+                                        view_to_attach = ResponseActionView(
+                                            grounding_metadata=grounding_metadata,
+                                            full_response_text=final_text,
+                                            model_name=final_provider_slash_model
+                                        )
+                                        if not view_to_attach or len(view_to_attach.children) == 0:
+                                            view_to_attach = None
+
+                            # Create or Edit the current message
+                            if start_next_msg:
+                                reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                response_msg = await reply_to_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author = False)
+                                response_msgs.append(response_msg)
+                                # Use the correct MsgNode class
+                                self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
+                                if view_to_attach: view_to_attach.message = response_msg # Set message reference in view
+                                await self.msg_nodes[response_msg.id].lock.acquire()
+                            elif response_msgs and current_msg_index < len(response_msgs):
+                                # Ensure the message exists before creating task
+                                target_msg = response_msgs[current_msg_index]
+                                if target_msg:
+                                    edit_task = asyncio.create_task(target_msg.edit(embed=current_segment_embed, view=view_to_attach))
+                                    if view_to_attach: view_to_attach.message = target_msg # Update message ref
+                                else:
+                                     logging.error(f"Attempted to edit non-existent message at index {current_msg_index}")
+
+                            elif not response_msgs and is_final_chunk: # Short final response
+                                  response_msg = await new_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author = False)
+                                  response_msgs.append(response_msg)
+                                  # Use the correct MsgNode class
+                                  self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
+                                  if view_to_attach: view_to_attach.message = response_msg
+                                  await self.msg_nodes[response_msg.id].lock.acquire()
+
+                            self.last_task_time = dt.now().timestamp()
+
+                    # Break loop if generation finished
+                    if finish_reason:
+                        # Check if finish reason indicates success
+                        llm_call_successful = finish_reason.lower() in ("stop", "end_turn") or (is_gemini and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED))
+                        break # Exit stream loop
+
+            # --- End Stream Loop ---
+            # Handle plain text responses (final output)
+            if use_plain_responses and llm_call_successful:
+                 final_messages_content = [final_text[i:i+2000] for i in range(0, len(final_text), 2000)]
+                 if not final_messages_content: final_messages_content.append("...") # Handle empty success
+
+                 temp_response_msgs = []
+                 for i, content in enumerate(final_messages_content):
+                     reply_to_msg = new_msg if not temp_response_msgs else temp_response_msgs[-1]
+                     response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=None, mention_author = False)
+                     temp_response_msgs.append(response_msg)
+                     # Create node and acquire lock immediately
+                     # Use the correct MsgNode class
+                     self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
+                     node = self.msg_nodes[response_msg.id]
+                     await node.lock.acquire()
+                     # Store full text in the last node for plain responses
+                     if i == len(final_messages_content) - 1:
+                         node.full_response_text = final_text
+                 response_msgs = temp_response_msgs # Update the main list
+
+
+        except AllKeysFailedError as e:
+            logging.error(f"LLM generation failed for message {new_msg.id}: {e}")
+            error_message = f"⚠️ All API keys for provider `{e.service_name}` failed."
+            last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
+            # Simplify error reporting for the user
+            if "safety" in last_err_str.lower(): error_message += "\nLast error: Response blocked by safety filters."
+            elif "recitation" in last_err_str.lower(): error_message += "\nLast error: Response stopped due to recitation."
+            elif "no content received" in last_err_str.lower(): error_message += "\nLast error: No content received from API."
+            elif "stream ended prematurely" in last_err_str.lower(): error_message += "\nLast error: Connection issue during response generation."
+            else: error_message += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
+
+            if not use_plain_responses and response_msgs:
+                 try:
+                     # Make sure there's an embed to modify
+                     if response_msgs[-1].embeds:
+                         embed = discord.Embed.from_dict(response_msgs[-1].embeds[0].to_dict())
+                         current_desc = embed.description or ""
+                     else:
+                         embed = discord.Embed(color=EMBED_COLOR_ERROR) # Create embed if needed
+                         current_desc = ""
+
+                     embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                     embed.description += f"\n\n{error_message}"
+                     embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                     embed.color = EMBED_COLOR_ERROR
+                     await response_msgs[-1].edit(embed=embed, view=None)
+                 except Exception as edit_err:
+                     logging.error(f"Failed to edit message to show AllKeysFailedError: {edit_err}")
+                     await new_msg.reply(error_message, mention_author = False)
+            else:
+                await new_msg.reply(error_message, mention_author = False)
+            llm_call_successful = False
+
+        except Exception as outer_e:
+            logging.exception(f"Unhandled error during message processing for {new_msg.id}.")
+            try:
+                await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", mention_author = False)
+            except discord.HTTPException: pass
+            llm_call_successful = False
+
+        finally: # --- Cleanup and Cache Management ---
+            # Release locks and store full text for *all* response messages created in this run if successful
+            logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
+            for response_msg in response_msgs:
+                if response_msg and response_msg.id in self.msg_nodes:
+                    node = self.msg_nodes[response_msg.id]
+                    # Store full text in the node if successful, regardless of which segment it is
+                    if llm_call_successful:
+                        node.full_response_text = final_text
+                        logging.debug(f"Stored full_response_text ({len(final_text)} chars) in node {response_msg.id}")
+
+                    if node.lock.locked():
+                        try:
+                            logging.debug(f"Releasing lock for message node {response_msg.id}")
+                            node.lock.release()
+                        except RuntimeError:
+                            logging.warning(f"Attempted to release an already unlocked lock for node {response_msg.id}")
+                elif response_msg:
+                     logging.warning(f"Response message {response_msg.id} not found in msg_nodes during cleanup.")
+
+            # Delete oldest MsgNodes from the cache
+            if (num_nodes := len(self.msg_nodes)) > MAX_MESSAGE_NODES:
+                nodes_to_delete = sorted(self.msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
+                logging.info(f"Cache limit reached ({num_nodes}/{MAX_MESSAGE_NODES}). Removing {len(nodes_to_delete)} oldest nodes.")
+                for msg_id in nodes_to_delete:
+                    node_to_delete = self.msg_nodes.get(msg_id)
+                    if node_to_delete and hasattr(node_to_delete, 'lock') and node_to_delete.lock.locked():
+                        try: node_to_delete.lock.release()
+                        except RuntimeError: pass
+                    self.msg_nodes.pop(msg_id, None)
+
+            end_time = time.time()
+            logging.info(f"Finished processing message {new_msg.id}. Success: {llm_call_successful}. Total time: {end_time - start_time:.2f} seconds.")
+
+    def _is_allowed(self, message: discord.Message, is_dm: bool) -> bool:
+        """Checks if the user and channel are allowed based on config."""
+        permissions = self.config.get("permissions", {})
+        user_perms = permissions.get("users", {"allowed_ids": [], "blocked_ids": []})
+        role_perms = permissions.get("roles", {"allowed_ids": [], "blocked_ids": []})
+        channel_perms = permissions.get("channels", {"allowed_ids": [], "blocked_ids": []})
+
+        # Ensure lists exist and are lists
+        allowed_user_ids = user_perms.get("allowed_ids", []) or []
+        blocked_user_ids = user_perms.get("blocked_ids", []) or []
+        allowed_role_ids = role_perms.get("allowed_ids", []) or []
+        blocked_role_ids = role_perms.get("blocked_ids", []) or []
+        allowed_channel_ids = channel_perms.get("allowed_ids", []) or []
+        blocked_channel_ids = channel_perms.get("blocked_ids", []) or []
+
+        role_ids = set(role.id for role in getattr(message.author, "roles", []))
+        channel_ids = set(filter(None, (message.channel.id, getattr(message.channel, "parent_id", None), getattr(message.channel, "category_id", None))))
+
+        # User check
+        allow_all_users = not allowed_user_ids and not allowed_role_ids
+        is_good_user = allow_all_users or message.author.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
+        is_bad_user = (message.author.id in blocked_user_ids) or any(id in blocked_role_ids for id in role_ids)
+
+        if is_bad_user or not is_good_user: # If blocked OR not explicitly allowed (when allow_all is false)
+            return False
+
+        # Channel check (only if not DM)
+        if not is_dm:
+            allow_all_channels = not allowed_channel_ids
+            is_good_channel = allow_all_channels or any(id in allowed_channel_ids for id in channel_ids)
+            is_bad_channel = any(id in blocked_channel_ids for id in channel_ids)
+
+            if is_bad_channel or not is_good_channel: # If blocked OR not explicitly allowed (when allow_all is false)
+                return False
+
+        return True # Allowed if checks pass
+
+    async def _fetch_external_content(self, cleaned_content: str, image_attachments: List[discord.Attachment], use_google_lens: bool, max_images: int, user_warnings: Set[str]) -> List[models.UrlFetchResult]:
+        """Fetches content from URLs and Google Lens."""
+        all_urls_with_indices = extract_urls_with_indices(cleaned_content)
+        fetch_tasks = []
+        processed_urls = set()
+        url_fetch_results = []
+
+        # Create tasks for non-Google Lens URLs
+        for url, index in all_urls_with_indices:
+            if url in processed_urls: continue
+            processed_urls.add(url)
+
+            if is_youtube_url(url):
+                fetch_tasks.append(fetch_youtube_data(url, index, self.config.get("youtube_api_key")))
+            elif is_reddit_url(url):
+                sub_id = extract_reddit_submission_id(url)
+                if sub_id:
+                    fetch_tasks.append(fetch_reddit_data(url, sub_id, index, self.config.get("reddit_client_id"), self.config.get("reddit_client_secret"), self.config.get("reddit_user_agent")))
+                else:
+                    user_warnings.add(f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}...")
+            else:
+                fetch_tasks.append(fetch_general_url_content(url, index))
+
+        # Fetch non-Lens content concurrently
+        if fetch_tasks:
+            results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logging.error(f"Unhandled exception during non-Lens URL fetch: {result}", exc_info=True)
+                    user_warnings.add("⚠️ Unhandled error fetching URL content")
+                # Use the correct UrlFetchResult class
+                elif isinstance(result, models.UrlFetchResult):
+                    url_fetch_results.append(result)
+                    if result.error:
+                        short_url = result.url[:40] + "..." if len(result.url) > 40 else result.url
+                        user_warnings.add(f"⚠️ Error fetching {result.type} URL ({short_url}): {result.error}")
+                else:
+                     logging.error(f"Unexpected result type from non-Lens URL fetch: {type(result)}")
+
+        # Process Google Lens Images Sequentially
+        if use_google_lens:
+            lens_images_to_process = image_attachments[:max_images]
+            if len(image_attachments) > max_images:
+                user_warnings.add(f"⚠️ Only processing first {max_images} images for Google Lens.")
+
+            logging.info(f"Processing {len(lens_images_to_process)} Google Lens images sequentially...")
+            for i, attachment in enumerate(lens_images_to_process):
+                logging.info(f"Starting Google Lens processing for image {i+1}/{len(lens_images_to_process)}...")
+                try:
+                    # Pass self.config to process_google_lens_image
+                    lens_result = await process_google_lens_image(attachment.url, i, self.config)
+                    url_fetch_results.append(lens_result)
+                    if lens_result.error:
+                        logging.warning(f"Google Lens processing failed for image {i+1}: {lens_result.error}")
+                        user_warnings.add(f"⚠️ Google Lens failed for image {i+1}: {lens_result.error[:100]}...")
+                    else:
+                        logging.info(f"Finished Google Lens processing for image {i+1}.")
+                except Exception as e:
+                    logging.exception(f"Unexpected error during sequential Google Lens processing for image {i+1}")
+                    user_warnings.add(f"⚠️ Unexpected error processing Lens image {i+1}")
+                    # Use the correct UrlFetchResult class
+                    url_fetch_results.append(models.UrlFetchResult(
+                        url=attachment.url, content=None,
+                        error=f"Unexpected processing error: {type(e).__name__}",
+                        type="google_lens_fallback_failed", original_index=i
+                    ))
+
+        return url_fetch_results
+
+    def _format_external_content(self, url_fetch_results: List[models.UrlFetchResult]) -> str:
+        """Formats fetched URL/Lens content into a string for the LLM."""
+        if not url_fetch_results:
+            return ""
+
+        google_lens_parts = []
+        other_url_parts = []
+        other_url_counter = 1
+
+        # Sort results by original position
+        url_fetch_results.sort(key=lambda r: r.original_index)
+
+        for result in url_fetch_results:
+            if result.content: # Only include successful fetches
+                if result.type == "google_lens_serpapi":
+                    header = f"SerpAPI Google Lens results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "google_lens_custom":
+                    header = f"Custom Google Lens fallback results for image {result.original_index + 1}:\n"
+                    google_lens_parts.append(header + str(result.content))
+                elif result.type == "youtube":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
+                    if isinstance(result.content, dict):
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        content_str += f"  channel: {result.content.get('channel_name', 'N/A')}\n"
+                        desc = result.content.get('description', 'N/A')
+                        content_str += f"  description: {desc}\n"
+                        transcript = result.content.get('transcript')
+                        if transcript: content_str += f"  transcript: {transcript}\n"
+                        comments = result.content.get("comments")
+                        if comments: content_str += f"  top comments:\n" + "\n".join([f"    - {c}" for c in comments]) + "\n"
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                elif result.type == "reddit":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
+                    if isinstance(result.content, dict):
+                        content_str += f"  title: {result.content.get('title', 'N/A')}\n"
+                        selftext = result.content.get('selftext')
+                        if selftext: content_str += f"  content: {selftext}\n"
+                        comments = result.content.get("comments")
+                        if comments: content_str += f"  top comments:\n" + "\n".join([f"    - {c}" for c in comments]) + "\n"
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+                elif result.type == "general":
+                    content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
+                    if isinstance(result.content, str): content_str += f"  {result.content}\n"
+                    other_url_parts.append(content_str)
+                    other_url_counter += 1
+
+        combined_context = ""
+        if google_lens_parts or other_url_parts:
+            combined_context = "Answer the user's query based on the following:\n\n"
+            if google_lens_parts:
+                combined_context += "\n\n".join(google_lens_parts) + "\n\n"
+            if other_url_parts:
+                combined_context += "".join(other_url_parts)
+
+        return combined_context.strip()
+
+    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_images: int, accept_images: bool, use_google_lens: bool, is_gemini: bool, provider: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
+        """Builds the message history list for the LLM API call."""
+        history = []
+        curr_msg = new_msg
+        is_dm = isinstance(new_msg.channel, discord.DMChannel)
+
+        while curr_msg is not None and len(history) < max_messages:
+            if curr_msg.id not in self.msg_nodes:
+                 # If node doesn't exist (e.g., message before bot restart), fetch it
+                 logging.debug(f"Node for message {curr_msg.id} not in cache. Fetching message.")
+                 try:
+                     # Attempt to fetch the message if not the current one
+                     if curr_msg.id != new_msg.id:
+                         curr_msg = await new_msg.channel.fetch_message(curr_msg.id)
+                         if not curr_msg: # If fetch failed or returned None
+                              logging.warning(f"Failed to fetch message {curr_msg.id} for history building.")
+                              user_warnings.add(f"⚠️ Couldn't fetch full history (message {curr_msg.id} missing).")
+                              break # Stop building history if a message is missing
+                     # If it's the current message, we already have it
+                 except (discord.NotFound, discord.HTTPException) as fetch_err:
+                      logging.warning(f"Failed to fetch message {curr_msg.id} for history building: {fetch_err}")
+                      user_warnings.add(f"⚠️ Couldn't fetch full history (message {curr_msg.id} missing).")
+                      break # Stop building history
+                 # Create node after potentially fetching
+                 # Use the correct MsgNode class
+                 self.msg_nodes[curr_msg.id] = models.MsgNode()
+
+            curr_node = self.msg_nodes[curr_msg.id]
+
+            async with curr_node.lock:
+                # Populate node if it's empty or needs update
+                needs_population = curr_node.text is None
+
+                # Determine role early
+                current_role = "model" if curr_msg.author == self.user else "user"
+
+                if needs_population:
+                    content_to_store = ""
+                    # --- MODIFICATION START: Prioritize full_response_text for bot ---
+                    if current_role == "model":
+                        # Prioritize using the stored full response text for bot messages
+                        if curr_node.full_response_text:
+                            content_to_store = curr_node.full_response_text
+                            logging.debug(f"Using stored full_response_text for bot message {curr_msg.id}")
+                        else:
+                            # Fallback for bot messages if full text wasn't stored
+                            # Check embeds first for bot messages, then content
+                            if curr_msg.embeds and curr_msg.embeds[0].description:
+                                content_to_store = curr_msg.embeds[0].description.replace(STREAMING_INDICATOR, "").strip()
+                                logging.debug(f"Using embed description for bot message {curr_msg.id}")
+                            else:
+                                content_to_store = curr_msg.content # Likely empty or incomplete
+                                logging.debug(f"Falling back to curr_msg.content for bot message {curr_msg.id}")
+                    else: # It's a user message
+                        content_to_store = initial_cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
+                        # Further clean mentions/at ai from older user messages
+                        is_dm_current = isinstance(curr_msg.channel, discord.DMChannel)
+                        if not is_dm_current and self.user.mentioned_in(curr_msg):
+                             content_to_store = content_to_store.replace(self.user.mention, '').strip()
+                        # Only remove "at ai" from older messages (already done for initial_cleaned_content)
+                        if curr_msg.id != new_msg.id:
+                            content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
+                        content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
+                    # --- MODIFICATION END ---
+
+                    # Process attachments (remains the same)
+                    current_attachments = curr_msg.attachments
+                    # Limit attachment processing for history building for performance
+                    good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))][:5] # Limit attachments checked in history
+                    attachment_responses = await asyncio.gather(*[self.httpx_client.get(att.url, timeout=15.0) for att in good_attachments], return_exceptions=True) # Shorter timeout for history
+
+                    text_parts = [content_to_store] if content_to_store else []
+                    # Include embed text only if it's not the bot's own response
+                    if current_role == "user": # Check role instead of author
+                        text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
+                        text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
+
+                    for att, resp in zip(good_attachments, attachment_responses):
+                        if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
+                            try:
+                                attachment_text = resp.text[:5000] # Limit text attachment size in history
+                                text_parts.append(attachment_text)
+                            except Exception as e:
+                                logging.warning(f"Failed to decode text attachment {att.filename} in history: {e}")
+                                curr_node.has_bad_attachments = True
+                        elif isinstance(resp, Exception):
+                            logging.warning(f"Failed to fetch attachment {att.filename} in history: {resp}")
+                            curr_node.has_bad_attachments = True
+
+                    curr_node.text = "\n".join(filter(None, text_parts))
+
+                    # Process image attachments (remains largely the same, ensure limits)
+                    image_parts = []
+                    images_processed_count = 0
+                    is_lens_trigger_message = curr_msg.id == new_msg.id and use_google_lens
+
+                    # Only process images for user messages OR if the bot message *is* the initial trigger with lens
+                    # And only if the target LLM accepts images (unless it's the lens trigger)
+                    should_process_images = (current_role == "user" or is_lens_trigger_message) and (accept_images or is_lens_trigger_message)
+
+                    if should_process_images and not is_lens_trigger_message: # Don't process images attached to user's lens trigger msg here
+                        for att, resp in zip(good_attachments, attachment_responses):
+                            if images_processed_count >= max_images:
+                                curr_node.has_bad_attachments = True
+                                break
+                            if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
+                                try:
+                                    img_bytes = resp.content
+                                    if is_gemini:
+                                        image_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=att.content_type))
+                                    else: # OpenAI compatible
+                                        image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
+                                    images_processed_count += 1
+                                except Exception as img_e:
+                                     logging.error(f"Error processing image attachment {att.filename} in history: {img_e}")
+                                     curr_node.has_bad_attachments = True
+                            elif isinstance(resp, Exception):
+                                curr_node.has_bad_attachments = True
+
+                    curr_node.images = image_parts
+                    curr_node.role = current_role # Use the determined role
+                    curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
+                    curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
+
+                    # --- MODIFICATION START: Store external content in the node ---
+                    # Store the fetched external content in the node for the triggering message
+                    if curr_msg.id == new_msg.id and combined_context:
+                        curr_node.external_content = combined_context
+                        logging.debug(f"Stored external_content in node {curr_msg.id}")
+                    # --- MODIFICATION END ---
+
+                    # Find parent message only if not already found
+                    if curr_node.parent_msg is None and not curr_node.fetch_parent_failed: # Avoid refetching if failed before
+                        parent = await self._find_parent_message(curr_msg, is_dm)
+                        if parent is None and curr_msg.reference and curr_msg.reference.message_id:
+                            curr_node.fetch_parent_failed = True # Mark failure if reference existed but fetch failed
+                        curr_node.parent_msg = parent
+
+
+                # --- Prepare content for this node (using potentially updated curr_node.text) ---
+                current_text_content = ""
+                # --- MODIFICATION START: Prepend external content if present ---
+                # Prepend external content if it exists for this node
+                if curr_node.external_content:
+                    current_text_content += curr_node.external_content + "\n\nUser's query:\n"
+                    logging.debug(f"Prepending external_content for node {curr_msg.id} in history build")
+                # --- MODIFICATION END ---
+
+                # --- MODIFICATION START: Use correct text based on role ---
+                # Use the text we just populated/retrieved, prioritizing full_response_text for bot
+                node_text_to_use = ""
+                if curr_node.role == "model":
+                    node_text_to_use = curr_node.full_response_text or curr_node.text or ""
+                    if not curr_node.full_response_text and curr_node.text:
+                        logging.debug(f"Using fallback curr_node.text for bot message {curr_msg.id} in history build")
+                else: # User role
+                    node_text_to_use = curr_node.text or ""
+
+                if node_text_to_use:
+                    current_text_content += node_text_to_use
+                # --- MODIFICATION END ---
+
+                # Limit the combined text content *before* sending to API
+                current_text_content = current_text_content[:max_text] if current_text_content else ""
+                current_images = curr_node.images[:max_images] # Apply image limit here too
+
+                # --- API Formatting Logic (remains the same) ---
+                parts_for_api = []
+                if is_gemini:
+                    if current_text_content:
+                        parts_for_api.append(google_types.Part.from_text(text=current_text_content))
+                    parts_for_api.extend(current_images)
+                else: # OpenAI format
+                    if current_text_content:
+                        parts_for_api.append({"type": "text", "text": current_text_content})
+                    parts_for_api.extend(current_images)
+
+                # Add to history if parts exist
+                if parts_for_api:
+                    message_data = {"role": curr_node.role}
+                    if is_gemini:
+                        if not isinstance(parts_for_api, list): parts_for_api = [parts_for_api]
+                        message_data["parts"] = parts_for_api
+                    else: # OpenAI compatible
+                        if message_data["role"] == "model": message_data["role"] = "assistant" # Adjust role name
+                        # OpenAI expects 'content' which can be string or list of parts
+                        if len(parts_for_api) == 1 and parts_for_api[0]["type"] == "text":
+                            message_data["content"] = parts_for_api[0]["text"] # Use string if only text
+                        else:
+                            message_data["content"] = parts_for_api # Use list for multimodal
+                        # Add name field if supported
+                        if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.role == "user" and curr_node.user_id is not None:
+                            message_data["name"] = str(curr_node.user_id)
+
+                    history.append(message_data)
+
+                # --- Warning Logic (remains the same) ---
+                # Add warnings based on limits and errors for this specific node
+                if curr_node.text and len(curr_node.text) > max_text:
+                    user_warnings.add(f"⚠️ Max {max_text:,} chars/msg node")
+                if len(curr_node.images) > max_images:
+                    user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
+                if curr_node.has_bad_attachments:
+                    user_warnings.add("⚠️ Unsupported attachments")
+                if curr_node.fetch_parent_failed:
+                     user_warnings.add(f"⚠️ Couldn't fetch full history")
+                if curr_node.parent_msg is not None and len(history) >= max_messages: # Check >= max_messages
+                     user_warnings.add(f"⚠️ Only using last {max_messages} messages")
+
+                # Move to the parent message
+                curr_msg = curr_node.parent_msg
+
+        return history[::-1] # Reverse history for correct chronological order
+
+    async def _find_parent_message(self, message: discord.Message, is_dm: bool) -> Optional[discord.Message]:
+        """Determines the logical parent message for conversation history."""
+        try:
+            # Check if the current message explicitly triggers the bot
+            mentions_bot_in_current = self.user.mentioned_in(message)
+            contains_at_ai_in_current = AT_AI_PATTERN.search(message.content) is not None
+            is_explicit_trigger = mentions_bot_in_current or contains_at_ai_in_current
+
+            # 1. Explicit Reply always takes precedence
+            if message.reference and message.reference.message_id:
+                try:
+                    # Prefer cached message, fetch if not cached
+                    ref_msg = message.reference.cached_message
+                    if not ref_msg:
+                        # Use channel.fetch_message which is available on TextChannel, DMChannel, Thread etc.
+                        ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                    # Ensure the referenced message is usable (not deleted system message etc.)
+                    if ref_msg and ref_msg.type in (discord.MessageType.default, discord.MessageType.reply):
+                        return ref_msg
+                    else:
+                         logging.debug(f"Referenced message {message.reference.message_id} is not usable type {getattr(ref_msg, 'type', 'N/A')}")
+                except (discord.NotFound, discord.HTTPException) as e:
+                    logging.warning(f"Could not fetch referenced message {message.reference.message_id}: {e}")
+                    # Don't set fetch_parent_failed here, let the caller handle it based on return None
+
+            # 2. Thread Start: If it's the first user message in a thread (not a reply)
+            # Check if it's a thread and has a parent (to fetch starter message from)
+            if isinstance(message.channel, discord.Thread) and message.channel.parent and not message.reference:
+                 try:
+                     # The starter message is the logical parent
+                     starter_msg = message.channel.starter_message
+                     if not starter_msg:
+                         # Fetch starter message via parent channel and thread ID
+                         starter_msg = await message.channel.parent.fetch_message(message.channel.id)
+                     if starter_msg and starter_msg.type in (discord.MessageType.default, discord.MessageType.reply):
+                         return starter_msg
+                     else:
+                          logging.debug(f"Thread starter message {message.channel.id} is not usable type {getattr(starter_msg, 'type', 'N/A')}")
+                 except (discord.NotFound, discord.HTTPException, AttributeError) as e:
+                     logging.warning(f"Could not fetch thread starter message for thread {message.channel.id}: {e}")
+
+            # 3. Automatic Chaining (Only if NOT explicitly triggered)
+            if not is_explicit_trigger:
+                 prev_msg_in_channel = None
+                 try:
+                     async for m in message.channel.history(before=message, limit=1):
+                         prev_msg_in_channel = m
+                         break
+                 except (discord.Forbidden, discord.HTTPException) as e:
+                     logging.warning(f"Could not fetch history in channel {message.channel.id}: {e}")
+
+                 if prev_msg_in_channel and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply):
+                     # In DMs, chain if previous is from bot. In channels, chain if previous is from same user.
+                     if (is_dm and prev_msg_in_channel.author == self.user) or \
+                        (not is_dm and prev_msg_in_channel.author == message.author):
+                         return prev_msg_in_channel
+
+            # 4. No logical parent found
+            return None
+
+        except Exception as e:
+            logging.exception(f"Error determining parent message for {message.id}")
+            return None # Indicate failure to find parent
+
+    def _prepare_system_prompt(self, is_gemini: bool, provider: str) -> Optional[str]:
+        """Constructs the system prompt string with dynamic elements."""
+        system_prompt = self.config.get("system_prompt")
+        if not system_prompt:
+            return None
+
+        now_utc = dt.now(timezone.utc)
+        hour_12 = now_utc.strftime('%I').lstrip('0')
+        minute = now_utc.strftime('%M')
+        am_pm = now_utc.strftime('%p')
+        time_str = f"{hour_12}:{minute}\u202F{am_pm}" # Narrow no-break space
+        date_str = now_utc.strftime('%A, %B %d, %Y')
+        current_datetime_str = f"current date and time: {date_str} {time_str} Coordinated Universal Time (UTC)"
+
+        system_prompt_extras = [current_datetime_str]
+        if not is_gemini and provider in PROVIDERS_SUPPORTING_USERNAMES:
+            system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
+
+        return "\n".join([system_prompt] + system_prompt_extras)
+
+    async def close(self):
+        """Clean up resources when the bot is shutting down."""
+        logging.info("Closing HTTPX client...")
+        await self.httpx_client.aclose()
+        logging.info("Closing database connections...")
+        close_all_db_managers()
+        await super().close()

@@ -52,6 +52,7 @@ Or run a local model with:
 - This extracted information is appended to your original query before being sent to the LLM, providing rich context for summarization, analysis, or question-answering based on the video content.
 - Handles multiple YouTube URLs within the same message concurrently.
 - **Requires a YouTube Data API v3 key** configured in `config.yaml`.
+- **Optional Proxy Support:** Configure proxies in `config.yaml` to help avoid YouTube IP blocks that can cause transcript fetching errors (like `ParseError`). See `config-example.yaml`.
 
 ### Reddit Content Extraction
 - Include Reddit submission URLs directly in your query (e.g., `https://www.reddit.com/r/.../comments/.../`).
@@ -77,7 +78,7 @@ Or run a local model with:
   - **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys. If a request fails (e.g., rate limit), it automatically retries with another key.
 - **Fallback Implementation (Custom/Playwright):**
   - If the primary SerpAPI implementation fails (e.g., all keys are rate-limited, API errors), the bot automatically falls back to using a **custom Playwright implementation**.
-  - This fallback uses Playwright (integrated within `llmcord.py`) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search. This mimics human interaction.
+  - This fallback uses Playwright (integrated within the `llmcord_app` package) to automate a real Chrome browser instance with a specific user profile to perform the Google Lens search. This mimics human interaction.
   - **Requires configuration** of your Chrome user data directory and profile name in `config.yaml` for the fallback functionality.
   - **Requires Playwright and its browser drivers to be installed** (`pip install playwright` and `python -m playwright install chrome`) for the fallback functionality.
 - Fetches visual matches and related content for each image concurrently.
@@ -105,13 +106,14 @@ Or run a local model with:
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~1700 lines of code
+- Modular Python codebase (split from the original single file)
 
 ## Instructions
 
 1. Clone the repo:
    ```bash
    git clone https://github.com/jakobdylanc/llmcord
+   cd llmcord # Navigate into the cloned directory
    ```
 
 2. Create a copy of "config-example.yaml" named "config.yaml" and set it up:
@@ -124,7 +126,7 @@ Or run a local model with:
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br />**Max 128 characters.** |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br />(Default: `100,000`) |
-| **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model.**<br />(Default: `5`) |
+| **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model or Google Lens.**<br />(Default: `5`) |
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br />(Default: `25`) |
 | **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
@@ -143,6 +145,12 @@ Or run a local model with:
 | **reddit_client_id** | **Required for Reddit URL processing.** Your Reddit script app's client ID. |
 | **reddit_client_secret** | **Required for Reddit URL processing.** Your Reddit script app's client secret. |
 | **reddit_user_agent** | **Required for Reddit URL processing.** A unique user agent string (e.g., `discord:my-llm-bot:v1.0 (by u/your_reddit_username)`). |
+
+### Proxy settings (for youtube-transcript-api):
+
+| Setting | Description |
+| --- | --- |
+| **proxy_config** | **Optional:** Configure a proxy for `youtube-transcript-api` to potentially bypass YouTube IP blocks that cause transcript fetching errors (like `ParseError: no element found`). See `config-example.yaml` for setup details (Webshare recommended). |
 
 ### SerpAPI settings:
 
@@ -169,6 +177,7 @@ Or run a local model with:
 
 3. Install requirements:
    ```bash
+   # Ensure you are in the 'llmcord' directory (the one containing requirements.txt)
    python -m pip install -U -r requirements.txt
    ```
    *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results`, and `playwright`)*
@@ -178,14 +187,16 @@ Or run a local model with:
 
    **No Docker:**
    ```bash
-   python llmcord.py
+   # Ensure you are in the 'llmcord' directory (the parent of 'llmcord_app')
+   python -m llmcord_app.main
    ```
+   *(Note: You must use `python -m llmcord_app.main` because the code is now structured as a Python package (`llmcord_app`) and this command tells Python to run the `main.py` file within that package.)*
 
    **With Docker:**
    ```bash
    docker compose up
    ```
-   *(Note: Docker setup for Playwright might require additional steps to install Chrome inside the container. The provided Dockerfile might need adjustments.)*
+   *(Note: The Dockerfile now includes steps to install Playwright and Chrome. Ensure your Docker host has sufficient resources. Running Playwright headlessly might be required in some server environments.)*
 
 ## Notes
 
@@ -196,6 +207,7 @@ Or run a local model with:
 - Gemini safety settings are currently hardcoded to `BLOCK_NONE` for all categories.
 
 - YouTube Data API has usage quotas. Fetching details and comments for many videos may consume your quota quickly. Check the [Google Cloud Console](https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas) for details.
+- YouTube transcript fetching (via `youtube-transcript-api`) can be blocked by YouTube, especially when running from cloud IPs. This often results in a `ParseError: no element found` error. Configure the optional `proxy_config` in `config.yaml` (using Webshare residential proxies is recommended) to mitigate this.
 
 - Reddit API also has rate limits. Processing many Reddit URLs quickly might lead to temporary throttling.
 
@@ -203,7 +215,7 @@ Or run a local model with:
 
 - Google Lens processing primarily uses SerpAPI. Ensure you have valid SerpAPI keys configured. If SerpAPI fails (e.g., all keys rate-limited), it falls back to a custom Playwright implementation. For the fallback to work, ensure Playwright is installed (`pip install playwright`), Chrome drivers are installed (`python -m playwright install chrome`), and the Chrome profile configuration (`user_data_dir`, `profile_directory_name`) is correctly set in `config.yaml`. Ensure Chrome is closed for the specified profile when the fallback is triggered.
 
-- **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt`). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
+- **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder at the project root) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt` at the project root). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
 
 - PRs are welcome :)
 
