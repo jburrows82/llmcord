@@ -1,3 +1,4 @@
+# llmcord_app/constants.py
 import re
 import discord
 from google.genai import types as google_types # Use google.genai.types
@@ -19,6 +20,7 @@ MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR) # Adjusted for indicator
 MAX_EMBED_TOTAL_SIZE = 5900 # Safety margin below Discord's 6000 limit
+MAX_PLAIN_TEXT_LENGTH = 2000 # Discord message character limit
 
 # --- URL Regex Patterns ---
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
@@ -27,6 +29,11 @@ REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]
 AT_AI_PATTERN = re.compile(r'\bat ai\b', re.IGNORECASE)
 GOOGLE_LENS_KEYWORD = "googlelens"
 GOOGLE_LENS_PATTERN = re.compile(rf'^{GOOGLE_LENS_KEYWORD}\s+', re.IGNORECASE)
+# --- ADDED CONSTANTS ---
+IMGUR_HEADER = "--- Generated Images ---"
+IMGUR_URL_PREFIX = "https://i.imgur.com/"
+IMGUR_URL_PATTERN = re.compile(r"^(https://i\.imgur\.com/[a-zA-Z0-9]+\.(?:jpeg|jpg|png|gif))$")
+# --- END ADDED CONSTANTS ---
 
 # --- Rate Limiting ---
 RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours

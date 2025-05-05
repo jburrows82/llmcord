@@ -1,9 +1,10 @@
+# llmcord_app/bot.py
 import asyncio
 import base64
 from datetime import datetime as dt, timezone
 import logging
 import os
-import re
+import re # <-- Added import
 import time
 from typing import Dict, Optional, Set, List, Any
 import traceback # Keep for detailed error logging if needed
@@ -24,7 +25,8 @@ from .constants import (
     MAX_EMBED_DESCRIPTION_LENGTH, AT_AI_PATTERN, GOOGLE_LENS_PATTERN,
     GOOGLE_LENS_KEYWORD, VISION_MODEL_TAGS, AVAILABLE_MODELS,
     DEEP_SEARCH_KEYWORDS, DEEP_SEARCH_MODEL, PROVIDERS_SUPPORTING_USERNAMES,
-    AllKeysFailedError
+    AllKeysFailedError, IMGUR_HEADER, IMGUR_URL_PREFIX, IMGUR_URL_PATTERN, # <-- Added Imgur constants
+    MAX_PLAIN_TEXT_LENGTH # <-- Added plain text limit
 )
 # Corrected import: Use the models module directly
 from . import models # Import the models module
@@ -220,7 +222,7 @@ class LLMCordClient(discord.Client):
             max_images = 0
         max_messages = self.config.get("max_messages", 25)
         use_plain_responses = self.config.get("use_plain_responses", False)
-        split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else 2000
+        split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else MAX_PLAIN_TEXT_LENGTH
 
         # --- Check for Empty Query AGAIN ---
         is_text_empty = not cleaned_content.strip()
@@ -269,7 +271,7 @@ class LLMCordClient(discord.Client):
         extra_api_params = self.config.get("extra_api_parameters", {}).copy()
 
         # --- Generate and Send Response ---
-        response_msgs = []
+        response_msgs: List[discord.Message] = [] # Ensure type hint
         final_text = ""
         llm_call_successful = False
         final_view = None
@@ -448,7 +450,7 @@ class LLMCordClient(discord.Client):
             # --- End Stream Loop ---
             # Handle plain text responses (final output)
             if use_plain_responses and llm_call_successful:
-                 final_messages_content = [final_text[i:i+2000] for i in range(0, len(final_text), 2000)]
+                 final_messages_content = [final_text[i:i+split_limit] for i in range(0, len(final_text), split_limit)]
                  if not final_messages_content: final_messages_content.append("...") # Handle empty success
 
                  temp_response_msgs = []
@@ -508,6 +510,84 @@ class LLMCordClient(discord.Client):
             llm_call_successful = False
 
         finally: # --- Cleanup and Cache Management ---
+            # --- MODIFIED: Imgur URL Resending Logic ---
+            if llm_call_successful and final_text:
+                lines = final_text.strip().split('\n')
+                imgur_urls_to_resend = []
+                found_header = False
+                for line in lines:
+                    stripped_line = line.strip()
+                    if stripped_line == IMGUR_HEADER:
+                        found_header = True
+                        continue # Move to the next line after finding the header
+                    if found_header and stripped_line.startswith(IMGUR_URL_PREFIX):
+                        # Use the IMGUR_URL_PATTERN for validation
+                        if IMGUR_URL_PATTERN.match(stripped_line):
+                            imgur_urls_to_resend.append(stripped_line)
+                        else:
+                            # Stop if line starts with prefix but isn't a valid pattern
+                            break
+                    elif found_header and stripped_line: # If header was found but line is not imgur url and not empty, stop collecting
+                        break # Stop collecting if a non-empty, non-imgur line is encountered after the header
+
+                if imgur_urls_to_resend:
+                    logging.info(f"Detected Imgur URLs in response to message {new_msg.id}. Resending without embeds.")
+                    # Format URLs with spacing, no angle brackets
+                    formatted_urls = imgur_urls_to_resend # Use raw URLs
+                    max_chars = MAX_PLAIN_TEXT_LENGTH
+                    messages_to_send_content = []
+                    current_message_content = ""
+
+                    for url_str in formatted_urls:
+                        # Check if adding the next URL (plus double newline) exceeds the limit
+                        needed_len = len(url_str) + (2 if current_message_content else 0) # +2 for '\n\n'
+                        if len(current_message_content) + needed_len > max_chars:
+                            if current_message_content: # Don't add empty messages
+                                messages_to_send_content.append(current_message_content)
+                            # Start new message, handle case where single URL is too long (unlikely for imgur)
+                            if len(url_str) > max_chars:
+                                logging.warning(f"Single Imgur URL too long to send: {url_str}")
+                                messages_to_send_content.append(url_str[:max_chars-3] + "...")
+                                current_message_content = ""
+                            else:
+                                current_message_content = url_str
+                        else:
+                            if current_message_content:
+                                current_message_content += "\n\n" + url_str # Add double newline
+                            else:
+                                current_message_content = url_str
+
+                    if current_message_content: # Add the last message segment
+                        messages_to_send_content.append(current_message_content)
+
+                    # Send the messages, replying to the last bot message
+                    reply_target = response_msgs[-1] if response_msgs else new_msg
+                    last_sent_msg = reply_target # Keep track of the last message sent in this sequence
+                    for i, msg_content in enumerate(messages_to_send_content):
+                        try:
+                            # Reply to the previous message in the sequence or the original target
+                            target_to_reply_to = last_sent_msg
+                            # Ensure target is a Message object
+                            if isinstance(target_to_reply_to, discord.Message):
+                                sent_msg = await target_to_reply_to.reply(content=msg_content, mention_author=False) # REMOVED suppress_embeds=True
+                                last_sent_msg = sent_msg # Update last sent message
+                            else: # Fallback if target isn't a message (shouldn't happen often here)
+                                 logging.warning(f"Invalid reply target type: {type(target_to_reply_to)}. Replying to original message.")
+                                 sent_msg = await new_msg.reply(content=msg_content, mention_author=False) # REMOVED suppress_embeds=True
+                                 last_sent_msg = sent_msg
+                            await asyncio.sleep(0.1) # Small delay between sends
+                        except discord.HTTPException as send_err:
+                            logging.error(f"Failed to resend Imgur URL chunk {i+1}: {send_err}")
+                            # Try sending to the original message as a fallback
+                            try:
+                                await new_msg.reply(f"(Error sending previous chunk)\n{msg_content}", mention_author=False) # REMOVED suppress_embeds=True
+                            except discord.HTTPException as fallback_err:
+                                logging.error(f"Failed fallback attempt to resend Imgur URL chunk {i+1}: {fallback_err}")
+                        except Exception as e:
+                             logging.error(f"Unexpected error resending Imgur URL chunk {i+1}: {e}")
+            # --- END: Imgur URL Resending Logic ---
+
+
             # Release locks and store full text for *all* response messages created in this run if successful
             logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
             for response_msg in response_msgs:
