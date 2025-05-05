@@ -71,6 +71,73 @@ async def generate_response_stream(
     llm_errors = []
     last_error_type = None
 
+    # --- ADD CORRECTION LOGIC BEFORE THE LOOP OR INSIDE is_gemini block ---
+    corrected_history_for_llm = []
+    if is_gemini:
+        logging.debug("Correcting history parts for Gemini API format...")
+        for msg_index, msg in enumerate(history_for_llm):
+            original_parts = msg.get("parts", [])
+            # Handle case where parts might not be a list (e.g., simple string content from OpenAI history)
+            if isinstance(original_parts, str):
+                 original_parts = [google_types.Part.from_text(original_parts)]
+            elif not isinstance(original_parts, list):
+                 logging.warning(f"Unexpected 'parts' type in history message {msg_index}: {type(original_parts)}. Converting to text.")
+                 original_parts = [google_types.Part.from_text(str(original_parts))] if original_parts else []
+
+            corrected_parts = []
+            for part_index, part in enumerate(original_parts):
+                if isinstance(part, google_types.Part):
+                    corrected_parts.append(part) # Already correct format
+                elif isinstance(part, dict):
+                    part_type = part.get("type")
+                    if part_type == "image_url": # This is the OpenAI format we need to convert
+                        image_url_data = part.get("image_url", {})
+                        data_url = image_url_data.get("url")
+                        if isinstance(data_url, str) and data_url.startswith("data:image") and ";base64," in data_url:
+                            try:
+                                header, encoded_data = data_url.split(";base64,", 1)
+                                # Extract mime type carefully, handle potential missing colon
+                                mime_parts = header.split(":")
+                                if len(mime_parts) > 1:
+                                    mime_type = mime_parts[1]
+                                else:
+                                     logging.warning(f"Could not extract mime type from image header: {header}. Defaulting to 'image/png'.")
+                                     mime_type = "image/png" # Or another sensible default
+
+                                img_bytes = base64.b64decode(encoded_data)
+                                corrected_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                                logging.debug(f"Corrected OpenAI image dict (part {part_index}) to Gemini Part in message {msg_index}.")
+                            except (ValueError, IndexError, base64.binascii.Error) as e:
+                                logging.warning(f"Could not convert OpenAI image part {part_index} in message {msg_index} to Gemini Part: {e}. Skipping part: {part}")
+                        else:
+                             logging.warning(f"Skipping unrecognized/invalid image_url dict format (part {part_index}) in Gemini history message {msg_index}: {part}")
+                    elif part_type == "text": # Handle OpenAI text part format
+                         corrected_parts.append(google_types.Part.from_text(part.get("text", "")))
+                         logging.debug(f"Corrected OpenAI text dict (part {part_index}) to Gemini Part in message {msg_index}.")
+                    else:
+                        logging.warning(f"Skipping unrecognized dict part format (type: {part_type}, part {part_index}) in Gemini history message {msg_index}: {part}")
+                elif isinstance(part, str): # Handle plain string parts if they somehow occur
+                    corrected_parts.append(google_types.Part.from_text(part))
+                    logging.debug(f"Corrected plain string part (part {part_index}) to Gemini Part in message {msg_index}.")
+                else:
+                    logging.warning(f"Skipping unrecognized part type '{type(part)}' (part {part_index}) in Gemini history message {msg_index}.")
+
+            # Only add message if it has valid parts after correction
+            if corrected_parts:
+                corrected_history_for_llm.append({"role": msg["role"], "parts": corrected_parts})
+            else:
+                 logging.warning(f"Skipping message {msg_index} (role '{msg['role']}') for Gemini as it had no valid parts after correction.")
+        # Use the corrected history for the Gemini API call preparation below
+        history_to_use = corrected_history_for_llm
+    else:
+        # TODO: Add correction logic for OpenAI if needed (converting Gemini Parts back to dicts)
+        # For now, assume OpenAI history is already correct if target is OpenAI
+        history_to_use = history_for_llm
+
+    # --- END CORRECTION LOGIC ---
+
+
+    # --- Start the existing loop ---
     for key_index, current_api_key in enumerate(keys_to_loop):
         key_display = f"...{current_api_key[-4:]}" if current_api_key != "dummy_key" else "N/A (keyless)"
         logging.info(f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index+1}/{len(keys_to_loop)})")
@@ -93,14 +160,21 @@ async def generate_response_stream(
                     raise ValueError("Gemini requires an API key.")
                 llm_client = google_genai.Client(api_key=current_api_key)
 
+                # --- THIS IS THE CRITICAL PART ---
+                # Use the corrected history (history_to_use) here
                 gemini_contents = []
-                for msg in history_for_llm:
-                    role = msg["role"] # 'user' or 'model'
+                for msg in history_to_use: # Use the corrected history
+                    role = msg["role"]
                     parts = msg.get("parts", [])
-                    if not isinstance(parts, list):
-                         logging.warning(f"Correcting non-list parts for Gemini message: {parts}")
-                         parts = [google_types.Part.from_text(text=str(parts))] if parts else []
-                    gemini_contents.append(google_types.Content(role=role, parts=parts))
+                    # Now, 'parts' should only contain valid google_types.Part objects
+                    try:
+                        gemini_contents.append(google_types.Content(role=role, parts=parts)) # This should now pass validation
+                    except Exception as content_creation_error:
+                         # Add extra logging if Content creation still fails
+                         logging.error(f"FATAL: Failed to create google_types.Content even after correction! Role: {role}, Parts: {parts}", exc_info=True)
+                         # Yield an error immediately as this indicates a deeper issue
+                         yield None, None, None, f"Internal error creating Gemini content structure: {content_creation_error}"
+                         return # Stop generation
 
                 api_content_kwargs["contents"] = gemini_contents
 
@@ -135,7 +209,8 @@ async def generate_response_stream(
                     raise ValueError(f"base_url is required for OpenAI-compatible provider '{provider}' but not found in config.")
                 llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
 
-                openai_messages = history_for_llm[:] # Copy history
+                # Ensure OpenAI correction logic is added here if needed in the future
+                openai_messages = history_to_use[:] # Copy history
                 if system_prompt_text:
                     openai_messages.insert(0, dict(role="system", content=system_prompt_text))
 
@@ -152,11 +227,14 @@ async def generate_response_stream(
             # --- Print Payload ---
             try:
                 print(f"\n--- LLM Request Payload (Provider: {provider}, Model: {model_name}) ---")
+                # THIS LINE CALLS THE TRUNCATION FUNCTION
                 payload_for_printing = _truncate_base64_in_payload(payload_to_print)
+                # THIS LINE PRINTS THE TRUNCATED VERSION
                 print(json.dumps(payload_for_printing, indent=2, default=default_serializer))
                 print("--- End LLM Request Payload ---\n")
             except Exception as print_err:
                 logging.error(f"Error printing LLM payload: {print_err}")
+                # Fallback to printing raw if serialization/truncation fails
                 print(f"Raw Payload Data (may contain unserializable objects):\n{payload_to_print}\n")
 
             # --- Make API Call and Process Stream ---
