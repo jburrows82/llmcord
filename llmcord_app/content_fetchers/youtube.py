@@ -108,8 +108,12 @@ async def get_transcript(video_id: str) -> Tuple[Optional[str], Optional[str]]:
     except NoTranscriptFound:
         return None, "No transcripts listed for this video."
     except xml.etree.ElementTree.ParseError as e:
-         logging.error(f"XML ParseError fetching transcript for {video_id}: {e}. Likely blocked or received empty/invalid data.")
-         return None, f"Transcript parsing failed (likely blocked or empty response)."
+         logging.error(
+             f"XML ParseError fetching transcript for {video_id}: {e}. "
+             f"This often means the request was blocked by YouTube or returned an empty/invalid (non-XML) response. "
+             f"Consider configuring a proxy in config.yaml if this issue persists."
+         )
+         return None, f"Transcript parsing failed (likely blocked; consider proxy)."
     except Exception as e:
         e_str = str(e).lower()
         if 'requestblocked' in e_str or 'ipblocked' in e_str or 'too many requests' in e_str:
