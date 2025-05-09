@@ -218,14 +218,19 @@ class LLMCordClient(discord.Client):
              return
 
         # --- Configuration Values ---
-        accept_images = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
-        max_text = self.config.get("max_text", 100000)
+        accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS) # Renamed from accept_images for clarity
+        max_files_per_message = self.config.get("max_images", 5) # Using max_images config key for max files
         if use_google_lens:
-            max_images = self.config.get("max_images", 5)
-        elif accept_images:
-            max_images = self.config.get("max_images", 5)
+            # max_images_for_lens = self.config.get("max_images", 5) # Retain original logic for lens if needed separate
+            pass # For now, lens also uses max_files_per_message
+        elif accept_files:
+            # max_images_for_llm = self.config.get("max_images", 5)
+            pass
         else:
-            max_images = 0
+            # max_images_for_llm = 0
+            pass # max_files_per_message will be effectively 0 if accept_files is false later
+
+        max_text = self.config.get("max_text", 100000)
         max_messages = self.config.get("max_messages", 25)
         use_plain_responses = self.config.get("use_plain_responses", False)
         split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else MAX_PLAIN_TEXT_LENGTH
@@ -234,8 +239,9 @@ class LLMCordClient(discord.Client):
         is_text_empty = not cleaned_content.strip()
         has_meaningful_attachments_final = any(
             att.content_type and (
-                (att.content_type.startswith("image/") and (accept_images or use_google_lens))
+                (att.content_type.startswith("image/") and (accept_files or use_google_lens))
                 or att.content_type.startswith("text/")
+                or (is_gemini and att.content_type == "application/pdf" and accept_files) # Added PDF check for Gemini
             )
             for att in new_msg.attachments
         )
@@ -248,7 +254,7 @@ class LLMCordClient(discord.Client):
 
         # --- URL Extraction and Content Fetching ---
         url_fetch_results = await self._fetch_external_content(
-            cleaned_content, image_attachments, use_google_lens, max_images, user_warnings
+            cleaned_content, image_attachments, use_google_lens, max_files_per_message, user_warnings # Pass max_files_per_message
         )
 
         # --- Format External Content ---
@@ -256,8 +262,8 @@ class LLMCordClient(discord.Client):
 
         # --- Build Message History ---
         history_for_llm = await self._build_message_history(
-            new_msg, cleaned_content, combined_context, max_messages, max_text, max_images,
-            accept_images, use_google_lens, is_gemini, provider, user_warnings
+            new_msg, cleaned_content, combined_context, max_messages, max_text, max_files_per_message,
+            accept_files, use_google_lens, is_gemini, provider, user_warnings
         )
 
         if not history_for_llm:
@@ -667,7 +673,7 @@ class LLMCordClient(discord.Client):
 
         return True # Allowed if checks pass
 
-    async def _fetch_external_content(self, cleaned_content: str, image_attachments: List[discord.Attachment], use_google_lens: bool, max_images: int, user_warnings: Set[str]) -> List[models.UrlFetchResult]:
+    async def _fetch_external_content(self, cleaned_content: str, image_attachments: List[discord.Attachment], use_google_lens: bool, max_files_per_message: int, user_warnings: Set[str]) -> List[models.UrlFetchResult]:
         """Fetches content from URLs and Google Lens."""
         all_urls_with_indices = extract_urls_with_indices(cleaned_content)
         fetch_tasks = []
@@ -708,9 +714,9 @@ class LLMCordClient(discord.Client):
 
         # Process Google Lens Images Sequentially
         if use_google_lens:
-            lens_images_to_process = image_attachments[:max_images]
-            if len(image_attachments) > max_images:
-                user_warnings.add(f"⚠️ Only processing first {max_images} images for Google Lens.")
+            lens_images_to_process = image_attachments[:max_files_per_message] # Use max_files_per_message
+            if len(image_attachments) > max_files_per_message:
+                user_warnings.add(f"⚠️ Only processing first {max_files_per_message} images for Google Lens.")
 
             logging.info(f"Processing {len(lens_images_to_process)} Google Lens images sequentially...")
             for i, attachment in enumerate(lens_images_to_process):
@@ -795,7 +801,7 @@ class LLMCordClient(discord.Client):
 
         return combined_context.strip()
 
-    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_images: int, accept_images: bool, use_google_lens: bool, is_gemini: bool, provider: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
+    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_files_per_message: int, accept_files: bool, use_google_lens: bool, is_gemini: bool, provider: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
         """Builds the message history list for the LLM API call."""
         history = []
         curr_msg = new_msg
@@ -819,195 +825,211 @@ class LLMCordClient(discord.Client):
                       user_warnings.add(f"⚠️ Couldn't fetch full history (message {curr_msg.id} missing).")
                       break # Stop building history
                  # Create node after potentially fetching
-                 # Use the correct MsgNode class
                  self.msg_nodes[curr_msg.id] = models.MsgNode()
 
             curr_node = self.msg_nodes[curr_msg.id]
 
             async with curr_node.lock:
-                # Populate node if it's empty or needs update
                 needs_population = curr_node.text is None
-
-                # Determine role early
                 current_role = "model" if curr_msg.author == self.user else "user"
 
                 if needs_population:
+                    curr_node.has_bad_attachments = False # Initialize
+
                     content_to_store = ""
-                    # --- MODIFICATION START: Prioritize full_response_text for bot ---
                     if current_role == "model":
-                        # Prioritize using the stored full response text for bot messages
                         if curr_node.full_response_text:
                             content_to_store = curr_node.full_response_text
                             logging.debug(f"Using stored full_response_text for bot message {curr_msg.id}")
                         else:
-                            # Fallback for bot messages if full text wasn't stored
-                            # Check embeds first for bot messages, then content
                             if curr_msg.embeds and curr_msg.embeds[0].description:
                                 content_to_store = curr_msg.embeds[0].description.replace(STREAMING_INDICATOR, "").strip()
                                 logging.debug(f"Using embed description for bot message {curr_msg.id}")
                             else:
-                                content_to_store = curr_msg.content # Likely empty or incomplete
+                                content_to_store = curr_msg.content
                                 logging.debug(f"Falling back to curr_msg.content for bot message {curr_msg.id}")
-                    else: # It's a user message
+                    else: # User message
                         content_to_store = initial_cleaned_content if curr_msg.id == new_msg.id else curr_msg.content
-                        # Further clean mentions/at ai from older user messages
                         is_dm_current = isinstance(curr_msg.channel, discord.DMChannel)
                         if not is_dm_current and self.user.mentioned_in(curr_msg):
                              content_to_store = content_to_store.replace(self.user.mention, '').strip()
-                        # Only remove "at ai" from older messages (already done for initial_cleaned_content)
                         if curr_msg.id != new_msg.id:
                             content_to_store = AT_AI_PATTERN.sub(' ', content_to_store)
                         content_to_store = re.sub(r'\s{2,}', ' ', content_to_store).strip()
-                    # --- MODIFICATION END ---
 
-                    # Process attachments (remains the same)
                     current_attachments = curr_msg.attachments
-                    # Limit attachment processing for history building for performance
-                    good_attachments = [att for att in current_attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text/", "image/"))][:5] # Limit attachments checked in history
-                    attachment_responses = await asyncio.gather(*[self.httpx_client.get(att.url, timeout=15.0) for att in good_attachments], return_exceptions=True) # Shorter timeout for history
+                    
+                    MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY = 5 
+                    attachments_to_fetch = []
+                    unfetched_unsupported_types = False
 
+                    for att_idx, att in enumerate(current_attachments):
+                        if len(attachments_to_fetch) >= MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY:
+                            curr_node.has_bad_attachments = True
+                            logging.info(f"Message {curr_msg.id} has more than {MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY} attachments. Only first {MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY} considered for download.")
+                            break
+                        if att.content_type:
+                            is_relevant_for_download = False
+                            if att.content_type.startswith("text/"):
+                                is_relevant_for_download = True
+                            elif att.content_type.startswith("image/"):
+                                is_relevant_for_download = True
+                            elif att.content_type == "application/pdf" and is_gemini and accept_files:
+                                is_relevant_for_download = True
+                            
+                            if is_relevant_for_download:
+                                attachments_to_fetch.append(att)
+                            else: # Attachment type not relevant for download/API
+                                unfetched_unsupported_types = True
+                        # else: no content type, skip
+
+                    if unfetched_unsupported_types: # If any attachment was skipped due to its type (not download limit)
+                        curr_node.has_bad_attachments = True
+                        logging.info(f"Message {curr_msg.id} has attachments of unsupported types that were not downloaded.")
+                    
+                    attachment_responses = await asyncio.gather(*[self.httpx_client.get(att.url, timeout=15.0) for att in attachments_to_fetch], return_exceptions=True)
+                    
                     text_parts = [content_to_store] if content_to_store else []
-                    # Include embed text only if it's not the bot's own response
-                    if current_role == "user": # Check role instead of author
+                    if current_role == "user":
                         text_parts.extend(filter(None, (embed.title for embed in curr_msg.embeds)))
                         text_parts.extend(filter(None, (embed.description for embed in curr_msg.embeds)))
 
-                    for att, resp in zip(good_attachments, attachment_responses):
+                    for att, resp in zip(attachments_to_fetch, attachment_responses):
                         if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
                             try:
-                                attachment_text = resp.text[:5000] # Limit text attachment size in history
+                                attachment_text = resp.text[:5000]
                                 text_parts.append(attachment_text)
                             except Exception as e:
                                 logging.warning(f"Failed to decode text attachment {att.filename} in history: {e}")
-                                curr_node.has_bad_attachments = True
-                        elif isinstance(resp, Exception):
-                            logging.warning(f"Failed to fetch attachment {att.filename} in history: {resp}")
-                            curr_node.has_bad_attachments = True
+                                curr_node.has_bad_attachments = True # Error processing downloaded text
+                        elif isinstance(resp, Exception) and att.content_type.startswith("text/"):
+                            logging.warning(f"Failed to fetch text attachment {att.filename} in history: {resp}")
+                            curr_node.has_bad_attachments = True # Error fetching text att
 
                     curr_node.text = "\n".join(filter(None, text_parts))
 
-                    # Process image attachments (remains largely the same, ensure limits)
-                    image_parts = []
-                    images_processed_count = 0
+                    api_file_parts = [] # Renamed from image_parts
+                    files_processed_for_api_count = 0 # Renamed from images_processed_count
                     is_lens_trigger_message = curr_msg.id == new_msg.id and use_google_lens
 
-                    # Only process images for user messages OR if the bot message *is* the initial trigger with lens
-                    # And only if the target LLM accepts images (unless it's the lens trigger)
-                    should_process_images = (current_role == "user" or is_lens_trigger_message) and (accept_images or is_lens_trigger_message)
+                    should_process_files_for_api = (current_role == "user" or is_lens_trigger_message) and \
+                                           (accept_files or is_lens_trigger_message)
 
-                    if should_process_images and not is_lens_trigger_message: # Don't process images attached to user's lens trigger msg here
-                        for att, resp in zip(good_attachments, attachment_responses):
-                            if images_processed_count >= max_images:
+                    if should_process_files_for_api and not is_lens_trigger_message:
+                        for att, resp in zip(attachments_to_fetch, attachment_responses):
+                            # Only consider image or PDF for API parts from fetched attachments
+                            is_api_relevant_type = att.content_type.startswith("image/") or \
+                                                   (att.content_type == "application/pdf" and is_gemini)
+                            if not is_api_relevant_type:
+                                continue
+
+                            if files_processed_for_api_count >= max_files_per_message:
                                 curr_node.has_bad_attachments = True
+                                logging.warning(f"Max {max_files_per_message} files (images/PDFs) processed for API for message {curr_msg.id}, subsequent API-relevant attachments skipped.")
                                 break
-                            if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("image/"):
-                                try:
-                                    img_bytes = resp.content
-                                    if is_gemini:
-                                        image_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=att.content_type))
-                                    else: # OpenAI compatible
-                                        image_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
-                                    images_processed_count += 1
-                                except Exception as img_e:
-                                     logging.error(f"Error processing image attachment {att.filename} in history: {img_e}")
-                                     curr_node.has_bad_attachments = True
-                            elif isinstance(resp, Exception):
+
+                            if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                                attachment_added_to_api = False
+                                if att.content_type.startswith("image/"):
+                                    try:
+                                        img_bytes = resp.content
+                                        if is_gemini:
+                                            api_file_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=att.content_type))
+                                        else: 
+                                            api_file_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
+                                        attachment_added_to_api = True
+                                    except Exception as img_e:
+                                         logging.error(f"Error processing image attachment {att.filename} for API in msg {curr_msg.id}: {img_e}")
+                                         curr_node.has_bad_attachments = True
+                                elif att.content_type == "application/pdf" and is_gemini:
+                                    try:
+                                        pdf_bytes = resp.content
+                                        api_file_parts.append(google_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
+                                        attachment_added_to_api = True
+                                    except Exception as pdf_e:
+                                         logging.error(f"Error processing PDF attachment {att.filename} for API in msg {curr_msg.id}: {pdf_e}")
+                                         curr_node.has_bad_attachments = True
+                                
+                                if attachment_added_to_api:
+                                    files_processed_for_api_count += 1
+                            
+                            elif isinstance(resp, Exception): # Fetch failed for an API-relevant file
+                                logging.warning(f"Failed to fetch API-relevant attachment {att.filename} (type: {att.content_type}) in history: {resp}")
                                 curr_node.has_bad_attachments = True
 
-                    curr_node.images = image_parts
-                    curr_node.role = current_role # Use the determined role
+                    curr_node.api_file_parts = api_file_parts # Store prepared API parts
+                    curr_node.role = current_role
                     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-                    curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))
+                    # The old check `curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))` is removed.
+                    # Its intent is covered by MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY check and unfetched_unsupported_types flag.
 
-                    # --- MODIFICATION START: Store external content in the node ---
-                    # Store the fetched external content in the node for the triggering message
                     if curr_msg.id == new_msg.id and combined_context:
                         curr_node.external_content = combined_context
                         logging.debug(f"Stored external_content in node {curr_msg.id}")
-                    # --- MODIFICATION END ---
 
-                    # Find parent message only if not already found
-                    if curr_node.parent_msg is None and not curr_node.fetch_parent_failed: # Avoid refetching if failed before
+                    if curr_node.parent_msg is None and not curr_node.fetch_parent_failed:
                         parent = await self._find_parent_message(curr_msg, is_dm)
                         if parent is None and curr_msg.reference and curr_msg.reference.message_id:
-                            curr_node.fetch_parent_failed = True # Mark failure if reference existed but fetch failed
+                            curr_node.fetch_parent_failed = True
                         curr_node.parent_msg = parent
 
-
-                # --- Prepare content for this node (using potentially updated curr_node.text) ---
                 current_text_content = ""
-                # --- MODIFICATION START: Prepend external content if present ---
-                # Prepend external content if it exists for this node
                 if curr_node.external_content:
                     current_text_content += curr_node.external_content + "\n\nUser's query:\n"
                     logging.debug(f"Prepending external_content for node {curr_msg.id} in history build")
-                # --- MODIFICATION END ---
 
-                # --- MODIFICATION START: Use correct text based on role ---
-                # Use the text we just populated/retrieved, prioritizing full_response_text for bot
                 node_text_to_use = ""
                 if curr_node.role == "model":
                     node_text_to_use = curr_node.full_response_text or curr_node.text or ""
                     if not curr_node.full_response_text and curr_node.text:
                         logging.debug(f"Using fallback curr_node.text for bot message {curr_msg.id} in history build")
-                else: # User role
+                else: 
                     node_text_to_use = curr_node.text or ""
 
                 if node_text_to_use:
                     current_text_content += node_text_to_use
-                # --- MODIFICATION END ---
 
-                # Limit the combined text content *before* sending to API
                 current_text_content = current_text_content[:max_text] if current_text_content else ""
-                current_images = curr_node.images[:max_images] # Apply image limit here too
+                current_api_file_parts = curr_node.api_file_parts[:max_files_per_message] # Apply API file limit here
 
-                # --- API Formatting Logic (remains the same) ---
                 parts_for_api = []
                 if is_gemini:
                     if current_text_content:
                         parts_for_api.append(google_types.Part.from_text(text=current_text_content))
-                    parts_for_api.extend(current_images)
-                else: # OpenAI format
+                    parts_for_api.extend(current_api_file_parts)
+                else: 
                     if current_text_content:
                         parts_for_api.append({"type": "text", "text": current_text_content})
-                    parts_for_api.extend(current_images)
+                    parts_for_api.extend(current_api_file_parts) # This now correctly passes list of dicts for OpenAI
 
-                # Add to history if parts exist
                 if parts_for_api:
                     message_data = {"role": curr_node.role}
                     if is_gemini:
                         if not isinstance(parts_for_api, list): parts_for_api = [parts_for_api]
                         message_data["parts"] = parts_for_api
-                    else: # OpenAI compatible
-                        if message_data["role"] == "model": message_data["role"] = "assistant" # Adjust role name
-                        # OpenAI expects 'content' which can be string or list of parts
+                    else: 
+                        if message_data["role"] == "model": message_data["role"] = "assistant"
                         if len(parts_for_api) == 1 and parts_for_api[0]["type"] == "text":
-                            message_data["content"] = parts_for_api[0]["text"] # Use string if only text
+                            message_data["content"] = parts_for_api[0]["text"]
                         else:
-                            message_data["content"] = parts_for_api # Use list for multimodal
-                        # Add name field if supported
+                            message_data["content"] = parts_for_api
                         if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.role == "user" and curr_node.user_id is not None:
                             message_data["name"] = str(curr_node.user_id)
-
                     history.append(message_data)
 
-                # --- Warning Logic (remains the same) ---
-                # Add warnings based on limits and errors for this specific node
-                if curr_node.text and len(curr_node.text) > max_text:
-                    user_warnings.add(f"⚠️ Max {max_text:,} chars/msg node")
-                if len(curr_node.images) > max_images:
-                    user_warnings.add(f"⚠️ Max {max_images} images/msg" if max_images > 0 else "⚠️ Can't see images")
-                if curr_node.has_bad_attachments:
-                    user_warnings.add("⚠️ Unsupported attachments")
+                if curr_node.text and len(curr_node.text) > max_text: # Check length of text content for this node
+                    user_warnings.add(f"⚠️ Max {max_text:,} chars/msg node text")
+                # Warning for hitting max_files_per_message is logged inside the loop.
+                # The curr_node.has_bad_attachments flag handles general attachment issues.
+                if curr_node.has_bad_attachments: # This flag is now more accurately set
+                    user_warnings.add("⚠️ Some attachments might not have been processed (limit, error, or type).")
                 if curr_node.fetch_parent_failed:
                      user_warnings.add(f"⚠️ Couldn't fetch full history")
-                if curr_node.parent_msg is not None and len(history) >= max_messages: # Check >= max_messages
+                if curr_node.parent_msg is not None and len(history) >= max_messages:
                      user_warnings.add(f"⚠️ Only using last {max_messages} messages")
 
-                # Move to the parent message
                 curr_msg = curr_node.parent_msg
-
-        return history[::-1] # Reverse history for correct chronological order
+        return history[::-1]
 
     async def _find_parent_message(self, message: discord.Message, is_dm: bool) -> Optional[discord.Message]:
         """Determines the logical parent message for conversation history."""

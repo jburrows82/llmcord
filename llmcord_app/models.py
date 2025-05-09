@@ -8,7 +8,7 @@ import discord
 class MsgNode:
     """Represents a node in the conversation history cache."""
     text: Optional[str] = None
-    images: list = field(default_factory=list) # Stores prepared image data for API (dict for OpenAI, Part for Gemini)
+    api_file_parts: list = field(default_factory=list) # Renamed from 'images', stores prepared API parts (img, pdf)
     role: Literal["user", "assistant", "model"] = "assistant" # 'model' for Gemini assistant role
     user_id: Optional[int] = None # Discord user ID if role is 'user'
     has_bad_attachments: bool = False # Flag if unsupported/failed attachments were present
