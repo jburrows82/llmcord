@@ -1,6 +1,19 @@
 import yaml
 import logging
 import os
+from .constants import SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_DEFAULT_URL, GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
+
+# --- ADDED DEFAULT GROUNDING PROMPT ---
+DEFAULT_GROUNDING_SYSTEM_PROMPT = """
+You are an expert at analyzing user queries and conversation history to determine the most effective web search queries that will help answer the user's latest request or continue the conversation meaningfully.
+Based on the provided conversation history (especially the last user message), output a list of concise and targeted search queries.
+Focus on identifying key entities, concepts, questions, or current events mentioned that would benefit from fresh information from the web.
+If the user's query is a direct question, formulate search queries that would find the answer.
+If the user is discussing a topic, formulate queries that would find recent developments, facts, or relevant discussions.
+Do not generate more than 5 search queries.
+Output only the search queries, each on a new line. Do not add any other text, preamble, or explanation.
+""".strip()
+# --- END DEFAULT GROUNDING PROMPT ---
 
 def get_config(filename="config.yaml"):
     """Loads, validates, and returns the configuration from a YAML file."""
@@ -97,6 +110,20 @@ def get_config(filename="config.yaml"):
                     perms[key]["allowed_ids"] = []
                 if "blocked_ids" not in perms[key]:
                     perms[key]["blocked_ids"] = []
+
+            # Load SearxNG base URL
+            if SEARXNG_BASE_URL_CONFIG_KEY not in config_data:
+                logging.info(f"'{SEARXNG_BASE_URL_CONFIG_KEY}' not found in {filename}. Using default: {SEARXNG_DEFAULT_URL}")
+                config_data[SEARXNG_BASE_URL_CONFIG_KEY] = SEARXNG_DEFAULT_URL
+            elif not config_data.get(SEARXNG_BASE_URL_CONFIG_KEY): # Check if it's empty
+                logging.warning(f"'{SEARXNG_BASE_URL_CONFIG_KEY}' is empty in {filename}. Using default: {SEARXNG_DEFAULT_URL}")
+                config_data[SEARXNG_BASE_URL_CONFIG_KEY] = SEARXNG_DEFAULT_URL
+
+            # --- ADDED: Load Grounding System Prompt ---
+            if GROUNDING_SYSTEM_PROMPT_CONFIG_KEY not in config_data or not config_data.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY):
+                logging.info(f"'{GROUNDING_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default.")
+                config_data[GROUNDING_SYSTEM_PROMPT_CONFIG_KEY] = DEFAULT_GROUNDING_SYSTEM_PROMPT
+            # --- END ADDED ---
 
             return config_data
 

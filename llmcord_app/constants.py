@@ -35,6 +35,17 @@ IMGUR_URL_PREFIX = "https://i.imgur.com/"
 IMGUR_URL_PATTERN = re.compile(r"^(https://i\.imgur\.com/[a-zA-Z0-9]+\.(?:jpeg|jpg|png|gif))$")
 # --- END ADDED CONSTANTS ---
 
+# --- SearxNG and Grounding ---
+SEARXNG_BASE_URL_CONFIG_KEY = "searxng_base_url"
+SEARXNG_DEFAULT_URL = "http://localhost:18088" # Default if not in config
+SEARXNG_NUM_RESULTS = 5
+GROUNDING_MODEL_PROVIDER = "google"
+GROUNDING_MODEL_NAME = "gemini-2.0-flash"
+# --- ADDED CONSTANT ---
+GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
+# --- END ADDED CONSTANT ---
+# --- End SearxNG and Grounding ---
+
 # --- Rate Limiting ---
 RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"

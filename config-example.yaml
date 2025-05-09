@@ -123,6 +123,16 @@ providers:
     base_url: http://localhost:1337/v1
     api_keys: []
 
+# SearXNG instance URL for grounding enhancement:
+# Used if a non-Gemini/non-Grok model is selected, to provide web search results.
+searxng_base_url: http://localhost:18088 # Your SearxNG instance with /search endpoint and JSON format enabled
+
+# System prompt for the Gemini model (gemini-2.0-flash) when it's used to determine
+# web search queries for grounding non-Gemini/non-Grok models.
+# This prompt guides Gemini on how to generate relevant search terms.
+grounding_system_prompt: |
+  ANSWER IN ONLY ONE SENTENCE.
+
 model: openai/gpt-4.1 # Example: Select the provider and model
 
 extra_api_parameters:

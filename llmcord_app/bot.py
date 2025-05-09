@@ -26,7 +26,10 @@ from .constants import (
     GOOGLE_LENS_KEYWORD, VISION_MODEL_TAGS, AVAILABLE_MODELS,
     DEEP_SEARCH_KEYWORDS, DEEP_SEARCH_MODEL, PROVIDERS_SUPPORTING_USERNAMES,
     AllKeysFailedError, IMGUR_HEADER, IMGUR_URL_PREFIX, IMGUR_URL_PATTERN, # <-- Added Imgur constants
-    MAX_PLAIN_TEXT_LENGTH # <-- Added plain text limit
+    MAX_PLAIN_TEXT_LENGTH, # <-- Added plain text limit
+    SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_NUM_RESULTS, # Added SearxNG constants
+    GROUNDING_MODEL_PROVIDER, GROUNDING_MODEL_NAME, # Added Grounding model constants
+    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY # <-- ADDED
 )
 # Corrected import: Use the models module directly
 from . import models # Import the models module
@@ -38,7 +41,7 @@ from .utils import (
 )
 from .content_fetchers import (
     fetch_youtube_data, fetch_reddit_data, fetch_general_url_content,
-    process_google_lens_image
+    process_google_lens_image, fetch_searxng_results # Added fetch_searxng_results
 )
 from .llm_handler import generate_response_stream
 from .commands import set_model_command, get_user_model_preference, set_system_prompt_command, get_user_system_prompt_preference # Import command logic and preference getter
@@ -210,6 +213,9 @@ class LLMCordClient(discord.Client):
         all_api_keys = provider_config.get("api_keys", []) # Expecting a list
 
         is_gemini = provider == "google"
+        # Determine if the target model is Grok
+        is_grok_model = provider == "x-ai" # Assuming DEEP_SEARCH_MODEL is the only Grok model or x-ai is only Grok
+        
         keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
 
         if keys_required and not all_api_keys:
@@ -254,17 +260,86 @@ class LLMCordClient(discord.Client):
             return
 
         # --- URL Extraction and Content Fetching ---
-        url_fetch_results = await self._fetch_external_content(
-            cleaned_content, image_attachments, use_google_lens, max_files_per_message, user_warnings # Pass max_files_per_message
-        )
+        # This section needs to be conditional based on the new SearxNG grounding enhancement.
 
-        # --- Format External Content ---
-        combined_context = self._format_external_content(url_fetch_results)
+        combined_context = ""
+        url_fetch_results_for_user_urls = [] # Store results from user-provided URLs
 
-        # --- Build Message History ---
+        # --- New Grounding Pre-processing Logic ---
+        searxng_derived_context = None
+        # Perform grounding if target is not Gemini and not Grok
+        if not is_gemini and not is_grok_model:
+            logging.info(f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok. Attempting grounding pre-step.")
+            
+            # For the Gemini grounding call, we need a history.
+            # This history should represent what Gemini would see.
+            # It should include the current user's `cleaned_content` and prior messages.
+            # It should NOT include `combined_context` from user-provided URLs yet.
+            
+            # Build a preliminary history for the grounding call
+            # This history will include attachments as processed by _build_message_history
+            # Pass empty combined_context for this preliminary history build.
+            history_for_gemini_grounding = await self._build_message_history(
+                new_msg, cleaned_content, "", # Empty combined_context for grounding history
+                max_messages, max_text, max_files_per_message,
+                True, # Assume Gemini can accept files for grounding call
+                False, # Not using Google Lens for this internal Gemini call
+                True, # It IS a Gemini call (for grounding_model_name)
+                GROUNDING_MODEL_PROVIDER, # Provider for grounding
+                GROUNDING_MODEL_NAME, # Model for grounding
+                user_warnings # Pass user_warnings to collect any from history build
+            )
+
+            if history_for_gemini_grounding:
+                # Prepare system prompt for the grounding call
+                # --- MODIFIED: Use dedicated grounding system prompt ---
+                grounding_sp_text_from_config = self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY) # Get the dedicated prompt
+                # For the grounding step, we always use the configured grounding prompt, not a user-specific one.
+                system_prompt_for_grounding = self._prepare_system_prompt(
+                    True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config # Pass the dedicated prompt
+                )
+                # --- END MODIFICATION ---
+                
+                web_search_queries = await self._get_web_search_queries_from_gemini(
+                    history_for_gemini_grounding,
+                    system_prompt_for_grounding
+                )
+
+                if web_search_queries:
+                    searxng_derived_context = await self._fetch_and_format_searxng_results(
+                        web_search_queries,
+                        cleaned_content # For logging purposes
+                    )
+                    if searxng_derived_context:
+                        logging.info("Successfully generated context from SearxNG results.")
+                        combined_context = searxng_derived_context
+                    else:
+                        logging.info("Failed to generate context from SearxNG, or no results found.")
+                else:
+                    logging.info("Gemini grounding did not yield any web search queries.")
+            else:
+                logging.warning("Could not build history for Gemini grounding step. Skipping.")
+        
+        # If SearxNG context was not generated, fall back to processing user-provided URLs
+        if not combined_context:
+            logging.info("No SearxNG context generated. Processing user-provided URLs if any.")
+            url_fetch_results_for_user_urls = await self._fetch_external_content(
+                cleaned_content, image_attachments, use_google_lens, max_files_per_message, user_warnings
+            )
+            if url_fetch_results_for_user_urls:
+                 combined_context = self._format_external_content(url_fetch_results_for_user_urls)
+        else:
+            logging.info("Using SearxNG derived context. Skipping user-provided URL fetching for main context.")
+            # We still might want to add a warning if user provided URLs but they were ignored.
+            if extract_urls_with_indices(cleaned_content):
+                user_warnings.add("ℹ️ Web search results are being used for context; direct URL processing from your message was skipped.")
+
+
+        # --- Build Message History (for the *target* LLM) ---
+        # `combined_context` now holds either SearxNG results or user-URL results.
         history_for_llm = await self._build_message_history(
             new_msg, cleaned_content, combined_context, max_messages, max_text, max_files_per_message,
-            accept_files, use_google_lens, is_gemini, provider, user_warnings
+            accept_files, use_google_lens, is_gemini, provider, model_name, user_warnings # Pass provider and model_name for the target LLM
         )
 
         if not history_for_llm:
@@ -802,8 +877,7 @@ class LLMCordClient(discord.Client):
 
         return combined_context.strip()
 
-    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_files_per_message: int, accept_files: bool, use_google_lens: bool, is_gemini: bool, provider: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
-        """Builds the message history list for the LLM API call."""
+    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_files_per_message: int, accept_files: bool, use_google_lens: bool, is_target_provider_gemini: bool, target_provider_name: str, target_model_name: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
         history = []
         curr_msg = new_msg
         is_dm = isinstance(new_msg.channel, discord.DMChannel)
@@ -831,7 +905,32 @@ class LLMCordClient(discord.Client):
             curr_node = self.msg_nodes[curr_msg.id]
 
             async with curr_node.lock:
-                needs_population = curr_node.text is None
+                # Always set/update external_content for the *current message node* (new_msg)
+                # if combined_context is provided for this specific history build.
+                # This ensures that the context (e.g., SearxNG results) is correctly associated
+                # with the current turn's node, even if the node was touched by a previous step (like grounding).
+                if curr_msg.id == new_msg.id:
+                    if combined_context:
+                        curr_node.external_content = combined_context
+                        logging.debug(f"Applied combined_context as external_content for current node {curr_msg.id}.")
+                    else:
+                        # If no combined_context is provided for the current message in this specific build,
+                        # ensure any pre-existing external_content on the node (from other stages) isn't used.
+                        # For the purpose of *this history build*, treat external_content as None.
+                        # The actual curr_node.external_content might still hold old data if not overwritten,
+                        # but the logic below will use it. So, if combined_context is empty for this call,
+                        # it effectively means no external_content for this turn.
+                        # To be absolutely safe for this specific build, we could use a temporary variable.
+                        # However, the current logic for assembling current_text_content relies on curr_node.external_content.
+                        # So, if combined_context is empty, we should ensure curr_node.external_content reflects that for this build.
+                        # Let's explicitly set it to None if combined_context is empty for the current message.
+                        # This prevents stale external_content from a previous phase (e.g. grounding) from leaking if this
+                        # history build is supposed to have no external_content (e.g. combined_context parameter is empty).
+                        curr_node.external_content = None # Explicitly clear if no combined_context for this new_msg build
+                        logging.debug(f"No combined_context provided for current node {curr_msg.id}, external_content is None for this build.")
+
+
+                needs_population = curr_node.text is None # Or other primary content like attachments
                 current_role = "model" if curr_msg.author == self.user else "user"
 
                 if needs_population:
@@ -882,7 +981,7 @@ class LLMCordClient(discord.Client):
                                 # PDFs are relevant if:
                                 # 1. Gemini model that accepts files (sent as bytes)
                                 # 2. Non-Gemini model (text will be extracted from the downloaded PDF)
-                                if (is_gemini and accept_files) or (not is_gemini):
+                                if (is_target_provider_gemini and accept_files) or (not is_target_provider_gemini):
                                     is_relevant_for_download = True
                             
                             if is_relevant_for_download:
@@ -917,7 +1016,7 @@ class LLMCordClient(discord.Client):
                     curr_node.text = "\n".join(filter(None, text_parts))
 
                     # --- NEW: PDF text extraction for non-Gemini models ---
-                    if current_role == "user" and not is_gemini:
+                    if current_role == "user" and not is_target_provider_gemini: # Use is_target_provider_gemini
                         pdf_texts_to_append = []
                         for att, resp in zip(attachments_to_fetch, attachment_responses):
                             if att.content_type == "application/pdf":
@@ -960,7 +1059,8 @@ class LLMCordClient(discord.Client):
                                 is_api_relevant_type = True
                             # ONLY send PDF bytes if it's Gemini AND accept_files.
                             # For non-Gemini, PDF text is already extracted and appended to the query.
-                            elif att.content_type == "application/pdf" and is_gemini and accept_files:
+                            # Use is_target_provider_gemini here
+                            elif att.content_type == "application/pdf" and is_target_provider_gemini and accept_files:
                                 is_api_relevant_type = True
                             
                             if not is_api_relevant_type:
@@ -976,7 +1076,7 @@ class LLMCordClient(discord.Client):
                                 if att.content_type.startswith("image/"):
                                     try:
                                         img_bytes = resp.content
-                                        if is_gemini:
+                                        if is_target_provider_gemini: # Use is_target_provider_gemini
                                             api_file_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=att.content_type))
                                         else: 
                                             api_file_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
@@ -984,7 +1084,7 @@ class LLMCordClient(discord.Client):
                                     except Exception as img_e:
                                          logging.error(f"Error processing image attachment {att.filename} for API in msg {curr_msg.id}: {img_e}")
                                          curr_node.has_bad_attachments = True
-                                elif att.content_type == "application/pdf" and is_gemini:
+                                elif att.content_type == "application/pdf" and is_target_provider_gemini: # Use is_target_provider_gemini
                                     try:
                                         pdf_bytes = resp.content
                                         api_file_parts.append(google_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
@@ -1005,10 +1105,6 @@ class LLMCordClient(discord.Client):
                     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
                     # The old check `curr_node.has_bad_attachments = curr_node.has_bad_attachments or (len(current_attachments) > len(good_attachments))` is removed.
                     # Its intent is covered by MAX_ATTACHMENTS_TO_DOWNLOAD_IN_HISTORY check and unfetched_unsupported_types flag.
-
-                    if curr_msg.id == new_msg.id and combined_context:
-                        curr_node.external_content = combined_context
-                        logging.debug(f"Stored external_content in node {curr_msg.id}")
 
                     if curr_node.parent_msg is None and not curr_node.fetch_parent_failed:
                         parent = await self._find_parent_message(curr_msg, is_dm)
@@ -1036,7 +1132,7 @@ class LLMCordClient(discord.Client):
                 current_api_file_parts = curr_node.api_file_parts[:max_files_per_message] # Apply API file limit here
 
                 parts_for_api = []
-                if is_gemini:
+                if is_target_provider_gemini: # Use is_target_provider_gemini
                     if current_text_content:
                         parts_for_api.append(google_types.Part.from_text(text=current_text_content))
                     parts_for_api.extend(current_api_file_parts)
@@ -1047,16 +1143,40 @@ class LLMCordClient(discord.Client):
 
                 if parts_for_api:
                     message_data = {"role": curr_node.role}
-                    if is_gemini:
+                    if is_target_provider_gemini: # Use is_target_provider_gemini
                         if not isinstance(parts_for_api, list): parts_for_api = [parts_for_api]
                         message_data["parts"] = parts_for_api
-                    else: 
+                    else: # Non-Gemini
                         if message_data["role"] == "model": message_data["role"] = "assistant"
+                        
+                        # Determine the content for the message_data
+                        final_content_for_api = ""
                         if len(parts_for_api) == 1 and parts_for_api[0]["type"] == "text":
-                            message_data["content"] = parts_for_api[0]["text"]
-                        else:
-                            message_data["content"] = parts_for_api
-                        if provider in PROVIDERS_SUPPORTING_USERNAMES and curr_node.role == "user" and curr_node.user_id is not None:
+                            final_content_for_api = parts_for_api[0]["text"]
+                        elif parts_for_api: # Multimodal content
+                            final_content_for_api = parts_for_api
+                        
+                        message_data["content"] = final_content_for_api
+                        
+                        # ADDED/MODIFIED DETAILED LOGGING HERE
+                        if curr_msg.id == new_msg.id and target_provider_name != "google":
+                            logging.info(f"DEBUG MSG HISTORY (User: {curr_msg.author.name}, Target: {target_provider_name}/{target_model_name}):")
+                            log_external_content = str(curr_node.external_content) if curr_node.external_content else "None"
+                            log_node_text = str(curr_node.text) if curr_node.text else "None"
+                            # current_text_content is the source for parts_for_api[0]['text']
+                            log_assembled_text_for_parts = "N/A (multimodal or empty)"
+                            if isinstance(final_content_for_api, str):
+                                log_assembled_text_for_parts = final_content_for_api
+                            elif isinstance(final_content_for_api, list) and final_content_for_api and final_content_for_api[0].get("type") == "text":
+                                log_assembled_text_for_parts = final_content_for_api[0].get("text", "ERROR GETTING TEXT")
+
+
+                            logging.info(f"  - Node Text (Original Query): '{log_node_text[:200]}{'...' if len(log_node_text) > 200 else ''}'")
+                            logging.info(f"  - Node External Content (SearxNG/URL): '{log_external_content[:300]}{'...' if len(log_external_content) > 300 else ''}'")
+                            logging.info(f"  - Assembled text for API parts: '{log_assembled_text_for_parts[:500]}{'...' if len(log_assembled_text_for_parts) > 500 else ''}'")
+                            logging.info(f"  - Final message_data['content'] for API: '{str(message_data['content'])[:500]}{'...' if len(str(message_data['content'])) > 500 else ''}'")
+
+                        if target_provider_name in PROVIDERS_SUPPORTING_USERNAMES and curr_node.role == "user" and curr_node.user_id is not None: # Use target_provider_name
                             message_data["name"] = str(curr_node.user_id)
                     history.append(message_data)
 
@@ -1156,6 +1276,183 @@ class LLMCordClient(discord.Client):
             system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
 
         return "\n".join([base_prompt_text] + system_prompt_extras)
+
+    async def _get_web_search_queries_from_gemini(
+        self,
+        history_for_gemini_grounding: List[Dict[str, Any]],
+        system_prompt_text_for_grounding: Optional[str]
+    ) -> Optional[List[str]]:
+        """
+        Calls Gemini to get web search queries from its grounding metadata.
+        """
+        logging.info("Attempting to get web search queries from Gemini for grounding...")
+        gemini_provider_config = self.config.get("providers", {}).get(GROUNDING_MODEL_PROVIDER, {})
+        if not gemini_provider_config or not gemini_provider_config.get("api_keys"):
+            logging.warning(f"Cannot perform Gemini grounding step: Provider '{GROUNDING_MODEL_PROVIDER}' not configured with API keys.")
+            return None
+
+        all_web_search_queries = set() # Use a set to store unique queries
+
+        try:
+            # Use a minimal set of extra_params for the grounding call
+            grounding_extra_params = {"temperature": 0.7} # Could be configurable
+            
+            stream_generator = generate_response_stream(
+                provider=GROUNDING_MODEL_PROVIDER,
+                model_name=GROUNDING_MODEL_NAME,
+                history_for_llm=history_for_gemini_grounding,
+                system_prompt_text=system_prompt_text_for_grounding,
+                provider_config=gemini_provider_config,
+                extra_params=grounding_extra_params
+            )
+
+            async for _, _, chunk_grounding_metadata, error_message in stream_generator:
+                if error_message:
+                    logging.error(f"Error during Gemini grounding call: {error_message}")
+                    # Don't immediately fail all, maybe some metadata was already processed
+                    # Or, decide if any error here should abort query gathering
+                    return None # Abort on first error for simplicity now
+
+                if chunk_grounding_metadata:
+                    if hasattr(chunk_grounding_metadata, 'web_search_queries') and chunk_grounding_metadata.web_search_queries:
+                        for query in chunk_grounding_metadata.web_search_queries:
+                            if isinstance(query, str) and query.strip():
+                                all_web_search_queries.add(query.strip())
+                                logging.debug(f"Gemini grounding produced search query: '{query.strip()}'")
+            
+            if all_web_search_queries:
+                logging.info(f"Gemini grounding produced {len(all_web_search_queries)} unique search queries.")
+                return list(all_web_search_queries)
+            else:
+                logging.info("Gemini grounding call completed but found no web_search_queries in metadata.")
+                return None
+
+        except AllKeysFailedError as e:
+            logging.error(f"All API keys failed for Gemini grounding model ({GROUNDING_MODEL_PROVIDER}/{GROUNDING_MODEL_NAME}): {e}")
+            return None
+        except Exception as e:
+            logging.exception(f"Unexpected error during Gemini grounding call to get search queries:")
+            return None
+
+    async def _fetch_and_format_searxng_results(
+        self,
+        queries: List[str],
+        user_query_for_log: str # For logging context
+    ) -> Optional[str]:
+        """
+        Fetches search results from SearxNG for given queries,
+        then fetches content of those URLs (uniquely) and formats them.
+        """
+        if not queries:
+            return None
+
+        searxng_base_url = self.config.get(SEARXNG_BASE_URL_CONFIG_KEY)
+        if not searxng_base_url:
+            logging.warning("SearxNG base URL not configured. Skipping web search enhancement.")
+            return None
+
+        logging.info(f"Fetching SearxNG results for {len(queries)} queries related to user query: '{user_query_for_log[:100]}...'")
+
+        # Fetch SearxNG URLs for all queries concurrently
+        searxng_tasks = []
+        for query in queries:
+            searxng_tasks.append(
+                fetch_searxng_results(query, self.httpx_client, searxng_base_url, SEARXNG_NUM_RESULTS)
+            )
+        
+        try:
+            list_of_url_lists_per_query = await asyncio.gather(*searxng_tasks, return_exceptions=True)
+        except Exception as e:
+            logging.exception("Error gathering SearxNG results.")
+            return None
+
+        # Collect all unique URLs from all queries
+        unique_urls_to_fetch_content = set()
+        for i, query_urls_or_exc in enumerate(list_of_url_lists_per_query):
+            query_str = queries[i]
+            if isinstance(query_urls_or_exc, Exception):
+                logging.error(f"Failed to get SearxNG results for query '{query_str}': {query_urls_or_exc}")
+                continue
+            if not query_urls_or_exc:
+                logging.info(f"No URLs returned by SearxNG for query: '{query_str}'")
+                continue
+            for url_str in query_urls_or_exc:
+                if isinstance(url_str, str): # Ensure it's a string
+                    unique_urls_to_fetch_content.add(url_str)
+
+        if not unique_urls_to_fetch_content:
+            logging.info("No unique URLs found from SearxNG results to process content for.")
+            return None
+            
+        # Fetch content for all unique URLs concurrently
+        url_content_processing_tasks = []
+        for idx, url_str in enumerate(list(unique_urls_to_fetch_content)):
+            # The index here is for UrlFetchResult.original_index, can be simple enumeration
+            url_content_processing_tasks.append(
+                fetch_general_url_content(url_str, idx)
+            )
+        
+        try:
+            fetched_unique_content_results = await asyncio.gather(*url_content_processing_tasks, return_exceptions=True)
+        except Exception as e:
+            logging.exception("Error gathering content from unique SearxNG URLs.")
+            return None
+            
+        # Create a map of URL string to its fetched content result for easy lookup
+        url_to_content_map: Dict[str, models.UrlFetchResult] = {}
+        for result_or_exc in fetched_unique_content_results:
+            if isinstance(result_or_exc, models.UrlFetchResult):
+                url_to_content_map[result_or_exc.url] = result_or_exc
+            elif isinstance(result_or_exc, Exception):
+                # Error logged by fetch_general_url_content or here if it's a direct task exception
+                logging.error(f"Exception while processing a unique URL for content: {result_or_exc}")
+
+
+        # Now, format the output using the pre-fetched unique content
+        formatted_query_blocks = []
+        query_counter = 1
+
+        for i, query_str in enumerate(queries):
+            urls_for_this_query_or_exc = list_of_url_lists_per_query[i]
+            
+            if isinstance(urls_for_this_query_or_exc, Exception) or not urls_for_this_query_or_exc:
+                # Already logged if it was an exception or empty list
+                continue
+
+            current_query_url_content_parts = []
+            url_counter_for_query = 1
+            
+            # Iterate through the URLs SearxNG provided FOR THIS SPECIFIC QUERY
+            for url_from_searxng_for_query in urls_for_this_query_or_exc:
+                if not isinstance(url_from_searxng_for_query, str):
+                    continue # Skip if not a string (e.g. error object)
+
+                # Look up the pre-fetched content
+                content_result = url_to_content_map.get(url_from_searxng_for_query)
+                
+                if content_result and content_result.content and not content_result.error:
+                    current_query_url_content_parts.append(
+                        f"URL {url_counter_for_query}: {content_result.url}\n"
+                        f"URL {url_counter_for_query} content:\n{str(content_result.content)}\n"
+                    )
+                    url_counter_for_query += 1
+                elif content_result and content_result.error:
+                    logging.warning(f"Skipping SearxNG URL {content_result.url} for query '{query_str}' due to fetch error: {content_result.error}")
+                # If not in map, it means it wasn't a valid URL initially or some other issue
+                elif not content_result:
+                     logging.warning(f"Content for SearxNG URL {url_from_searxng_for_query} (query: '{query_str}') not found in pre-fetched map. It might have been invalid or failed very early.")
+            
+            if current_query_url_content_parts:
+                query_block_header = f'Query {query_counter} ("{query_str}") search results:\n\n'
+                formatted_query_blocks.append(query_block_header + "\n".join(current_query_url_content_parts))
+                query_counter += 1
+        
+        if formatted_query_blocks:
+            final_context = "Answer the user's query based on the following:\n\n" + "\n\n".join(formatted_query_blocks) # Add double newline between query blocks
+            return final_context.strip()
+
+        logging.info("No content successfully fetched and formatted from SearxNG result URLs.")
+        return None
 
     async def close(self):
         """Clean up resources when the bot is shutting down."""
