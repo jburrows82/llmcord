@@ -5,6 +5,8 @@ import json
 from typing import List, Tuple, Optional, Any
 import discord
 from google.genai import types as google_types # Use google.genai.types
+import pypdfium2 as pdfium # Added import
+import asyncio # Added import
 
 from .constants import (
     GENERAL_URL_PATTERN, YOUTUBE_URL_PATTERN, REDDIT_URL_PATTERN,
@@ -100,6 +102,32 @@ def add_field_safely(embed: discord.Embed, name: str, value: str, inline: bool, 
         return current_embed # Return the same embed
 
 # --- Payload Utilities ---
+
+async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
+    """Extracts text from PDF bytes using pypdfium2, run in a thread."""
+    if not pdf_bytes:
+        return None
+
+    def sync_extract():
+        try:
+            pdf_doc = pdfium.PdfDocument(pdf_bytes)
+            all_text = ""
+            for page_index in range(len(pdf_doc)):
+                page = pdf_doc.get_page(page_index)
+                textpage = page.get_textpage()
+                all_text += textpage.get_text_bounded() + "\n" # Add newline between pages
+                textpage.close()
+                page.close()
+            pdf_doc.close()
+            return all_text.strip()
+        except Exception as e:
+            # The caller (in bot.py) will log this exception.
+            raise # Re-raise to be caught by asyncio.to_thread and then the caller
+
+    try:
+        return await asyncio.to_thread(sync_extract)
+    except Exception: # Catch exceptions from sync_extract re-raised by to_thread
+        raise # Re-raise for the caller in bot.py
 
 def _truncate_base64_in_payload(payload: Any, max_len: int = 40, prefix_len: int = 10) -> Any:
     """

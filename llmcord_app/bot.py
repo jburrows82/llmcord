@@ -34,7 +34,7 @@ from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
 from .ui import ResponseActionView
 from .utils import (
     extract_urls_with_indices, is_youtube_url, is_reddit_url,
-    extract_video_id, extract_reddit_submission_id
+    extract_video_id, extract_reddit_submission_id, extract_text_from_pdf_bytes
 )
 from .content_fetchers import (
     fetch_youtube_data, fetch_reddit_data, fetch_general_url_content,
@@ -241,7 +241,8 @@ class LLMCordClient(discord.Client):
             att.content_type and (
                 (att.content_type.startswith("image/") and (accept_files or use_google_lens))
                 or att.content_type.startswith("text/")
-                or (is_gemini and att.content_type == "application/pdf" and accept_files) # Added PDF check for Gemini
+                # PDF is meaningful if Gemini can accept files OR if it's non-Gemini (text will be extracted)
+                or (att.content_type == "application/pdf" and ((is_gemini and accept_files) or not is_gemini))
             )
             for att in new_msg.attachments
         )
@@ -873,9 +874,16 @@ class LLMCordClient(discord.Client):
                             if att.content_type.startswith("text/"):
                                 is_relevant_for_download = True
                             elif att.content_type.startswith("image/"):
-                                is_relevant_for_download = True
-                            elif att.content_type == "application/pdf" and is_gemini and accept_files:
-                                is_relevant_for_download = True
+                                # Images are relevant if the model can accept files (accept_files is true for vision models)
+                                # or if it's the current message and Google Lens is active.
+                                if accept_files or (curr_msg.id == new_msg.id and use_google_lens):
+                                    is_relevant_for_download = True
+                            elif att.content_type == "application/pdf":
+                                # PDFs are relevant if:
+                                # 1. Gemini model that accepts files (sent as bytes)
+                                # 2. Non-Gemini model (text will be extracted from the downloaded PDF)
+                                if (is_gemini and accept_files) or (not is_gemini):
+                                    is_relevant_for_download = True
                             
                             if is_relevant_for_download:
                                 attachments_to_fetch.append(att)
@@ -908,6 +916,35 @@ class LLMCordClient(discord.Client):
 
                     curr_node.text = "\n".join(filter(None, text_parts))
 
+                    # --- NEW: PDF text extraction for non-Gemini models ---
+                    if current_role == "user" and not is_gemini:
+                        pdf_texts_to_append = []
+                        for att, resp in zip(attachments_to_fetch, attachment_responses):
+                            if att.content_type == "application/pdf":
+                                if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                                    try:
+                                        pdf_bytes = resp.content
+                                        # Use the new utility function
+                                        extracted_pdf_text = await extract_text_from_pdf_bytes(pdf_bytes)
+                                        if extracted_pdf_text:
+                                            # Format similar to the user's example
+                                            pdf_texts_to_append.append(f"\n\n--- Content from PDF: {att.filename} ---\n{extracted_pdf_text}\n--- End of PDF: {att.filename} ---")
+                                        else:
+                                            logging.warning(f"Could not extract text from PDF {att.filename} for non-Gemini model in msg {curr_msg.id}.")
+                                            curr_node.has_bad_attachments = True
+                                    except Exception as pdf_extract_err:
+                                        logging.error(f"Error extracting text from PDF {att.filename} for non-Gemini model in msg {curr_msg.id}: {pdf_extract_err}")
+                                        curr_node.has_bad_attachments = True
+                                elif isinstance(resp, Exception): # Fetch failed
+                                    logging.warning(f"Failed to fetch PDF attachment {att.filename} for text extraction (non-Gemini) in msg {curr_msg.id}: {resp}")
+                                    curr_node.has_bad_attachments = True
+                        
+                        if pdf_texts_to_append:
+                            # Append extracted PDF text to the existing node text
+                            curr_node.text = (curr_node.text or "") + "".join(pdf_texts_to_append)
+                            logging.info(f"Appended text from {len(pdf_texts_to_append)} PDF(s) to user query for non-Gemini model in message {curr_msg.id}")
+                    # --- END NEW PDF text extraction ---
+
                     api_file_parts = [] # Renamed from image_parts
                     files_processed_for_api_count = 0 # Renamed from images_processed_count
                     is_lens_trigger_message = curr_msg.id == new_msg.id and use_google_lens
@@ -918,8 +955,14 @@ class LLMCordClient(discord.Client):
                     if should_process_files_for_api and not is_lens_trigger_message:
                         for att, resp in zip(attachments_to_fetch, attachment_responses):
                             # Only consider image or PDF for API parts from fetched attachments
-                            is_api_relevant_type = att.content_type.startswith("image/") or \
-                                                   (att.content_type == "application/pdf" and is_gemini)
+                            is_api_relevant_type = False
+                            if att.content_type.startswith("image/"):
+                                is_api_relevant_type = True
+                            # ONLY send PDF bytes if it's Gemini AND accept_files.
+                            # For non-Gemini, PDF text is already extracted and appended to the query.
+                            elif att.content_type == "application/pdf" and is_gemini and accept_files:
+                                is_api_relevant_type = True
+                            
                             if not is_api_relevant_type:
                                 continue
 

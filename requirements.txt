@@ -10,3 +10,4 @@ beautifulsoup4
 google-search-results # SerpAPI library
 playwright # Added for custom Google Lens fallback
 lxml
+pypdfium2 # Added for PDF text extraction
