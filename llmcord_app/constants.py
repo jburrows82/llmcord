@@ -55,6 +55,7 @@ GEMINI_MIN_THINKING_BUDGET_VALUE = 0
 GEMINI_MAX_THINKING_BUDGET_VALUE = 24576
 USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME = "user_gemini_thinking_budget_prefs.json"
 USER_SYSTEM_PROMPTS_FILENAME = "user_system_prompts.json"
+USER_MODEL_PREFS_FILENAME = "user_model_prefs.json"
 # --- End Gemini Thinking Budget ---
 
 # --- Rate Limiting ---

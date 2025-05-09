@@ -7,7 +7,10 @@ import logging # <-- Add this import
 import json # <-- Add this import
 import os # <-- Add this import
 
-from .constants import AVAILABLE_MODELS, USER_SYSTEM_PROMPTS_FILENAME, USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME
+from .constants import (
+    AVAILABLE_MODELS, USER_SYSTEM_PROMPTS_FILENAME, USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
+    USER_MODEL_PREFS_FILENAME
+)
 
 # Get a logger for this module
 logger = logging.getLogger(__name__)
@@ -50,7 +53,7 @@ def _save_user_preferences(filename: str, data: Dict[int, Any]):
 # This dictionary will store user preferences {user_id: "provider/model_name"}
 # It should be managed by the bot instance or a dedicated state manager in a real app.
 # For this refactor, we'll keep it simple as a module-level dict.
-user_model_preferences: Dict[int, str] = {}
+user_model_preferences: Dict[int, str] = _load_user_preferences(USER_MODEL_PREFS_FILENAME)
 
 
 # --- MODIFIED: Initialize user-specific system prompts from file ---
@@ -113,6 +116,10 @@ async def set_model_command(interaction: discord.Interaction, provider: str, mod
     user_model_preferences[user_id] = model_preference
     # Use the logger obtained earlier
     logger.info(f"User {user_id} ({interaction.user.name}) set model preference to: {model_preference}") # <-- Corrected line
+
+    # --- ADDED: Save model preferences ---
+    _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
+    # --- END ADDED ---
 
     await interaction.response.send_message(f"Your LLM model has been set to `{model_preference}`.", ephemeral=False)
 
