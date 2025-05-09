@@ -46,6 +46,17 @@ GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- END ADDED CONSTANT ---
 # --- End SearxNG and Grounding ---
 
+# --- Gemini Thinking Budget ---
+GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"
+GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY = "gemini_thinking_budget_value"
+GEMINI_DEFAULT_USE_THINKING_BUDGET = False
+GEMINI_DEFAULT_THINKING_BUDGET_VALUE = 1024 # A sensible default
+GEMINI_MIN_THINKING_BUDGET_VALUE = 0
+GEMINI_MAX_THINKING_BUDGET_VALUE = 24576
+USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME = "user_gemini_thinking_budget_prefs.json"
+USER_SYSTEM_PROMPTS_FILENAME = "user_system_prompts.json"
+# --- End Gemini Thinking Budget ---
+
 # --- Rate Limiting ---
 RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"

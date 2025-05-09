@@ -181,6 +181,10 @@ async def generate_response_stream(
                 gemini_extra_params = extra_params.copy()
                 if "max_tokens" in gemini_extra_params:
                     gemini_extra_params["max_output_tokens"] = gemini_extra_params.pop("max_tokens")
+                
+                # --- ADDED: Handle thinking_budget for Gemini ---
+                gemini_thinking_budget_val = gemini_extra_params.pop("thinking_budget", None)
+                # --- END ADDED ---
 
                 gemini_safety_settings_list = [
                     google_types.SafetySetting(category=category, threshold=threshold)
@@ -192,6 +196,22 @@ async def generate_response_stream(
                     safety_settings=gemini_safety_settings_list,
                     tools=[google_types.Tool(google_search=google_types.GoogleSearch())] # Enable grounding
                 )
+                # --- ADDED: Apply thinking_budget if valid ---
+                if gemini_thinking_budget_val is not None:
+                    try:
+                        # Constants GEMINI_MIN_THINKING_BUDGET_VALUE and GEMINI_MAX_THINKING_BUDGET_VALUE are not directly available here
+                        # Validation should ideally happen before, but a basic check is good.
+                        # The config.py already validates the global value.
+                        budget_int = int(gemini_thinking_budget_val)
+                        if 0 <= budget_int <= 24576: # Max value for thinking_budget
+                            api_config.thinking_budget = budget_int
+                            logging.debug(f"Applied thinking_budget: {budget_int} to Gemini GenerateContentConfig")
+                        else:
+                            logging.warning(f"Invalid thinking_budget value ({budget_int}) passed to llm_handler. Ignoring.")
+                    except ValueError:
+                        logging.warning(f"Non-integer thinking_budget value ('{gemini_thinking_budget_val}') passed to llm_handler. Ignoring.")
+                # --- END ADDED ---
+
                 if system_prompt_text:
                      api_config.system_instruction = google_types.Part.from_text(text=system_prompt_text)
 

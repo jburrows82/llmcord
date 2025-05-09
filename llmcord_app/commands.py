@@ -7,10 +7,7 @@ import logging # <-- Add this import
 import json # <-- Add this import
 import os # <-- Add this import
 
-from .constants import AVAILABLE_MODELS
-
-# --- ADDED: Filename for storing user system prompts ---
-USER_SYSTEM_PROMPTS_FILENAME = "user_system_prompts.json"
+from .constants import AVAILABLE_MODELS, USER_SYSTEM_PROMPTS_FILENAME, USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME
 
 # Get a logger for this module
 logger = logging.getLogger(__name__)
@@ -58,6 +55,9 @@ user_model_preferences: Dict[int, str] = {}
 
 # --- MODIFIED: Initialize user-specific system prompts from file ---
 user_system_prompt_preferences: Dict[int, Optional[str]] = _load_user_preferences(USER_SYSTEM_PROMPTS_FILENAME)
+
+# --- ADDED: Initialize user-specific Gemini thinking budget preferences ---
+user_gemini_thinking_budget_preferences: Dict[int, bool] = _load_user_preferences(USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME)
 
 # --- Slash Command Autocomplete Functions ---
 async def provider_autocomplete(interaction: discord.Interaction, current: str) -> List[Choice[str]]:
@@ -180,3 +180,45 @@ def get_user_system_prompt_preference(user_id: int, default_prompt: Optional[str
     else:
         # User has not set any preference, use default
         return default_prompt
+
+# --- ADDED: Slash Command for Setting Gemini Thinking Budget Usage ---
+@app_commands.describe(enabled="Set to 'True' to use the thinking budget for Gemini, 'False' to disable it for your interactions.")
+async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
+    """
+    Sets your preference for using the 'thinkingBudget' parameter with Gemini models.
+    This can potentially improve response quality for complex queries but may increase latency.
+    The actual budget value is set globally in config.yaml.
+    """
+    global user_gemini_thinking_budget_preferences
+    user_id = interaction.user.id
+
+    try:
+        user_gemini_thinking_budget_preferences[user_id] = enabled
+        logger.info(f"User {user_id} ({interaction.user.name}) set Gemini thinking budget usage to: {enabled}")
+        status_message = "enabled" if enabled else "disabled"
+        await interaction.response.send_message(f"Your preference for Gemini 'thinkingBudget' has been set to **{status_message}**.", ephemeral=False)
+
+        _save_user_preferences(USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME, user_gemini_thinking_budget_preferences)
+
+    except Exception as e:
+        logger.exception(f"Error in setgeminithinking command for user {user_id} (Interaction ID: {interaction.id}): {e}")
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "An error occurred while setting your Gemini thinking budget preference. Please check the bot logs.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "An error occurred after the initial response while processing your Gemini thinking budget preference.",
+                    ephemeral=True
+                )
+        except discord.HTTPException as http_err:
+            logger.error(f"Failed to send error message followup for setgeminithinking (Interaction ID: {interaction.id}): {http_err}")
+
+def get_user_gemini_thinking_budget_preference(user_id: int, default_enabled: bool) -> bool:
+    """
+    Gets the user's preference for using the Gemini thinking budget.
+    Returns the user-set preference if available, otherwise the default_enabled value from config.
+    """
+    return user_gemini_thinking_budget_preferences.get(user_id, default_enabled)

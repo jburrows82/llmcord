@@ -133,6 +133,17 @@ searxng_base_url: http://localhost:18088 # Your SearxNG instance with /search en
 grounding_system_prompt: |
   ANSWER IN ONLY ONE SENTENCE.
 
+# --- Gemini Thinking Budget Settings ---
+# Optional: Allows Gemini models to spend more time "thinking" before generating a response.
+# This can potentially improve response quality for complex queries but may increase latency.
+# Refer to Google AI documentation for "thinkingBudget" for more details.
+# This setting applies ONLY to Gemini models.
+
+# gemini_use_thinking_budget: false  # Set to true to enable the thinking_budget parameter by default for Gemini.
+                                  # Users can override this with the /setgeminithinking command.
+# gemini_thinking_budget_value: 1024 # The actual budget value (0-24576) to use if enabled.
+                                   # This value is global and not user-configurable via command.
+
 model: openai/gpt-4.1 # Example: Select the provider and model
 
 extra_api_parameters:

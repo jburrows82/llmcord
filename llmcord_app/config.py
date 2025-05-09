@@ -1,7 +1,12 @@
 import yaml
 import logging
 import os
-from .constants import SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_DEFAULT_URL, GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
+from .constants import (
+    SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_DEFAULT_URL, GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
+    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    GEMINI_DEFAULT_USE_THINKING_BUDGET, GEMINI_DEFAULT_THINKING_BUDGET_VALUE,
+    GEMINI_MIN_THINKING_BUDGET_VALUE, GEMINI_MAX_THINKING_BUDGET_VALUE
+)
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
 DEFAULT_GROUNDING_SYSTEM_PROMPT = """
@@ -124,6 +129,37 @@ def get_config(filename="config.yaml"):
                 logging.info(f"'{GROUNDING_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default.")
                 config_data[GROUNDING_SYSTEM_PROMPT_CONFIG_KEY] = DEFAULT_GROUNDING_SYSTEM_PROMPT
             # --- END ADDED ---
+
+            # --- Load Gemini Thinking Budget Settings ---
+            if GEMINI_USE_THINKING_BUDGET_CONFIG_KEY not in config_data:
+                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = GEMINI_DEFAULT_USE_THINKING_BUDGET
+                logging.info(f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}")
+            elif not isinstance(config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY], bool):
+                logging.warning(f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' is not a boolean. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}")
+                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = GEMINI_DEFAULT_USE_THINKING_BUDGET
+
+            if GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY not in config_data:
+                config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                logging.info(f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}")
+            else:
+                try:
+                    val = int(config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY])
+                    if not (GEMINI_MIN_THINKING_BUDGET_VALUE <= val <= GEMINI_MAX_THINKING_BUDGET_VALUE):
+                        logging.warning(
+                            f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' ({val}) is outside the valid range "
+                            f"({GEMINI_MIN_THINKING_BUDGET_VALUE}-{GEMINI_MAX_THINKING_BUDGET_VALUE}). "
+                            f"Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}"
+                        )
+                        config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                    else:
+                        config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}"
+                    )
+                    config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+            # --- End Load Gemini Thinking Budget Settings ---
 
             return config_data
 

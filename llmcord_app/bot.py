@@ -29,7 +29,8 @@ from .constants import (
     MAX_PLAIN_TEXT_LENGTH, # <-- Added plain text limit
     SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_NUM_RESULTS, # Added SearxNG constants
     GROUNDING_MODEL_PROVIDER, GROUNDING_MODEL_NAME, # Added Grounding model constants
-    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY # <-- ADDED
+    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY, # <-- ADDED
+    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY # Added Gemini Thinking Budget keys
 )
 # Corrected import: Use the models module directly
 from . import models # Import the models module
@@ -44,7 +45,11 @@ from .content_fetchers import (
     process_google_lens_image, fetch_searxng_results # Added fetch_searxng_results
 )
 from .llm_handler import generate_response_stream
-from .commands import set_model_command, get_user_model_preference, set_system_prompt_command, get_user_system_prompt_preference # Import command logic and preference getter
+from .commands import ( # Import command logic and preference getter
+    set_model_command, get_user_model_preference,
+    set_system_prompt_command, get_user_system_prompt_preference,
+    setgeminithinking, get_user_gemini_thinking_budget_preference # Added Gemini thinking budget command and getter
+)
 
 
 # --- Discord Client Setup ---
@@ -75,6 +80,12 @@ class LLMCordClient(discord.Client):
             name="systemprompt",
             description="Set your custom system prompt for the bot.",
             callback=set_system_prompt_command
+        ))
+        # --- ADDED: Register /setgeminithinking command ---
+        self.tree.add_command(app_commands.Command(
+            name="setgeminithinking",
+            description="Toggle usage of the 'thinkingBudget' parameter for Gemini models.",
+            callback=setgeminithinking
         ))
         # Sync commands
         await self.tree.sync()
@@ -360,6 +371,18 @@ class LLMCordClient(discord.Client):
         base_system_prompt_text = get_user_system_prompt_preference(new_msg.author.id, default_system_prompt_from_config)
         system_prompt_text = self._prepare_system_prompt(is_gemini, provider, base_system_prompt_text)
         extra_api_params = self.config.get("extra_api_parameters", {}).copy()
+
+        # --- ADDED: Gemini Thinking Budget Logic ---
+        if is_gemini:
+            global_use_thinking_budget = self.config.get(GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False)
+            global_thinking_budget_value = self.config.get(GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0)
+
+            user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(new_msg.author.id, global_use_thinking_budget)
+
+            if user_wants_thinking_budget and global_thinking_budget_value > 0:
+                extra_api_params["thinking_budget"] = global_thinking_budget_value
+                logging.info(f"Applying Gemini thinking_budget: {global_thinking_budget_value} for user {new_msg.author.id}")
+        # --- END ADDED ---
 
         # --- Generate and Send Response ---
         response_msgs: List[discord.Message] = [] # Ensure type hint
