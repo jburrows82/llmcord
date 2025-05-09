@@ -278,25 +278,35 @@ class LLMCordClient(discord.Client):
             return
 
         # --- URL Extraction and Content Fetching ---
-        # This section needs to be conditional based on the new SearxNG grounding enhancement.
-
         combined_context = ""
-        url_fetch_results_for_user_urls = [] # Store results from user-provided URLs
+        url_fetch_results = [] # This will store all fetched results
 
-        # --- New Grounding Pre-processing Logic ---
-        searxng_derived_context = None
-        # Perform grounding if target is not Gemini and not Grok
-        if not is_gemini and not is_grok_model:
-            logging.info(f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok. Attempting grounding pre-step.")
+        # --- Determine if any user-provided URLs exist ---
+        # This check is now done upfront to influence whether SearxNG runs.
+        user_has_provided_urls = bool(extract_urls_with_indices(cleaned_content))
+
+        # --- Step 1: Handle Google Lens if explicitly triggered ---
+        if use_google_lens:
+            logging.info("Google Lens is active. Fetching Lens and user URL content.")
+            # _fetch_external_content will handle both Lens images and any URLs in cleaned_content
+            url_fetch_results = await self._fetch_external_content(
+                cleaned_content, image_attachments, True, # use_google_lens is True
+                max_files_per_message, user_warnings
+            )
+            if url_fetch_results:
+                combined_context = self._format_external_content(url_fetch_results)
             
-            # For the Gemini grounding call, we need a history.
-            # This history should represent what Gemini would see.
-            # It should include the current user's `cleaned_content` and prior messages.
-            # It should NOT include `combined_context` from user-provided URLs yet.
+            # If Google Lens is active, we skip the Gemini grounding/SearxNG step.
+            logging.info("Skipping Gemini grounding/SearxNG step because Google Lens is active.")
+
+        # --- Step 2: If not Google Lens, AND NO user-provided URLs, attempt Gemini Grounding for SearxNG (for non-Gemini/non-Grok targets) ---
+        elif not user_has_provided_urls and not is_gemini and not is_grok_model:
+            # This block executes only if:
+            # 1. use_google_lens is False
+            # 2. there are NO URLs in cleaned_content
+            # 3. the target model is non-Gemini/non-Grok.
+            logging.info(f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG.")
             
-            # Build a preliminary history for the grounding call
-            # This history will include attachments as processed by _build_message_history
-            # Pass empty combined_context for this preliminary history build.
             history_for_gemini_grounding = await self._build_message_history(
                 new_msg, cleaned_content, "", # Empty combined_context for grounding history
                 max_messages, max_text, max_files_per_message,
@@ -309,14 +319,10 @@ class LLMCordClient(discord.Client):
             )
 
             if history_for_gemini_grounding:
-                # Prepare system prompt for the grounding call
-                # --- MODIFIED: Use dedicated grounding system prompt ---
-                grounding_sp_text_from_config = self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY) # Get the dedicated prompt
-                # For the grounding step, we always use the configured grounding prompt, not a user-specific one.
+                grounding_sp_text_from_config = self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
                 system_prompt_for_grounding = self._prepare_system_prompt(
-                    True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config # Pass the dedicated prompt
+                    True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config
                 )
-                # --- END MODIFICATION ---
                 
                 web_search_queries = await self._get_web_search_queries_from_gemini(
                     history_for_gemini_grounding,
@@ -331,30 +337,36 @@ class LLMCordClient(discord.Client):
                     if searxng_derived_context:
                         logging.info("Successfully generated context from SearxNG results.")
                         combined_context = searxng_derived_context
+                        # No user URLs were present if this block is reached, so no warning about skipping them.
                     else:
                         logging.info("Failed to generate context from SearxNG, or no results found.")
                 else:
                     logging.info("Gemini grounding did not yield any web search queries.")
             else:
-                logging.warning("Could not build history for Gemini grounding step. Skipping.")
-        
-        # If SearxNG context was not generated, fall back to processing user-provided URLs
-        if not combined_context:
-            logging.info("No SearxNG context generated. Processing user-provided URLs if any.")
-            url_fetch_results_for_user_urls = await self._fetch_external_content(
-                cleaned_content, image_attachments, use_google_lens, max_files_per_message, user_warnings
+                logging.warning("Could not build history for Gemini grounding step. Skipping SearxNG.")
+            
+            # If SearxNG failed or didn't run, and there were truly no user URLs (as per the 'elif' condition),
+            # combined_context will remain empty. No further URL processing is needed here.
+
+        # --- Step 3: If Google Lens was not used, BUT user-provided URLs ARE present, process those URLs directly ---
+        elif user_has_provided_urls: # This implies use_google_lens is False.
+                                     # This block will catch cases where SearxNG was skipped because URLs were present.
+            logging.info("Google Lens is not active, but user-provided URLs detected. Processing these URLs directly. SearxNG is skipped.")
+            # _fetch_external_content will only process URLs in cleaned_content because use_google_lens is False here.
+            url_fetch_results = await self._fetch_external_content(
+                cleaned_content, image_attachments, False, # use_google_lens is False
+                max_files_per_message, user_warnings
             )
-            if url_fetch_results_for_user_urls:
-                 combined_context = self._format_external_content(url_fetch_results_for_user_urls)
-        else:
-            logging.info("Using SearxNG derived context. Skipping user-provided URL fetching for main context.")
-            # We still might want to add a warning if user provided URLs but they were ignored.
-            if extract_urls_with_indices(cleaned_content):
-                user_warnings.add("ℹ️ Web search results are being used for context; direct URL processing from your message was skipped.")
+            if url_fetch_results:
+                combined_context = self._format_external_content(url_fetch_results)
+
+        # Note: If use_google_lens was false, user_has_provided_urls was false, and SearxNG didn't produce context,
+        # then combined_context will correctly be empty. This is the case for a direct query to any model without
+        # explicit external context provided by the user or derived by the system.
 
 
         # --- Build Message History (for the *target* LLM) ---
-        # `combined_context` now holds either SearxNG results or user-URL results.
+        # `combined_context` now holds the appropriate context based on the logic above.
         history_for_llm = await self._build_message_history(
             new_msg, cleaned_content, combined_context, max_messages, max_text, max_files_per_message,
             accept_files, use_google_lens, is_gemini, provider, model_name, user_warnings # Pass provider and model_name for the target LLM
