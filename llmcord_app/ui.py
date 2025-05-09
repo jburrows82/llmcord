@@ -71,8 +71,7 @@ class ResponseActionView(ui.View):
         async def callback(self, interaction: discord.Interaction):
             view: 'ResponseActionView' = self.view # Type hint for clarity
             if not view.grounding_metadata:
-                # Respond ephemerally (only visible to the user who clicked)
-                await interaction.response.send_message("No grounding metadata available.", ephemeral=True)
+                await interaction.response.send_message("No grounding metadata available.", ephemeral=False)
                 return
 
             embeds_to_send = []
@@ -146,32 +145,29 @@ class ResponseActionView(ui.View):
                         metadata_str = json.dumps(view.grounding_metadata.model_dump(mode='json'), indent=2)
                     elif view.grounding_metadata:
                         metadata_str = str(view.grounding_metadata)
-                    # Respond ephemerally
                     await interaction.response.send_message(
                         f"Could not extract specific sources. Raw metadata:\n```json\n{metadata_str[:1900]}\n```",
-                         ephemeral=True
+                         ephemeral=False
                     )
                 except Exception as e:
                     logging.error(f"Error sending raw metadata: {e}")
-                    # Respond ephemerally
-                    await interaction.response.send_message("No grounding source information could be extracted.", ephemeral=True)
+                    await interaction.response.send_message("No grounding source information could be extracted.", ephemeral=False)
                 return
 
             try:
-                # Send as ephemeral messages
-                await interaction.response.send_message(embed=embeds_to_send[0], ephemeral=True)
+                await interaction.response.send_message(embed=embeds_to_send[0], ephemeral=False)
                 for embed in embeds_to_send[1:]:
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    await interaction.followup.send(embed=embed, ephemeral=False)
 
             except discord.HTTPException as e:
                 logging.error(f"HTTPException sending source embeds (might be too large even after split): {e}")
                 # Use followup because initial response was already sent
-                await interaction.followup.send("Failed to send sources as embeds (likely too large).", ephemeral=True)
+                await interaction.followup.send("Failed to send sources as embeds (likely too large).", ephemeral=False)
             except Exception as e:
                  logging.error(f"Unexpected error sending source embeds: {e}")
                  try:
                      # Use followup because initial response was already sent
-                     await interaction.followup.send("An unexpected error occurred while sending sources.", ephemeral=True)
+                     await interaction.followup.send("An unexpected error occurred while sending sources.", ephemeral=False)
                  except discord.HTTPException:
                      logging.error("Failed to send followup error message for sources.")
 
@@ -184,8 +180,7 @@ class ResponseActionView(ui.View):
             # Access parent view's data
             view: 'ResponseActionView' = self.view
             if not view.full_response_text:
-                # Respond ephemerally
-                await interaction.response.send_message("No response text available to send.", ephemeral=True)
+                await interaction.response.send_message("No response text available to send.", ephemeral=False)
                 return
 
             try:
@@ -197,9 +192,7 @@ class ResponseActionView(ui.View):
                 file_content = io.BytesIO(view.full_response_text.encode('utf-8'))
                 discord_file = discord.File(fp=file_content, filename=filename)
 
-                # Respond ephemerally
-                await interaction.response.send_message(file=discord_file, ephemeral=True)
+                await interaction.response.send_message(file=discord_file, ephemeral=False)
             except Exception as e:
                 logging.error(f"Error creating or sending text file: {e}")
-                # Respond ephemerally
-                await interaction.response.send_message("Sorry, I couldn't create the text file.", ephemeral=True)
+                await interaction.response.send_message("Sorry, I couldn't create the text file.", ephemeral=False)

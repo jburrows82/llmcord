@@ -41,7 +41,7 @@ from .content_fetchers import (
     process_google_lens_image
 )
 from .llm_handler import generate_response_stream
-from .commands import set_model_command, get_user_model_preference # Import command logic and preference getter
+from .commands import set_model_command, get_user_model_preference, set_system_prompt_command, get_user_system_prompt_preference # Import command logic and preference getter
 
 
 # --- Discord Client Setup ---
@@ -66,6 +66,12 @@ class LLMCordClient(discord.Client):
             name="model",
             description="Set your preferred LLM provider and model.",
             callback=set_model_command
+        ))
+        # --- ADDED: Register /systemprompt command ---
+        self.tree.add_command(app_commands.Command(
+            name="systemprompt",
+            description="Set your custom system prompt for the bot.",
+            callback=set_system_prompt_command
         ))
         # Sync commands
         await self.tree.sync()
@@ -267,7 +273,10 @@ class LLMCordClient(discord.Client):
         logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}")
 
         # --- Prepare API Call ---
-        system_prompt_text = self._prepare_system_prompt(is_gemini, provider)
+        # --- MODIFIED: Get user-specific or default system prompt ---
+        default_system_prompt_from_config = self.config.get("system_prompt")
+        base_system_prompt_text = get_user_system_prompt_preference(new_msg.author.id, default_system_prompt_from_config)
+        system_prompt_text = self._prepare_system_prompt(is_gemini, provider, base_system_prompt_text)
         extra_api_params = self.config.get("extra_api_parameters", {}).copy()
 
         # --- Generate and Send Response ---
@@ -1064,10 +1073,9 @@ class LLMCordClient(discord.Client):
             logging.exception(f"Error determining parent message for {message.id}")
             return None # Indicate failure to find parent
 
-    def _prepare_system_prompt(self, is_gemini: bool, provider: str) -> Optional[str]:
-        """Constructs the system prompt string with dynamic elements."""
-        system_prompt = self.config.get("system_prompt")
-        if not system_prompt:
+    def _prepare_system_prompt(self, is_gemini: bool, provider: str, base_prompt_text: Optional[str]) -> Optional[str]:
+        """Constructs the system prompt string with dynamic elements based on the provided base text."""
+        if not base_prompt_text:
             return None
 
         now_utc = dt.now(timezone.utc)
@@ -1082,7 +1090,7 @@ class LLMCordClient(discord.Client):
         if not is_gemini and provider in PROVIDERS_SUPPORTING_USERNAMES:
             system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
 
-        return "\n".join([system_prompt] + system_prompt_extras)
+        return "\n".join([base_prompt_text] + system_prompt_extras)
 
     async def close(self):
         """Clean up resources when the bot is shutting down."""
