@@ -55,6 +55,17 @@ def get_config(filename="config.yaml"):
                     elif not isinstance(key_list, list):
                          logging.error(f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty.")
                          provider_cfg["api_keys"] = []
+
+                    # --- ADDED: Validate disable_vision for OpenAI ---
+                    if name == "openai":
+                        if "disable_vision" not in provider_cfg:
+                            provider_cfg["disable_vision"] = False # Default to False
+                            logging.info(f"OpenAI 'disable_vision' not set in config. Assuming False.")
+                        elif not isinstance(provider_cfg["disable_vision"], bool):
+                            logging.warning(f"OpenAI 'disable_vision' is not a boolean. Defaulting to False.")
+                            provider_cfg["disable_vision"] = False
+                    # --- END ADDED ---
+
                 elif provider_cfg is not None:
                      logging.warning(f"Config Warning: Provider '{name}' configuration is not a dictionary. Ignoring provider.")
                      # Optionally remove invalid provider config: del providers[name] or set providers[name] = {}

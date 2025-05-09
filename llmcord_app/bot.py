@@ -236,6 +236,13 @@ class LLMCordClient(discord.Client):
 
         # --- Configuration Values ---
         accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS) # Renamed from accept_images for clarity
+
+        # --- ADDED: Check OpenAI specific vision disabling ---
+        if provider == "openai" and provider_config.get("disable_vision", False):
+            accept_files = False
+            logging.info(f"Vision explicitly disabled for OpenAI model '{model_name}' via config.")
+        # --- END ADDED ---
+
         max_files_per_message = self.config.get("max_images", 5) # Using max_images config key for max files
         if use_google_lens:
             # max_images_for_lens = self.config.get("max_images", 5) # Retain original logic for lens if needed separate
@@ -932,25 +939,9 @@ class LLMCordClient(discord.Client):
                 # if combined_context is provided for this specific history build.
                 # This ensures that the context (e.g., SearxNG results) is correctly associated
                 # with the current turn's node, even if the node was touched by a previous step (like grounding).
-                if curr_msg.id == new_msg.id:
-                    if combined_context:
-                        curr_node.external_content = combined_context
-                        logging.debug(f"Applied combined_context as external_content for current node {curr_msg.id}.")
-                    else:
-                        # If no combined_context is provided for the current message in this specific build,
-                        # ensure any pre-existing external_content on the node (from other stages) isn't used.
-                        # For the purpose of *this history build*, treat external_content as None.
-                        # The actual curr_node.external_content might still hold old data if not overwritten,
-                        # but the logic below will use it. So, if combined_context is empty for this call,
-                        # it effectively means no external_content for this turn.
-                        # To be absolutely safe for this specific build, we could use a temporary variable.
-                        # However, the current logic for assembling current_text_content relies on curr_node.external_content.
-                        # So, if combined_context is empty, we should ensure curr_node.external_content reflects that for this build.
-                        # Let's explicitly set it to None if combined_context is empty for the current message.
-                        # This prevents stale external_content from a previous phase (e.g. grounding) from leaking if this
-                        # history build is supposed to have no external_content (e.g. combined_context parameter is empty).
-                        curr_node.external_content = None # Explicitly clear if no combined_context for this new_msg build
-                        logging.debug(f"No combined_context provided for current node {curr_msg.id}, external_content is None for this build.")
+                if curr_msg.id == new_msg.id: # Apply combined_context only to the current message node for this build
+                    curr_node.external_content = combined_context if combined_context else None
+                    logging.debug(f"Set external_content for node {curr_msg.id} to {'present' if combined_context else 'None'} for this history build.")
 
 
                 needs_population = curr_node.text is None # Or other primary content like attachments
@@ -1136,6 +1127,8 @@ class LLMCordClient(discord.Client):
                         curr_node.parent_msg = parent
 
                 current_text_content = ""
+                # Use the external_content specific to this node, which might have been set above for the current message,
+                # or might be from a previous population for historical messages.
                 if curr_node.external_content:
                     current_text_content += curr_node.external_content + "\n\nUser's query:\n"
                     logging.debug(f"Prepending external_content for node {curr_msg.id} in history build")
@@ -1152,7 +1145,50 @@ class LLMCordClient(discord.Client):
                     current_text_content += node_text_to_use
 
                 current_text_content = current_text_content[:max_text] if current_text_content else ""
-                current_api_file_parts = curr_node.api_file_parts[:max_files_per_message] # Apply API file limit here
+                
+                # --- MODIFIED SECTION TO DETERMINE current_api_file_parts ---
+                current_api_file_parts = [] # Initialize as empty
+                if accept_files: # Check the 'accept_files' parameter for THE CURRENT _build_message_history call
+                    # If files are allowed for *this* history construction,
+                    # then use (and convert if necessary) the parts stored in the node.
+                    raw_parts_from_node = curr_node.api_file_parts[:max_files_per_message]
+                    
+                    if is_target_provider_gemini: # Current call wants Gemini parts
+                        for part_in_node in raw_parts_from_node:
+                            if isinstance(part_in_node, google_types.Part):
+                                current_api_file_parts.append(part_in_node)
+                            elif isinstance(part_in_node, dict) and part_in_node.get("type") == "image_url": # Is OpenAI image dict
+                                image_url_data = part_in_node.get("image_url", {})
+                                data_url = image_url_data.get("url")
+                                if isinstance(data_url, str) and data_url.startswith("data:image") and ";base64," in data_url:
+                                    try:
+                                        header, encoded_data = data_url.split(";base64,", 1)
+                                        mime_parts = header.split(":")
+                                        mime_type = mime_parts[1] if len(mime_parts) > 1 else "image/png"
+                                        img_bytes = base64.b64decode(encoded_data)
+                                        current_api_file_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                                    except Exception as e:
+                                        logging.warning(f"Error converting cached OpenAI image part to Gemini part for node {curr_msg.id}: {e}")
+                            # else: skip unrecognized cached part type if it's not convertible
+                    else: # Current call wants non-Gemini (e.g., OpenAI dict) parts
+                        for part_in_node in raw_parts_from_node:
+                            if isinstance(part_in_node, dict) and part_in_node.get("type") == "image_url":
+                                current_api_file_parts.append(part_in_node) # Already correct format
+                            elif isinstance(part_in_node, google_types.Part) and hasattr(part_in_node, 'inline_data') and \
+                                 part_in_node.inline_data and hasattr(part_in_node.inline_data, 'data') and \
+                                 hasattr(part_in_node.inline_data, 'mime_type'):
+                                try:
+                                    # Assuming inline_data.data is already a base64 string from Gemini
+                                    b64_data = part_in_node.inline_data.data
+                                    mime_type = part_in_node.inline_data.mime_type
+                                    current_api_file_parts.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}
+                                    })
+                                except Exception as e:
+                                    logging.warning(f"Error converting cached Gemini Part to OpenAI image dict for node {curr_msg.id}: {e}")
+                            # else: skip unrecognized cached part type if it's not convertible
+                # --- END MODIFIED SECTION ---
 
                 parts_for_api = []
                 if is_target_provider_gemini: # Use is_target_provider_gemini
