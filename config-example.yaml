@@ -128,6 +128,10 @@ providers:
 # Used if a non-Gemini/non-Grok model is selected, to provide web search results.
 searxng_base_url: http://localhost:18088 # Your SearxNG instance with /search endpoint and JSON format enabled
 
+# Maximum character length for text extracted from each URL fetched by SearxNG.
+# This helps keep the context provided to non-Gemini/non-Grok models concise.
+searxng_url_content_max_length: 20000
+
 # System prompt for the Gemini model (gemini-2.0-flash) when it's used to determine
 # web search queries for grounding non-Gemini/non-Grok models.
 # This prompt guides Gemini on how to generate relevant search terms.

@@ -13,7 +13,7 @@ from ..models import UrlFetchResult
 # In a larger app, dependency injection might be better
 httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
 
-async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
+async def fetch_general_url_content(url: str, index: int, max_text_length: Optional[int] = None) -> UrlFetchResult:
     """Fetches and extracts text content from a general URL using BeautifulSoup."""
     try:
         # Add a User-Agent header to mimic a browser
@@ -81,6 +81,12 @@ async def fetch_general_url_content(url: str, index: int) -> UrlFetchResult:
 
             # Clean up whitespace: replace multiple spaces/newlines with a single space
             text = re.sub(r'\s+', ' ', text).strip()
+
+            # --- NEW: Truncate extracted text if limit is provided ---
+            if max_text_length is not None and text and len(text) > max_text_length:
+                logging.info(f"Truncating extracted text content for URL {url} from {len(text)} to {max_text_length} characters.")
+                text = text[:max_text_length - 3] + "..." # Ensure space for ellipsis if text is long enough
+            # --- END NEW ---
 
             if not text:
                 logging.warning(f"No text content found after parsing URL: {url}")

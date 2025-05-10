@@ -44,6 +44,10 @@ GROUNDING_MODEL_NAME = "gemini-2.0-flash"
 # --- ADDED CONSTANT ---
 GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- END ADDED CONSTANT ---
+# --- ADDED CONSTANTS FOR SEARXNG URL CONTENT LENGTH ---
+SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY = "searxng_url_content_max_length"
+SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH = 20000
+# --- END ADDED CONSTANTS ---
 # --- End SearxNG and Grounding ---
 
 # --- Gemini Thinking Budget ---

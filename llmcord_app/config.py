@@ -5,7 +5,8 @@ from .constants import (
     SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_DEFAULT_URL, GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
     GEMINI_DEFAULT_USE_THINKING_BUDGET, GEMINI_DEFAULT_THINKING_BUDGET_VALUE,
-    GEMINI_MIN_THINKING_BUDGET_VALUE, GEMINI_MAX_THINKING_BUDGET_VALUE
+    GEMINI_MIN_THINKING_BUDGET_VALUE, GEMINI_MAX_THINKING_BUDGET_VALUE,
+    SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY, SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -139,6 +140,29 @@ def get_config(filename="config.yaml"):
             if GROUNDING_SYSTEM_PROMPT_CONFIG_KEY not in config_data or not config_data.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY):
                 logging.info(f"'{GROUNDING_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default.")
                 config_data[GROUNDING_SYSTEM_PROMPT_CONFIG_KEY] = DEFAULT_GROUNDING_SYSTEM_PROMPT
+            # --- END ADDED ---
+
+            # --- ADDED: Load SearxNG URL content max length ---
+            if SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY not in config_data:
+                config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                logging.info(f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' not found. Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}")
+            else:
+                try:
+                    val = int(config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' ({val}) must be positive. "
+                            f"Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}"
+                        )
+                        config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                    else:
+                        config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}"
+                    )
+                    config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
             # --- END ADDED ---
 
             # --- Load Gemini Thinking Budget Settings ---

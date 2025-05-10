@@ -28,6 +28,7 @@ from .constants import (
     AllKeysFailedError, IMGUR_HEADER, IMGUR_URL_PREFIX, IMGUR_URL_PATTERN, # <-- Added Imgur constants
     MAX_PLAIN_TEXT_LENGTH, # <-- Added plain text limit
     SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_NUM_RESULTS, # Added SearxNG constants
+    SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY, # <-- ADDED
     GROUNDING_MODEL_PROVIDER, GROUNDING_MODEL_NAME, # Added Grounding model constants
     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY, # <-- ADDED
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY # Added Gemini Thinking Budget keys
@@ -1423,6 +1424,7 @@ class LLMCordClient(discord.Client):
             return None
 
         logging.info(f"Fetching SearxNG results for {len(queries)} queries related to user query: '{user_query_for_log[:100]}...'")
+        searxng_content_limit = self.config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY) # Get the limit
 
         # Fetch SearxNG URLs for all queries concurrently
         searxng_tasks = []
@@ -1460,7 +1462,7 @@ class LLMCordClient(discord.Client):
         for idx, url_str in enumerate(list(unique_urls_to_fetch_content)):
             # The index here is for UrlFetchResult.original_index, can be simple enumeration
             url_content_processing_tasks.append(
-                fetch_general_url_content(url_str, idx)
+                fetch_general_url_content(url_str, idx, max_text_length=searxng_content_limit) # Pass the limit
             )
         
         try:
