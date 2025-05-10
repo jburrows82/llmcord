@@ -1414,6 +1414,7 @@ class LLMCordClient(discord.Client):
         """
         Fetches search results from SearxNG for given queries,
         then fetches content of those URLs (uniquely) and formats them.
+        Uses specific fetchers for YouTube and Reddit URLs.
         """
         if not queries:
             return None
@@ -1424,7 +1425,13 @@ class LLMCordClient(discord.Client):
             return None
 
         logging.info(f"Fetching SearxNG results for {len(queries)} queries related to user query: '{user_query_for_log[:100]}...'")
-        searxng_content_limit = self.config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY) # Get the limit
+        searxng_content_limit = self.config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY)
+
+        # API keys for specific fetchers
+        youtube_api_key = self.config.get("youtube_api_key")
+        reddit_client_id = self.config.get("reddit_client_id")
+        reddit_client_secret = self.config.get("reddit_client_secret")
+        reddit_user_agent = self.config.get("reddit_user_agent")
 
         # Fetch SearxNG URLs for all queries concurrently
         searxng_tasks = []
@@ -1457,13 +1464,29 @@ class LLMCordClient(discord.Client):
             logging.info("No unique URLs found from SearxNG results to process content for.")
             return None
             
-        # Fetch content for all unique URLs concurrently
+        # Fetch content for all unique URLs concurrently using appropriate fetchers
         url_content_processing_tasks = []
         for idx, url_str in enumerate(list(unique_urls_to_fetch_content)):
-            # The index here is for UrlFetchResult.original_index, can be simple enumeration
-            url_content_processing_tasks.append(
-                fetch_general_url_content(url_str, idx, max_text_length=searxng_content_limit) # Pass the limit
-            )
+            if is_youtube_url(url_str):
+                url_content_processing_tasks.append(
+                    fetch_youtube_data(url_str, idx, youtube_api_key)
+                )
+            elif is_reddit_url(url_str):
+                submission_id = extract_reddit_submission_id(url_str)
+                if submission_id:
+                    url_content_processing_tasks.append(
+                        fetch_reddit_data(url_str, submission_id, idx, reddit_client_id, reddit_client_secret, reddit_user_agent)
+                    )
+                else:
+                    logging.warning(f"Could not extract submission ID from SearxNG Reddit URL: {url_str}. Skipping.")
+                    # Add a dummy failed result to maintain list structure if needed, or handle Nones later
+                    async def dummy_failed_result():
+                        return models.UrlFetchResult(url=url_str, content=None, error="Failed to extract Reddit submission ID.", type="reddit", original_index=idx)
+                    url_content_processing_tasks.append(dummy_failed_result())
+            else:
+                url_content_processing_tasks.append(
+                    fetch_general_url_content(url_str, idx, max_text_length=searxng_content_limit)
+                )
         
         try:
             fetched_unique_content_results = await asyncio.gather(*url_content_processing_tasks, return_exceptions=True)
@@ -1477,51 +1500,95 @@ class LLMCordClient(discord.Client):
             if isinstance(result_or_exc, models.UrlFetchResult):
                 url_to_content_map[result_or_exc.url] = result_or_exc
             elif isinstance(result_or_exc, Exception):
-                # Error logged by fetch_general_url_content or here if it's a direct task exception
                 logging.error(f"Exception while processing a unique URL for content: {result_or_exc}")
 
 
         # Now, format the output using the pre-fetched unique content
         formatted_query_blocks = []
         query_counter = 1
+        limit = searxng_content_limit # Use the configured limit for truncation
 
         for i, query_str in enumerate(queries):
             urls_for_this_query_or_exc = list_of_url_lists_per_query[i]
             
             if isinstance(urls_for_this_query_or_exc, Exception) or not urls_for_this_query_or_exc:
-                # Already logged if it was an exception or empty list
                 continue
 
             current_query_url_content_parts = []
             url_counter_for_query = 1
             
-            # Iterate through the URLs SearxNG provided FOR THIS SPECIFIC QUERY
             for url_from_searxng_for_query in urls_for_this_query_or_exc:
                 if not isinstance(url_from_searxng_for_query, str):
-                    continue # Skip if not a string (e.g. error object)
+                    continue
 
-                # Look up the pre-fetched content
                 content_result = url_to_content_map.get(url_from_searxng_for_query)
                 
                 if content_result and content_result.content and not content_result.error:
+                    content_str_part = ""
+                    if content_result.type == "youtube" and isinstance(content_result.content, dict):
+                        data = content_result.content
+                        title = data.get('title', 'N/A')
+                        content_str_part += f"  title: {discord.utils.escape_markdown(title)}\n"
+                        channel = data.get('channel_name', 'N/A')
+                        content_str_part += f"  channel: {discord.utils.escape_markdown(channel)}\n"
+                        
+                        desc = data.get('description', 'N/A')
+                        if limit and len(desc) > limit: desc = desc[:limit-3] + "..."
+                        content_str_part += f"  description: {discord.utils.escape_markdown(desc)}\n"
+                        
+                        transcript = data.get('transcript')
+                        if transcript:
+                            if limit and len(transcript) > limit: transcript = transcript[:limit-3] + "..."
+                            content_str_part += f"  transcript: {discord.utils.escape_markdown(transcript)}\n"
+                            
+                        comments_list = data.get("comments")
+                        if comments_list:
+                            # Join, then truncate the whole block if needed
+                            comments_str = "\n".join([f"    - {discord.utils.escape_markdown(c)}" for c in comments_list])
+                            if limit and len(comments_str) > limit: comments_str = comments_str[:limit-3] + "..."
+                            content_str_part += f"  top comments:\n{comments_str}\n"
+
+                    elif content_result.type == "reddit" and isinstance(content_result.content, dict):
+                        data = content_result.content
+                        title = data.get('title', 'N/A')
+                        content_str_part += f"  title: {discord.utils.escape_markdown(title)}\n"
+
+                        selftext = data.get('selftext')
+                        if selftext:
+                            if limit and len(selftext) > limit: selftext = selftext[:limit-3] + "..."
+                            content_str_part += f"  content: {discord.utils.escape_markdown(selftext)}\n"
+
+                        comments_list = data.get("comments")
+                        if comments_list:
+                            comments_str = "\n".join([f"    - {discord.utils.escape_markdown(c)}" for c in comments_list])
+                            if limit and len(comments_str) > limit: comments_str = comments_str[:limit-3] + "..."
+                            content_str_part += f"  top comments:\n{comments_str}\n"
+
+                    elif content_result.type == "general" and isinstance(content_result.content, str):
+                        # Already truncated by fetch_general_url_content if limit was passed
+                        content_str_part = discord.utils.escape_markdown(content_result.content)
+                    else: # Fallback for unknown types or if content is not string/dict as expected
+                        raw_content_str = str(content_result.content)
+                        if limit and len(raw_content_str) > limit: raw_content_str = raw_content_str[:limit-3] + "..."
+                        content_str_part = discord.utils.escape_markdown(raw_content_str)
+                    
                     current_query_url_content_parts.append(
-                        f"URL {url_counter_for_query}: {content_result.url}\n"
-                        f"URL {url_counter_for_query} content:\n{str(content_result.content)}\n"
+                        f"URL {url_counter_for_query}: {content_result.url}\n" # URL itself should not be escaped
+                        f"URL {url_counter_for_query} content:\n{content_str_part.strip()}\n"
                     )
                     url_counter_for_query += 1
                 elif content_result and content_result.error:
                     logging.warning(f"Skipping SearxNG URL {content_result.url} for query '{query_str}' due to fetch error: {content_result.error}")
-                # If not in map, it means it wasn't a valid URL initially or some other issue
                 elif not content_result:
                      logging.warning(f"Content for SearxNG URL {url_from_searxng_for_query} (query: '{query_str}') not found in pre-fetched map. It might have been invalid or failed very early.")
             
             if current_query_url_content_parts:
-                query_block_header = f'Query {query_counter} ("{query_str}") search results:\n\n'
+                query_block_header = f'Query {query_counter} ("{discord.utils.escape_markdown(query_str)}") search results:\n\n'
                 formatted_query_blocks.append(query_block_header + "\n".join(current_query_url_content_parts))
                 query_counter += 1
         
         if formatted_query_blocks:
-            final_context = "Answer the user's query based on the following:\n\n" + "\n\n".join(formatted_query_blocks) # Add double newline between query blocks
+            final_context = "Answer the user's query based on the following:\n\n" + "\n\n".join(formatted_query_blocks)
             return final_context.strip()
 
         logging.info("No content successfully fetched and formatted from SearxNG result URLs.")
