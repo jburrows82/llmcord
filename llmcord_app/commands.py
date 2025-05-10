@@ -63,42 +63,37 @@ user_system_prompt_preferences: Dict[int, Optional[str]] = _load_user_preference
 user_gemini_thinking_budget_preferences: Dict[int, bool] = _load_user_preferences(USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME)
 
 # --- Slash Command Autocomplete Functions ---
-async def provider_autocomplete(interaction: discord.Interaction, current: str) -> List[Choice[str]]:
-    """Autocompletes the provider argument."""
-    providers = list(AVAILABLE_MODELS.keys())
-    return [
-        Choice(name=provider, value=provider)
-        for provider in providers if current.lower() in provider.lower()
-    ][:25] # Limit to 25 choices
-
 async def model_autocomplete(interaction: discord.Interaction, current: str) -> List[Choice[str]]:
-    """Autocompletes the model argument based on the selected provider."""
-    # Access the provider value entered by the user so far
-    provider = interaction.namespace.provider # Correct way to access other options
-
-    if not provider or provider not in AVAILABLE_MODELS:
-        # If provider is empty or invalid, return no model suggestions
-        return []
-
-    models = AVAILABLE_MODELS.get(provider, []) # Get models for the valid provider
-    return [
-        Choice(name=model, value=model)
-        for model in models if current.lower() in model.lower()
-    ][:25] # Limit to 25 choices
+    """Autocompletes the model argument with combined provider/model_name."""
+    choices = []
+    for provider_name, models in AVAILABLE_MODELS.items():
+        for model_name in models:
+            full_model_name = f"{provider_name}/{model_name}"
+            if current.lower() in full_model_name.lower():
+                choices.append(Choice(name=full_model_name, value=full_model_name))
+    return choices[:25] # Limit to 25 choices
 
 
 # --- Slash Command Definition ---
 # Note: The command registration (@discord_client.tree.command) happens in bot.py
 # This file just defines the command function and its logic.
 
-@app_commands.autocomplete(provider=provider_autocomplete)
-@app_commands.autocomplete(model=model_autocomplete)
-@app_commands.describe(provider="The LLM provider (e.g., google, openai).", model="The specific model name (e.g., gemini-2.0-flash, gpt-4.1).")
-async def set_model_command(interaction: discord.Interaction, provider: str, model: str):
+@app_commands.autocomplete(model_full_name=model_autocomplete)
+@app_commands.describe(model_full_name="The LLM provider and model (e.g., google/gemini-2.0-flash, openai/gpt-4.1).")
+async def set_model_command(interaction: discord.Interaction, model_full_name: str):
     """
-    Sets the user's preferred LLM provider and model for future interactions.
+    Sets the user's preferred LLM (provider and model) for future interactions.
     """
     global user_model_preferences
+
+    try:
+        provider, model_name = model_full_name.split('/', 1)
+    except ValueError:
+        await interaction.response.send_message(
+            f"Invalid model format: `{model_full_name}`. Please use the format `provider/model_name` (e.g., `openai/gpt-4.1`).",
+            ephemeral=False
+        )
+        return
 
     # Validate provider
     if provider not in AVAILABLE_MODELS:
@@ -106,22 +101,21 @@ async def set_model_command(interaction: discord.Interaction, provider: str, mod
         return
 
     # Validate model against the selected provider
-    if model not in AVAILABLE_MODELS.get(provider, []):
-        await interaction.response.send_message(f"Invalid model: `{model}` for provider `{provider}`. Please choose from the suggestions.", ephemeral=False)
+    if model_name not in AVAILABLE_MODELS.get(provider, []):
+        await interaction.response.send_message(f"Invalid model: `{model_name}` for provider `{provider}`. Please choose from the suggestions.", ephemeral=False)
         return
 
     # Store the preference
     user_id = interaction.user.id
-    model_preference = f"{provider}/{model}"
-    user_model_preferences[user_id] = model_preference
+    user_model_preferences[user_id] = model_full_name
     # Use the logger obtained earlier
-    logger.info(f"User {user_id} ({interaction.user.name}) set model preference to: {model_preference}") # <-- Corrected line
+    logger.info(f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}")
 
     # --- ADDED: Save model preferences ---
     _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
     # --- END ADDED ---
 
-    await interaction.response.send_message(f"Your LLM model has been set to `{model_preference}`.", ephemeral=False)
+    await interaction.response.send_message(f"Your LLM model has been set to `{model_full_name}`.", ephemeral=False)
 
 def get_user_model_preference(user_id: int, default_model: str) -> str:
     """Gets the user's model preference or the default."""

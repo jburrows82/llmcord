@@ -1031,7 +1031,7 @@ class LLMCordClient(discord.Client):
                     for att, resp in zip(attachments_to_fetch, attachment_responses):
                         if isinstance(resp, httpx.Response) and resp.status_code == 200 and att.content_type.startswith("text/"):
                             try:
-                                attachment_text = resp.text[:5000]
+                                attachment_text = resp.text
                                 text_parts.append(attachment_text)
                             except Exception as e:
                                 logging.warning(f"Failed to decode text attachment {att.filename} in history: {e}")
