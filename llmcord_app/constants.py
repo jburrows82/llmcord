@@ -26,6 +26,13 @@ MAX_PLAIN_TEXT_LENGTH = 2000 # Discord message character limit
 GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
 YOUTUBE_URL_PATTERN = re.compile(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))')
 REDDIT_URL_PATTERN = re.compile(r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/([a-zA-Z0-9]+))')
+
+# --- ADDED: Image URL Detection ---
+COMMON_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff')
+# Pattern to match URLs ending with common image extensions, ignoring query parameters or fragments
+IMAGE_URL_PATTERN = re.compile(r"https?://[^\s<>\"?#]+(?:" + "|".join(re.escape(ext) for ext in COMMON_IMAGE_EXTENSIONS) + r")", re.IGNORECASE)
+# --- END ADDED ---
+
 AT_AI_PATTERN = re.compile(r'\bat ai\b', re.IGNORECASE)
 GOOGLE_LENS_KEYWORD = "googlelens"
 GOOGLE_LENS_PATTERN = re.compile(rf'^{GOOGLE_LENS_KEYWORD}\s+', re.IGNORECASE)

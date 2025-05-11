@@ -9,7 +9,7 @@ import pypdfium2 as pdfium # Added import
 import asyncio # Added import
 
 from .constants import (
-    GENERAL_URL_PATTERN, YOUTUBE_URL_PATTERN, REDDIT_URL_PATTERN,
+    GENERAL_URL_PATTERN, YOUTUBE_URL_PATTERN, REDDIT_URL_PATTERN, IMAGE_URL_PATTERN,
     MAX_EMBED_TOTAL_SIZE, MAX_EMBED_FIELD_VALUE_LENGTH, MAX_EMBED_FIELDS
 )
 
@@ -45,6 +45,10 @@ def extract_reddit_submission_id(url: str) -> Optional[str]:
     """Extracts the submission ID from a Reddit URL."""
     match = REDDIT_URL_PATTERN.search(url)
     return match.group(2) if match else None
+
+def is_image_url(url: str) -> bool:
+    """Checks if a URL matches the image URL pattern."""
+    return IMAGE_URL_PATTERN.match(url) is not None
 
 # --- Embed Utilities ---
 

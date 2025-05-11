@@ -39,7 +39,7 @@ from . import models # Import the models module
 from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
 from .ui import ResponseActionView
 from .utils import (
-    extract_urls_with_indices, is_youtube_url, is_reddit_url,
+    extract_urls_with_indices, is_youtube_url, is_reddit_url, is_image_url, # Added is_image_url
     extract_video_id, extract_reddit_submission_id, extract_text_from_pdf_bytes
 )
 from .content_fetchers import (
@@ -245,8 +245,16 @@ class LLMCordClient(discord.Client):
             logging.info(f"Vision explicitly disabled for OpenAI model '{model_name}' via config.")
         # --- END ADDED ---
 
-        # --- ADDED: Switch to Gemini if images present and current model lacks vision ---
-        if image_attachments and not accept_files:
+        # --- ADDED: Switch to Gemini if images present (attachments OR URLs) and current model lacks vision ---
+        # Preliminary check for image URLs in the text
+        has_potential_image_urls_in_text = False
+        if cleaned_content: # Only check if there's content
+            urls_in_text = extract_urls_with_indices(cleaned_content)
+            if any(is_image_url(url_info[0]) for url_info in urls_in_text):
+                has_potential_image_urls_in_text = True
+                logging.info("Potential image URLs detected in message content.")
+
+        if (image_attachments or has_potential_image_urls_in_text) and not accept_files:
             original_model_for_warning = final_provider_slash_model
             fallback_model_str = FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL
             logging.info(f"Query has images, but current model '{final_provider_slash_model}' does not support vision or has vision disabled. Switching to '{fallback_model_str}' for this query.")
@@ -423,12 +431,37 @@ class LLMCordClient(discord.Client):
         # then combined_context will correctly be empty. This is the case for a direct query to any model without
         # explicit external context provided by the user or derived by the system.
 
+        # --- ADDED: Remove successfully fetched image URLs from cleaned_content ---
+        # This ensures the URL string itself isn't sent if the image bytes are.
+        if url_fetch_results:
+            successfully_fetched_image_urls = set()
+            for res in url_fetch_results:
+                if res.type == "image_url_content" and res.content and not res.error:
+                    successfully_fetched_image_urls.add(res.url)
+            
+            if successfully_fetched_image_urls:
+                temp_cleaned_content = cleaned_content
+                for img_url in successfully_fetched_image_urls:
+                    # Escape the URL for regex replacement to handle special characters
+                    escaped_url = re.escape(img_url)
+                    # Replace the URL, ensuring it's a whole word or surrounded by spaces/punctuation
+                    # to avoid partial replacements in longer strings.
+                    # Using \b (word boundary) might be too restrictive if URL is adjacent to punctuation.
+                    # A simpler approach is to replace the exact string.
+                    temp_cleaned_content = temp_cleaned_content.replace(img_url, "")
+                
+                # Clean up extra spaces that might result from removal
+                cleaned_content = re.sub(r'\s{2,}', ' ', temp_cleaned_content).strip()
+                logging.info(f"Removed {len(successfully_fetched_image_urls)} successfully fetched image URLs from cleaned_content.")
+        # --- END ADDED ---
 
         # --- Build Message History (for the *target* LLM) ---
         # `combined_context` now holds the appropriate context based on the logic above.
+        # Pass url_fetch_results to _build_message_history for the current message
         history_for_llm = await self._build_message_history(
             new_msg, cleaned_content, combined_context, max_messages, max_text, max_files_per_message,
-            accept_files, use_google_lens, is_gemini, provider, model_name, user_warnings # Pass provider and model_name for the target LLM
+            accept_files, use_google_lens, is_gemini, provider, model_name, user_warnings,
+            url_fetch_results if not use_google_lens else [] # Pass fetched image URLs if not using Google Lens (Lens handles its own images)
         )
 
         if not history_for_llm:
@@ -457,9 +490,12 @@ class LLMCordClient(discord.Client):
 
             user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(new_msg.author.id, global_use_thinking_budget)
 
-            if user_wants_thinking_budget and global_thinking_budget_value > 0:
+            # If the user/config indicates the thinking budget feature should be used,
+            # pass the configured value (which can be 0 to disable thinking, or >0 to set a budget).
+            # The llm_handler will apply this value to the ThinkingConfig if it's valid (0-24576).
+            if user_wants_thinking_budget:
                 extra_api_params["thinking_budget"] = global_thinking_budget_value
-                logging.info(f"Applying Gemini thinking_budget: {global_thinking_budget_value} for user {new_msg.author.id}")
+                logging.info(f"Passing Gemini thinking_budget value: {global_thinking_budget_value} for user {new_msg.author.id} to LLM handler.")
         # --- END ADDED ---
 
         # --- Generate and Send Response ---
@@ -870,7 +906,35 @@ class LLMCordClient(discord.Client):
                     fetch_tasks.append(fetch_reddit_data(url, sub_id, index, self.config.get("reddit_client_id"), self.config.get("reddit_client_secret"), self.config.get("reddit_user_agent")))
                 else:
                     user_warnings.add(f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}...")
-            else:
+            elif is_image_url(url): # Check for image URLs
+                # Define an async function to download the image and return a UrlFetchResult
+                async def fetch_image_url_content(img_url: str, img_idx: int) -> models.UrlFetchResult:
+                    try:
+                        logging.info(f"Attempting to download image URL: {img_url}")
+                        async with self.httpx_client.stream("GET", img_url, timeout=15.0) as response:
+                            if response.status_code == 200:
+                                content_type = response.headers.get("content-type", "").lower()
+                                if content_type.startswith("image/"):
+                                    img_bytes_list = []
+                                    async for chunk in response.aiter_bytes():
+                                        img_bytes_list.append(chunk)
+                                    img_bytes = b"".join(img_bytes_list)
+                                    logging.info(f"Successfully downloaded image from URL: {img_url} ({len(img_bytes)} bytes)")
+                                    return models.UrlFetchResult(url=img_url, content=img_bytes, type="image_url_content", original_index=img_idx)
+                                else:
+                                    logging.warning(f"URL {img_url} is an image URL but content type is '{content_type}'. Skipping.")
+                                    return models.UrlFetchResult(url=img_url, content=None, error=f"Not an image content type: {content_type}", type="image_url_content", original_index=img_idx)
+                            else:
+                                logging.warning(f"Failed to download image URL {img_url}. Status: {response.status_code}")
+                                return models.UrlFetchResult(url=img_url, content=None, error=f"HTTP status {response.status_code}", type="image_url_content", original_index=img_idx)
+                    except httpx.RequestError as e:
+                        logging.warning(f"RequestError downloading image URL {img_url}: {e}")
+                        return models.UrlFetchResult(url=img_url, content=None, error=f"Request error: {type(e).__name__}", type="image_url_content", original_index=img_idx)
+                    except Exception as e:
+                        logging.exception(f"Unexpected error downloading image URL {img_url}")
+                        return models.UrlFetchResult(url=img_url, content=None, error=f"Unexpected error: {type(e).__name__}", type="image_url_content", original_index=img_idx)
+                fetch_tasks.append(fetch_image_url_content(url, index))
+            else: # General web page
                 fetch_tasks.append(fetch_general_url_content(url, index))
 
         # Fetch non-Lens content concurrently
@@ -967,6 +1031,7 @@ class LLMCordClient(discord.Client):
                     if isinstance(result.content, str): content_str += f"  {result.content}\n"
                     other_url_parts.append(content_str)
                     other_url_counter += 1
+                # image_url_content types are handled as binary data and not formatted into combined_context text
 
         combined_context = ""
         if google_lens_parts or other_url_parts:
@@ -978,7 +1043,13 @@ class LLMCordClient(discord.Client):
 
         return combined_context.strip()
 
-    async def _build_message_history(self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str, max_messages: int, max_text: int, max_files_per_message: int, accept_files: bool, use_google_lens: bool, is_target_provider_gemini: bool, target_provider_name: str, target_model_name: str, user_warnings: Set[str]) -> List[Dict[str, Any]]:
+    async def _build_message_history(
+        self, new_msg: discord.Message, initial_cleaned_content: str, combined_context: str,
+        max_messages: int, max_text: int, max_files_per_message: int,
+        accept_files: bool, use_google_lens: bool, is_target_provider_gemini: bool,
+        target_provider_name: str, target_model_name: str, user_warnings: Set[str],
+        current_message_url_fetch_results: Optional[List[models.UrlFetchResult]] = None # Added parameter
+    ) -> List[Dict[str, Any]]:
         history = []
         curr_msg = new_msg
         is_dm = isinstance(new_msg.channel, discord.DMChannel)
@@ -1137,53 +1208,89 @@ class LLMCordClient(discord.Client):
                                            (accept_files or is_lens_trigger_message)
 
                     if should_process_files_for_api and not is_lens_trigger_message:
+                        # Process Discord Attachments
                         for att, resp in zip(attachments_to_fetch, attachment_responses):
-                            # Only consider image or PDF for API parts from fetched attachments
                             is_api_relevant_type = False
+                            mime_type_for_api = att.content_type # Default to attachment's content type
+                            file_bytes_for_api = None
+
                             if att.content_type.startswith("image/"):
                                 is_api_relevant_type = True
-                            # ONLY send PDF bytes if it's Gemini AND accept_files.
-                            # For non-Gemini, PDF text is already extracted and appended to the query.
-                            # Use is_target_provider_gemini here
+                                if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                                    file_bytes_for_api = resp.content
+                                elif isinstance(resp, Exception):
+                                    logging.warning(f"Failed to fetch image attachment {att.filename} for API: {resp}")
+                                    curr_node.has_bad_attachments = True
+                                    continue # Skip this attachment
+                                else: # Non-200 response
+                                    logging.warning(f"Non-200 response for image attachment {att.filename}: {resp.status_code if resp else 'N/A'}")
+                                    curr_node.has_bad_attachments = True
+                                    continue
+
                             elif att.content_type == "application/pdf" and is_target_provider_gemini and accept_files:
                                 is_api_relevant_type = True
+                                mime_type_for_api = "application/pdf" # Ensure correct MIME for PDF
+                                if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                                    file_bytes_for_api = resp.content
+                                elif isinstance(resp, Exception):
+                                    logging.warning(f"Failed to fetch PDF attachment {att.filename} for API: {resp}")
+                                    curr_node.has_bad_attachments = True
+                                    continue
+                                else:
+                                    logging.warning(f"Non-200 response for PDF attachment {att.filename}: {resp.status_code if resp else 'N/A'}")
+                                    curr_node.has_bad_attachments = True
+                                    continue
                             
-                            if not is_api_relevant_type:
+                            if not is_api_relevant_type or file_bytes_for_api is None:
                                 continue
 
                             if files_processed_for_api_count >= max_files_per_message:
                                 curr_node.has_bad_attachments = True
-                                logging.warning(f"Max {max_files_per_message} files (images/PDFs) processed for API for message {curr_msg.id}, subsequent API-relevant attachments skipped.")
-                                break
+                                logging.warning(f"Max {max_files_per_message} files (attachments + image URLs) processed for API for message {curr_msg.id}. Skipping attachment: {att.filename}")
+                                break # Stop processing more attachments
 
-                            if isinstance(resp, httpx.Response) and resp.status_code == 200:
-                                attachment_added_to_api = False
-                                if att.content_type.startswith("image/"):
-                                    try:
-                                        img_bytes = resp.content
-                                        if is_target_provider_gemini: # Use is_target_provider_gemini
-                                            api_file_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=att.content_type))
-                                        else: 
-                                            api_file_parts.append(dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
-                                        attachment_added_to_api = True
-                                    except Exception as img_e:
-                                         logging.error(f"Error processing image attachment {att.filename} for API in msg {curr_msg.id}: {img_e}")
-                                         curr_node.has_bad_attachments = True
-                                elif att.content_type == "application/pdf" and is_target_provider_gemini: # Use is_target_provider_gemini
-                                    try:
-                                        pdf_bytes = resp.content
-                                        api_file_parts.append(google_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
-                                        attachment_added_to_api = True
-                                    except Exception as pdf_e:
-                                         logging.error(f"Error processing PDF attachment {att.filename} for API in msg {curr_msg.id}: {pdf_e}")
-                                         curr_node.has_bad_attachments = True
-                                
-                                if attachment_added_to_api:
-                                    files_processed_for_api_count += 1
-                            
-                            elif isinstance(resp, Exception): # Fetch failed for an API-relevant file
-                                logging.warning(f"Failed to fetch API-relevant attachment {att.filename} (type: {att.content_type}) in history: {resp}")
+                            try:
+                                if is_target_provider_gemini:
+                                    api_file_parts.append(google_types.Part.from_bytes(data=file_bytes_for_api, mime_type=mime_type_for_api))
+                                else:
+                                    api_file_parts.append(dict(type="image_url", image_url=dict(url=f"data:{mime_type_for_api};base64,{base64.b64encode(file_bytes_for_api).decode('utf-8')}")))
+                                files_processed_for_api_count += 1
+                            except Exception as e:
+                                logging.error(f"Error preparing attachment {att.filename} for API in msg {curr_msg.id}: {e}")
                                 curr_node.has_bad_attachments = True
+                        
+                        # Process successfully fetched image URLs for the current message
+                        if curr_msg.id == new_msg.id and current_message_url_fetch_results:
+                            for fetched_url_res in current_message_url_fetch_results:
+                                if fetched_url_res.type == "image_url_content" and isinstance(fetched_url_res.content, bytes) and not fetched_url_res.error:
+                                    if files_processed_for_api_count >= max_files_per_message:
+                                        curr_node.has_bad_attachments = True
+                                        user_warnings.add(f"⚠️ Max {max_files_per_message} files (attachments + image URLs) reached. Some image URLs may not be included.")
+                                        logging.warning(f"Max {max_files_per_message} files reached. Skipping image URL: {fetched_url_res.url}")
+                                        break # Stop processing more image URLs
+
+                                    img_bytes = fetched_url_res.content
+                                    # Try to infer mime type from URL extension or default
+                                    url_lower = fetched_url_res.url.lower()
+                                    mime_type = "image/png" # Default
+                                    if url_lower.endswith(".jpg") or url_lower.endswith(".jpeg"): mime_type = "image/jpeg"
+                                    elif url_lower.endswith(".gif"): mime_type = "image/gif"
+                                    elif url_lower.endswith(".webp"): mime_type = "image/webp"
+                                    elif url_lower.endswith(".bmp"): mime_type = "image/bmp"
+                                    # Add more if needed
+
+                                    try:
+                                        if is_target_provider_gemini:
+                                            api_file_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                                        else:
+                                            api_file_parts.append(dict(type="image_url", image_url=dict(url=f"data:{mime_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}")))
+                                        files_processed_for_api_count += 1
+                                        logging.info(f"Added downloaded image from URL {fetched_url_res.url} to API parts.")
+                                    except Exception as e:
+                                        logging.error(f"Error preparing downloaded image URL {fetched_url_res.url} for API: {e}")
+                                        user_warnings.add(f"⚠️ Error processing image from URL: {fetched_url_res.url[:50]}...")
+                                        curr_node.has_bad_attachments = True
+
 
                     curr_node.api_file_parts = api_file_parts # Store prepared API parts
                     curr_node.role = current_role

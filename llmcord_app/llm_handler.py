@@ -198,18 +198,25 @@ async def generate_response_stream(
                 )
                 # --- ADDED: Apply thinking_budget if valid ---
                 if gemini_thinking_budget_val is not None:
-                    try:
-                        # Constants GEMINI_MIN_THINKING_BUDGET_VALUE and GEMINI_MAX_THINKING_BUDGET_VALUE are not directly available here
-                        # Validation should ideally happen before, but a basic check is good.
-                        # The config.py already validates the global value.
-                        budget_int = int(gemini_thinking_budget_val)
-                        if 0 <= budget_int <= 24576: # Max value for thinking_budget
-                            api_config.thinking_budget = budget_int
-                            logging.debug(f"Applied thinking_budget: {budget_int} to Gemini GenerateContentConfig")
+                    budget_to_apply: Optional[int] = None
+                    if isinstance(gemini_thinking_budget_val, int):
+                        budget_to_apply = gemini_thinking_budget_val
+                    elif isinstance(gemini_thinking_budget_val, str):
+                        try:
+                            budget_to_apply = int(gemini_thinking_budget_val)
+                        except ValueError:
+                            logging.warning(f"Non-integer string for thinking_budget ('{gemini_thinking_budget_val}') for Gemini. Ignoring.")
+                    else:
+                        logging.warning(f"Unsupported type for thinking_budget ('{type(gemini_thinking_budget_val).__name__}') for Gemini. Ignoring.")
+
+                    if budget_to_apply is not None:
+                        if 0 <= budget_to_apply <= 24576: # Max value for thinking_budget (as per Gemini docs)
+                            if not hasattr(api_config, 'thinking_config') or api_config.thinking_config is None:
+                                api_config.thinking_config = google_types.ThinkingConfig()
+                            api_config.thinking_config.thinking_budget = budget_to_apply
+                            logging.debug(f"Applied thinking_budget: {budget_to_apply} to Gemini ThinkingConfig")
                         else:
-                            logging.warning(f"Invalid thinking_budget value ({budget_int}) passed to llm_handler. Ignoring.")
-                    except ValueError:
-                        logging.warning(f"Non-integer thinking_budget value ('{gemini_thinking_budget_val}') passed to llm_handler. Ignoring.")
+                            logging.warning(f"Invalid thinking_budget value ({budget_to_apply}) for Gemini. Must be 0-24576. Ignoring.")
                 # --- END ADDED ---
 
                 if system_prompt_text:
