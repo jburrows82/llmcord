@@ -82,6 +82,11 @@ CUSTOM_LENS_SHORT_TIMEOUT = 5000 # milliseconds
 # --- Model Selection ---
 # This defines which models are *known* to the bot for autocomplete/validation
 # The actual availability depends on the user's config.yaml
+
+# --- ADDED: Fallback vision model if selected model cannot handle images ---
+FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.0-flash"
+# --- END ADDED ---
+
 AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-04-17",

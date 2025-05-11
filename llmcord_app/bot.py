@@ -31,7 +31,8 @@ from .constants import (
     SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY, # <-- ADDED
     GROUNDING_MODEL_PROVIDER, GROUNDING_MODEL_NAME, # Added Grounding model constants
     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY, # <-- ADDED
-    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY # Added Gemini Thinking Budget keys
+    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, # Added Gemini Thinking Budget keys
+    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL # <-- ADDED for configurable fallback vision model
 )
 # Corrected import: Use the models module directly
 from . import models # Import the models module
@@ -242,6 +243,63 @@ class LLMCordClient(discord.Client):
         if provider == "openai" and provider_config.get("disable_vision", False):
             accept_files = False
             logging.info(f"Vision explicitly disabled for OpenAI model '{model_name}' via config.")
+        # --- END ADDED ---
+
+        # --- ADDED: Switch to Gemini if images present and current model lacks vision ---
+        if image_attachments and not accept_files:
+            original_model_for_warning = final_provider_slash_model
+            fallback_model_str = FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL
+            logging.info(f"Query has images, but current model '{final_provider_slash_model}' does not support vision or has vision disabled. Switching to '{fallback_model_str}' for this query.")
+            user_warnings.add(f"⚠️ Images detected. Switched from '{original_model_for_warning}' to '{fallback_model_str}' as the original model cannot process images.")
+
+            final_provider_slash_model = fallback_model_str
+            try:
+                provider, model_name = final_provider_slash_model.split("/", 1)
+            except ValueError:
+                logging.error(f"Invalid format for FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL: '{fallback_model_str}'. Cannot switch. Original model '{original_model_for_warning}' will be attempted.")
+                # Keep original provider, model_name, provider_config, all_api_keys, is_gemini, is_grok_model, keys_required, accept_files
+                # This means the original non-vision model will attempt to process, likely without images.
+                # Add a specific warning for this failure.
+                user_warnings.add(f"⚠️ Error: Could not switch to vision model '{fallback_model_str}' due to invalid format. Processing with '{original_model_for_warning}'.")
+                # Skip the rest of the override logic
+            else:
+                # Re-fetch config for the NEW provider
+                new_provider_config = self.config.get("providers", {}).get(provider, {})
+                if not isinstance(new_provider_config, dict):
+                    logging.error(f"Configuration for fallback provider '{provider}' is invalid or missing. Cannot proceed with switch.")
+                    await new_msg.reply(f"⚠️ Error: Could not switch to vision model due to configuration issue for '{provider}'. Original model '{original_model_for_warning}' will be attempted if possible, or processing may fail.", mention_author=False)
+                    # Attempt to revert to original provider_config if new one is bad, or let it fail if original was also problematic
+                    # For safety, we might just return or use the original provider_config if the new one is bad.
+                    # However, the original model can't handle images, so this path is problematic.
+                    # Best to inform user and potentially stop. For now, let's allow it to try to continue with original if new config is bad.
+                    # This means provider_config remains the one for the *original* model.
+                else:
+                    provider_config = new_provider_config # Successfully updated provider_config
+
+                    all_api_keys = provider_config.get("api_keys", [])
+
+                    is_gemini = (provider == "google") # Update based on the new provider
+                    is_grok_model = (provider == "x-ai") # Update based on the new provider
+
+                    keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
+                    if keys_required and not all_api_keys:
+                        logging.error(f"No API keys configured for the fallback vision provider '{provider}'. Cannot use vision model '{final_provider_slash_model}'.")
+                        user_warnings.add(f"⚠️ Switched to '{final_provider_slash_model}' for images, but no API keys found for it. Image processing will likely fail.")
+
+                    # Re-evaluate accept_files for the new model
+                    accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
+                    # Check OpenAI specific disable_vision for the new provider_config
+                    if provider == "openai" and provider_config.get("disable_vision", False):
+                        accept_files = False
+                        logging.info(f"Vision explicitly disabled for fallback OpenAI model '{model_name}' via config.")
+
+                    # Final check: if after switching, the new model STILL doesn't accept files (e.g. misconfigured constant or keys missing for a vision model)
+                    if not accept_files:
+                        logging.warning(f"Fallback model '{final_provider_slash_model}' was selected but it still does not accept files (accept_files: {accept_files}). This might be due to missing keys or configuration. Images may not be processed.")
+                        user_warnings.add(f"⚠️ Fallback model '{final_provider_slash_model}' cannot process images. Check configuration.")
+
+
+                    logging.info(f"Switched to '{final_provider_slash_model}'. New provider: '{provider}', model: '{model_name}'. New accept_files: {accept_files}. Keys required: {keys_required}. API Keys found: {bool(all_api_keys)}")
         # --- END ADDED ---
 
         max_files_per_message = self.config.get("max_images", 5) # Using max_images config key for max files
