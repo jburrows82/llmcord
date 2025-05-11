@@ -1356,17 +1356,26 @@ class LLMCordClient(discord.Client):
                         for part_in_node in raw_parts_from_node:
                             if isinstance(part_in_node, dict) and part_in_node.get("type") == "image_url":
                                 current_api_file_parts.append(part_in_node) # Already correct format
-                            elif isinstance(part_in_node, google_types.Part) and hasattr(part_in_node, 'inline_data') and \
-                                 part_in_node.inline_data and hasattr(part_in_node.inline_data, 'data') and \
+                            elif isinstance(part_in_node, google_types.Part) and \
+                                 hasattr(part_in_node, 'inline_data') and \
+                                 part_in_node.inline_data and \
+                                 hasattr(part_in_node.inline_data, 'data') and \
                                  hasattr(part_in_node.inline_data, 'mime_type'):
                                 try:
-                                    # Assuming inline_data.data is already a base64 string from Gemini
-                                    b64_data = part_in_node.inline_data.data
                                     mime_type = part_in_node.inline_data.mime_type
-                                    current_api_file_parts.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}
-                                    })
+                                    if mime_type.startswith("image/"): # Check if it's an image
+                                        # inline_data.data from a Part created with from_bytes contains raw bytes
+                                        raw_bytes = part_in_node.inline_data.data
+                                        b64_encoded_data = base64.b64encode(raw_bytes).decode('utf-8')
+                                        current_api_file_parts.append({
+                                            "type": "image_url",
+                                            "image_url": {"url": f"data:{mime_type};base64,{b64_encoded_data}"}
+                                        })
+                                        logging.debug(f"Converted cached Gemini image Part (mime: {mime_type}) to OpenAI part for node {curr_msg.id}.")
+                                    else:
+                                        # If it's not an image (e.g., a PDF that was cached from a Gemini call), skip it.
+                                        # Its text content should have already been extracted and added to curr_node.text for non-Gemini models.
+                                        logging.debug(f"Skipping cached non-image Gemini Part (mime: {mime_type}) for OpenAI history for node {curr_msg.id}.")
                                 except Exception as e:
                                     logging.warning(f"Error converting cached Gemini Part to OpenAI image dict for node {curr_msg.id}: {e}")
                             # else: skip unrecognized cached part type if it's not convertible
