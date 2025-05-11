@@ -1077,20 +1077,24 @@ class LLMCordClient(discord.Client):
             curr_node = self.msg_nodes[curr_msg.id]
 
             async with curr_node.lock:
+                is_current_message_node = (curr_msg.id == new_msg.id)
+                current_role = "model" if curr_msg.author == self.user else "user"
+
                 # Always set/update external_content for the *current message node* (new_msg)
                 # if combined_context is provided for this specific history build.
-                # This ensures that the context (e.g., SearxNG results) is correctly associated
-                # with the current turn's node, even if the node was touched by a previous step (like grounding).
-                if curr_msg.id == new_msg.id: # Apply combined_context only to the current message node for this build
+                if is_current_message_node:
                     curr_node.external_content = combined_context if combined_context else None
                     logging.debug(f"Set external_content for node {curr_msg.id} to {'present' if combined_context else 'None'} for this history build.")
 
+                # Determine if this node needs to be (re)populated for the current history build context.
+                # Historical nodes are populated once. The current message node is (re)populated
+                # each time _build_message_history is called for it.
+                should_populate_node = (curr_node.text is None) or is_current_message_node
 
-                needs_population = curr_node.text is None # Or other primary content like attachments
-                current_role = "model" if curr_msg.author == self.user else "user"
-
-                if needs_population:
-                    curr_node.has_bad_attachments = False # Initialize
+                if should_populate_node:
+                    curr_node.has_bad_attachments = False # Initialize/Reset for this population pass
+                    if is_current_message_node:
+                        curr_node.api_file_parts = [] # Reset api_file_parts for re-evaluation if it's the current message
 
                     content_to_store = ""
                     if current_role == "model":
