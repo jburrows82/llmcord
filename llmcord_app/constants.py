@@ -40,7 +40,7 @@ SEARXNG_BASE_URL_CONFIG_KEY = "searxng_base_url"
 SEARXNG_DEFAULT_URL = "http://localhost:18088" # Default if not in config
 SEARXNG_NUM_RESULTS = 5
 GROUNDING_MODEL_PROVIDER = "google"
-GROUNDING_MODEL_NAME = "gemini-2.0-flash"
+GROUNDING_MODEL_NAME = "gemini-2.5-flash-preview-04-17"
 # --- ADDED CONSTANT ---
 GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- END ADDED CONSTANT ---
@@ -84,7 +84,7 @@ CUSTOM_LENS_SHORT_TIMEOUT = 5000 # milliseconds
 # The actual availability depends on the user's config.yaml
 
 # --- ADDED: Fallback vision model if selected model cannot handle images ---
-FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.0-flash"
+FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04-17"
 # --- END ADDED ---
 
 AVAILABLE_MODELS = {
