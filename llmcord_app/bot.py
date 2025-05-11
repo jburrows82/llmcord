@@ -137,16 +137,41 @@ class LLMCordClient(discord.Client):
         # Config is now an instance variable, consider if reloading is needed per message
         # self.config = get_config() # Uncomment if hot-reloading is desired
         check_and_perform_global_reset(self.config)
+        # youtube_api_key = self.config.get("youtube_api_key") # Moved down, not needed this early
+        # reddit_client_id = self.config.get("reddit_client_id")
+        # reddit_client_secret = self.config.get("reddit_client_secret")
+        # reddit_user_agent = self.config.get("reddit_user_agent")
+        # custom_google_lens_config = self.config.get("custom_google_lens_config")
+
+        # --- Permissions Check ---
+        if not self._is_allowed(new_msg, is_dm):
+            logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
+            return
+
+        # --- Send Initial "Processing" Message ---
+        processing_msg: Optional[discord.Message] = None
+        _use_plain_for_initial_status = self.config.get("use_plain_responses", False)
+        try:
+            if _use_plain_for_initial_status:
+                processing_msg = await new_msg.reply("⏳ Processing request...", mention_author=False, suppress_embeds=True)
+            else:
+                processing_embed = discord.Embed(description="⏳ Processing request...", color=EMBED_COLOR_INCOMPLETE)
+                processing_msg = await new_msg.reply(embed=processing_embed, mention_author=False)
+        except discord.HTTPException as e:
+            logging.warning(f"Failed to send initial 'Processing request...' message: {e}")
+            processing_msg = None # Ensure it's None if sending failed
+        except Exception as e: # Catch any other unexpected errors during initial reply
+            logging.error(f"Unexpected error sending initial 'Processing request...' message: {e}", exc_info=True)
+            processing_msg = None
+
+
+        # --- Config values needed for further processing ---
         youtube_api_key = self.config.get("youtube_api_key")
         reddit_client_id = self.config.get("reddit_client_id")
         reddit_client_secret = self.config.get("reddit_client_secret")
         reddit_user_agent = self.config.get("reddit_user_agent")
         custom_google_lens_config = self.config.get("custom_google_lens_config")
 
-        # --- Permissions Check ---
-        if not self._is_allowed(new_msg, is_dm):
-            logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
-            return
 
         # --- Clean Content and Check for Google Lens ---
         cleaned_content = original_content_for_processing
@@ -172,7 +197,7 @@ class LLMCordClient(discord.Client):
                 logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
 
         # --- LLM Provider/Model Selection ---
-        user_id = new_msg.author.id
+        user_id = new_msg.author.id # user_id defined here
         default_model_str = self.config.get("model", "google/gemini-2.0-flash")
         provider_slash_model = get_user_model_preference(user_id, default_model_str) # Use function from commands.py
 
@@ -221,7 +246,14 @@ class LLMCordClient(discord.Client):
         provider_config = self.config.get("providers", {}).get(provider, {})
         if not isinstance(provider_config, dict): # Ensure provider_config is a dict
             logging.error(f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed.")
-            await new_msg.reply(f"⚠️ Configuration error for provider `{provider}`.", mention_author=False)
+            error_text = f"⚠️ Configuration error for provider `{provider}`."
+            if processing_msg:
+                if _use_plain_for_initial_status:
+                    await processing_msg.edit(content=error_text, embed=None, view=None)
+                else:
+                    await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+            else:
+                await new_msg.reply(error_text, mention_author=False)
             return
         all_api_keys = provider_config.get("api_keys", []) # Expecting a list
 
@@ -233,7 +265,14 @@ class LLMCordClient(discord.Client):
 
         if keys_required and not all_api_keys:
              logging.error(f"No API keys configured for the selected provider '{provider}' in config.yaml.")
-             await new_msg.reply(f"⚠️ No API keys configured for provider `{provider}`.", mention_author = False)
+             error_text = f"⚠️ No API keys configured for provider `{provider}`."
+             if processing_msg:
+                if _use_plain_for_initial_status:
+                    await processing_msg.edit(content=error_text, embed=None, view=None)
+                else:
+                    await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+             else:
+                await new_msg.reply(error_text, mention_author = False)
              return
 
         # --- Configuration Values ---
@@ -275,7 +314,14 @@ class LLMCordClient(discord.Client):
                 new_provider_config = self.config.get("providers", {}).get(provider, {})
                 if not isinstance(new_provider_config, dict):
                     logging.error(f"Configuration for fallback provider '{provider}' is invalid or missing. Cannot proceed with switch.")
-                    await new_msg.reply(f"⚠️ Error: Could not switch to vision model due to configuration issue for '{provider}'. Original model '{original_model_for_warning}' will be attempted if possible, or processing may fail.", mention_author=False)
+                    error_text = f"⚠️ Error: Could not switch to vision model due to configuration issue for '{provider}'. Original model '{original_model_for_warning}' will be attempted if possible, or processing may fail."
+                    if processing_msg:
+                        if _use_plain_for_initial_status:
+                            await processing_msg.edit(content=error_text, embed=None, view=None)
+                        else:
+                            await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+                    else:
+                        await new_msg.reply(error_text, mention_author=False)
                     # Attempt to revert to original provider_config if new one is bad, or let it fail if original was also problematic
                     # For safety, we might just return or use the original provider_config if the new one is bad.
                     # However, the original model can't handle images, so this path is problematic.
@@ -341,7 +387,14 @@ class LLMCordClient(discord.Client):
 
         if is_text_empty and not has_meaningful_attachments_final and not is_reply:
             logging.info(f"Empty query detected from user {new_msg.author.id}. Not a reply and no meaningful attachments.")
-            await new_msg.reply("Your query is empty. Please provide text, attach relevant files/images, or reply to a message.", mention_author=False)
+            empty_query_text = "Your query is empty. Please provide text, attach relevant files/images, or reply to a message."
+            if processing_msg:
+                if _use_plain_for_initial_status:
+                    await processing_msg.edit(content=empty_query_text, embed=None, view=None)
+                else:
+                    await processing_msg.edit(content=None, embed=discord.Embed(description=empty_query_text, color=EMBED_COLOR_ERROR), view=None)
+            else:
+                await new_msg.reply(empty_query_text, mention_author=False)
             return
 
         # --- URL Extraction and Content Fetching ---
@@ -468,10 +521,23 @@ class LLMCordClient(discord.Client):
             logging.warning(f"Message history is empty for message {new_msg.id}. Cannot proceed.")
             # Send warnings if any were generated during history building
             if user_warnings:
-                warning_msg = "\n".join(sorted(list(user_warnings)))
-                await new_msg.reply(f"Could not process request. Issues found:\n{warning_msg}", mention_author=False)
+                warning_msg_text = f"Could not process request. Issues found:\n" + "\n".join(sorted(list(user_warnings)))
+                if processing_msg:
+                    if _use_plain_for_initial_status:
+                        await processing_msg.edit(content=warning_msg_text, embed=None, view=None)
+                    else:
+                        await processing_msg.edit(content=None, embed=discord.Embed(description=warning_msg_text, color=EMBED_COLOR_ERROR), view=None)
+                else:
+                    await new_msg.reply(warning_msg_text, mention_author=False)
             else:
-                await new_msg.reply("Could not process request (failed to build message history).", mention_author=False)
+                error_text = "Could not process request (failed to build message history)."
+                if processing_msg:
+                    if _use_plain_for_initial_status:
+                        await processing_msg.edit(content=error_text, embed=None, view=None)
+                    else:
+                        await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+                else:
+                    await new_msg.reply(error_text, mention_author=False)
             return
 
         logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}")
@@ -540,12 +606,24 @@ class LLMCordClient(discord.Client):
                                 embed.description += f"\n\n⚠️ Error: {error_message}"
                                 embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
                                 embed.color = EMBED_COLOR_ERROR
-                                await response_msgs[-1].edit(embed=embed, view=None)
+                                await response_msgs[-1].edit(embed=embed, view=None) # Edits the current message in stream
                             except Exception as edit_err:
                                 logging.error(f"Failed to edit message to show stream error: {edit_err}")
-                                await new_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
-                        else:
-                            await new_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
+                                # Fallback to sending new reply if edit fails
+                                if processing_msg and processing_msg.id == response_msgs[-1].id: # If the message being edited was the initial processing_msg
+                                    await processing_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
+                                else: # Some other message in the stream
+                                    await new_msg.reply(f"⚠️ Error during response generation: {error_message}", mention_author=False)
+                        else: # Plain response or no response_msgs yet
+                            error_text_plain = f"⚠️ Error during response generation: {error_message}"
+                            if processing_msg:
+                                if _use_plain_for_initial_status:
+                                    await processing_msg.edit(content=error_text_plain, embed=None, view=None)
+                                else: # This case implies use_plain_responses is false, but response_msgs is empty.
+                                      # This means the very first attempt to send/edit failed before stream.
+                                    await processing_msg.edit(content=None, embed=discord.Embed(description=error_text_plain, color=EMBED_COLOR_ERROR), view=None)
+                            else:
+                                await new_msg.reply(error_text_plain, mention_author=False)
                         llm_call_successful = False
                         break # Stop processing stream
 
@@ -642,15 +720,20 @@ class LLMCordClient(discord.Client):
                                             view_to_attach = None
 
                             # Create or Edit the current message
-                            if start_next_msg:
-                                reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
-                                response_msg = await reply_to_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author = False)
-                                response_msgs.append(response_msg)
+                            if start_next_msg: # Creating a new message segment
+                                if not response_msgs and processing_msg: # This is the VERY FIRST segment of the actual response
+                                    await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach) # Clear content, set embed
+                                    response_msg = processing_msg # The processing_msg is now the first response_msg
+                                    response_msgs.append(response_msg)
+                                else: # Subsequent segments, or if processing_msg didn't exist/failed
+                                    reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                    response_msg = await reply_to_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author=False)
+                                    response_msgs.append(response_msg)
                                 # Use the correct MsgNode class
                                 self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
                                 if view_to_attach: view_to_attach.message = response_msg # Set message reference in view
                                 await self.msg_nodes[response_msg.id].lock.acquire()
-                            elif response_msgs and current_msg_index < len(response_msgs):
+                            elif response_msgs and current_msg_index < len(response_msgs): # Editing an existing segment in response_msgs
                                 # Ensure the message exists before creating task
                                 target_msg = response_msgs[current_msg_index]
                                 if target_msg:
@@ -658,14 +741,18 @@ class LLMCordClient(discord.Client):
                                     if view_to_attach: view_to_attach.message = target_msg # Update message ref
                                 else:
                                      logging.error(f"Attempted to edit non-existent message at index {current_msg_index}")
-
-                            elif not response_msgs and is_final_chunk: # Short final response
-                                  response_msg = await new_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author = False)
-                                  response_msgs.append(response_msg)
-                                  # Use the correct MsgNode class
-                                  self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                                  if view_to_attach: view_to_attach.message = response_msg
-                                  await self.msg_nodes[response_msg.id].lock.acquire()
+                            elif not response_msgs and is_final_chunk: # Short final response, not starting a new segment
+                                if processing_msg:
+                                    await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach)
+                                    response_msg = processing_msg
+                                    response_msgs.append(response_msg)
+                                else: # Short response, no processing_msg (should be rare)
+                                    response_msg = await new_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author = False)
+                                    response_msgs.append(response_msg)
+                                # Common logic for new short response
+                                self.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
+                                if view_to_attach: view_to_attach.message = response_msg
+                                await self.msg_nodes[response_msg.id].lock.acquire()
 
                             self.last_task_time = dt.now().timestamp()
 
@@ -677,14 +764,18 @@ class LLMCordClient(discord.Client):
 
             # --- End Stream Loop ---
             # Handle plain text responses (final output)
-            if use_plain_responses and llm_call_successful:
+            if use_plain_responses and llm_call_successful: # use_plain_responses is the global config
                  final_messages_content = [final_text[i:i+split_limit] for i in range(0, len(final_text), split_limit)]
                  if not final_messages_content: final_messages_content.append("...") # Handle empty success
 
                  temp_response_msgs = []
-                 for i, content in enumerate(final_messages_content):
-                     reply_to_msg = new_msg if not temp_response_msgs else temp_response_msgs[-1]
-                     response_msg = await reply_to_msg.reply(content=content or "...", suppress_embeds=True, view=None, mention_author = False)
+                 for i, content_chunk in enumerate(final_messages_content):
+                     if i == 0 and processing_msg: # First plain text chunk
+                         await processing_msg.edit(content=content_chunk or "...", embed=None, view=None) # Clear embed
+                         response_msg = processing_msg
+                     else: # Subsequent chunks or no processing_msg
+                         reply_to_msg = new_msg if not temp_response_msgs else temp_response_msgs[-1]
+                         response_msg = await reply_to_msg.reply(content=content_chunk or "...", suppress_embeds=True, view=None, mention_author = False)
                      temp_response_msgs.append(response_msg)
                      # Create node and acquire lock immediately
                      # Use the correct MsgNode class
@@ -699,42 +790,57 @@ class LLMCordClient(discord.Client):
 
         except AllKeysFailedError as e:
             logging.error(f"LLM generation failed for message {new_msg.id}: {e}")
-            error_message = f"⚠️ All API keys for provider `{e.service_name}` failed."
+            error_text = f"⚠️ All API keys for provider `{e.service_name}` failed."
             last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
             # Simplify error reporting for the user
-            if "safety" in last_err_str.lower(): error_message += "\nLast error: Response blocked by safety filters."
-            elif "recitation" in last_err_str.lower(): error_message += "\nLast error: Response stopped due to recitation."
-            elif "no content received" in last_err_str.lower(): error_message += "\nLast error: No content received from API."
-            elif "stream ended prematurely" in last_err_str.lower(): error_message += "\nLast error: Connection issue during response generation."
-            else: error_message += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
+            if "safety" in last_err_str.lower(): error_text += "\nLast error: Response blocked by safety filters."
+            elif "recitation" in last_err_str.lower(): error_text += "\nLast error: Response stopped due to recitation."
+            elif "no content received" in last_err_str.lower(): error_text += "\nLast error: No content received from API."
+            elif "stream ended prematurely" in last_err_str.lower(): error_text += "\nLast error: Connection issue during response generation."
+            else: error_text += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
 
-            if not use_plain_responses and response_msgs:
-                 try:
-                     # Make sure there's an embed to modify
-                     if response_msgs[-1].embeds:
-                         embed = discord.Embed.from_dict(response_msgs[-1].embeds[0].to_dict())
-                         current_desc = embed.description or ""
-                     else:
-                         embed = discord.Embed(color=EMBED_COLOR_ERROR) # Create embed if needed
-                         current_desc = ""
-
-                     embed.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
-                     embed.description += f"\n\n{error_message}"
-                     embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
-                     embed.color = EMBED_COLOR_ERROR
-                     await response_msgs[-1].edit(embed=embed, view=None)
-                 except Exception as edit_err:
-                     logging.error(f"Failed to edit message to show AllKeysFailedError: {edit_err}")
-                     await new_msg.reply(error_message, mention_author = False)
-            else:
-                await new_msg.reply(error_message, mention_author = False)
+            if processing_msg:
+                if _use_plain_for_initial_status: # Check based on initial status message mode
+                    await processing_msg.edit(content=error_text, embed=None, view=None)
+                else:
+                    # If an embed stream was active, try to update its last message (which might be processing_msg)
+                    if response_msgs and response_msgs[-1].embeds:
+                        target_edit_msg = response_msgs[-1]
+                        embed_to_edit = discord.Embed.from_dict(target_edit_msg.embeds[0].to_dict())
+                        current_desc = embed_to_edit.description or ""
+                        embed_to_edit.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                        embed_to_edit.description += f"\n\n{error_text}"
+                        embed_to_edit.description = embed_to_edit.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                        embed_to_edit.color = EMBED_COLOR_ERROR
+                        await target_edit_msg.edit(embed=embed_to_edit, view=None)
+                    else: # No prior embed stream, edit processing_msg with a new error embed
+                        await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+            elif not _use_plain_for_initial_status and response_msgs and response_msgs[-1].embeds: # processing_msg failed, but stream started
+                 # This is the existing logic if processing_msg wasn't there but stream was
+                 target_edit_msg = response_msgs[-1]
+                 embed_to_edit = discord.Embed.from_dict(target_edit_msg.embeds[0].to_dict())
+                 current_desc = embed_to_edit.description or ""
+                 embed_to_edit.description = current_desc.replace(STREAMING_INDICATOR, "").strip()
+                 embed_to_edit.description += f"\n\n{error_text}"
+                 embed_to_edit.description = embed_to_edit.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                 embed_to_edit.color = EMBED_COLOR_ERROR
+                 await target_edit_msg.edit(embed=embed_to_edit, view=None)
+            else: # Fallback: No processing_msg and no stream to edit, send new reply
+                await new_msg.reply(error_text, mention_author=False)
             llm_call_successful = False
 
         except Exception as outer_e:
             logging.exception(f"Unhandled error during message processing for {new_msg.id}.")
-            try:
-                await new_msg.reply(f"⚠️ An unexpected error occurred: {type(outer_e).__name__}", mention_author = False)
-            except discord.HTTPException: pass
+            error_text = f"⚠️ An unexpected error occurred: {type(outer_e).__name__}"
+            if processing_msg:
+                if _use_plain_for_initial_status:
+                    await processing_msg.edit(content=error_text, embed=None, view=None)
+                else:
+                    await processing_msg.edit(content=None, embed=discord.Embed(description=error_text, color=EMBED_COLOR_ERROR), view=None)
+            else:
+                try:
+                    await new_msg.reply(error_text, mention_author=False)
+                except discord.HTTPException: pass # If even this fails, just log
             llm_call_successful = False
 
         finally: # --- Cleanup and Cache Management ---
