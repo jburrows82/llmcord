@@ -161,7 +161,6 @@ class LLMCordClient(discord.Client):
         reddit_client_id = self.config.get("reddit_client_id")
         reddit_client_secret = self.config.get("reddit_client_secret")
         reddit_user_agent = self.config.get("reddit_user_agent")
-        custom_google_lens_config = self.config.get("custom_google_lens_config")
 
         # --- Clean Content and Check for Google Lens ---
         cleaned_content = original_content_for_processing
@@ -176,11 +175,12 @@ class LLMCordClient(discord.Client):
         user_warnings = set()
 
         if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
-            custom_lens_ok = custom_google_lens_config and custom_google_lens_config.get("user_data_dir") and custom_google_lens_config.get("profile_directory_name")
+            # Removed custom_lens_ok check
             serpapi_keys_ok = bool(self.config.get("serpapi_api_keys"))
-            if not serpapi_keys_ok and not custom_lens_ok:
-                 logging.warning("Google Lens requested but neither SerpAPI keys nor custom implementation are configured.")
-                 user_warnings.add("⚠️ Google Lens requested but requires configuration (SerpAPI or custom).")
+            if not serpapi_keys_ok:
+                 # Updated log and warning messages
+                 logging.warning("Google Lens requested but SerpAPI keys are not configured.")
+                 user_warnings.add("⚠️ Google Lens requested but requires SerpAPI key configuration.")
             else:
                 use_google_lens = True
                 cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()

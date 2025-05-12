@@ -142,9 +142,7 @@ def format_external_content(url_fetch_results: List[models.UrlFetchResult]) -> s
             if result.type == "google_lens_serpapi":
                 header = f"SerpAPI Google Lens results for image {result.original_index + 1}:\n"
                 google_lens_parts.append(header + str(result.content))
-            elif result.type == "google_lens_custom":
-                header = f"Custom Google Lens fallback results for image {result.original_index + 1}:\n"
-                google_lens_parts.append(header + str(result.content))
+            # Removed "google_lens_custom" case
             elif result.type == "youtube":
                 content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
                 if isinstance(result.content, dict):

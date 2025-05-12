@@ -25,5 +25,5 @@ class UrlFetchResult:
     url: str
     content: Optional[Union[str, Dict[str, Any], bytes]] # Fetched content (text, dict for YouTube/Reddit, bytes for image_url)
     error: Optional[str] = None # Error message if fetching failed
-    type: Literal["youtube", "reddit", "general", "google_lens_serpapi", "google_lens_custom", "google_lens_fallback_failed", "image_url_content"] = "general"
+    type: Literal["youtube", "reddit", "general", "google_lens_serpapi", "image_url_content"] = "general"
     original_index: int = -1 # Original start index of the URL in the user's message or attachment index for Lens

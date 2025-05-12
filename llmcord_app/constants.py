@@ -74,18 +74,6 @@ RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
 DB_FOLDER = "ratelimit_dbs"
 
-# --- Custom Google Lens (Playwright) ---
-# Selectors (These might change if Google updates their site)
-LENS_ICON_SELECTOR = '[aria-label="Search by image"]'
-PASTE_LINK_INPUT_SELECTOR = 'input[placeholder="Paste image link"]'
-SEE_EXACT_MATCHES_SELECTOR = 'div.ndigne.ZwRhJd.RiJqbb:has-text("See exact matches")'
-EXACT_MATCH_RESULT_SELECTOR = 'div.ZhosBf.T7iOye.MBI8Pd.dctkEf'
-INITIAL_RESULTS_WAIT_SELECTOR = "div#rso"
-ORIGINAL_RESULT_SPAN_SELECTOR = 'span.Yt787'
-# Timeouts
-CUSTOM_LENS_DEFAULT_TIMEOUT = 60000 # milliseconds
-CUSTOM_LENS_SHORT_TIMEOUT = 5000 # milliseconds
-
 # --- Model Selection ---
 # This defines which models are *known* to the bot for autocomplete/validation
 # The actual availability depends on the user's config.yaml

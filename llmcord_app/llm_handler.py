@@ -447,11 +447,13 @@ async def generate_response_stream(
                  logging.warning(f"LLM stream broke during processing for key {key_display}. Last error type: {last_error_type}. Trying next key.")
                  continue # Try next key
 
-            else: # Fallback case
-                 logging.error(f"Reached unexpected state after stream loop for key {key_display}. Content received: {content_received}, Finish reason: {stream_finish_reason}, Blocked: {is_blocked_by_safety}, Stopped: {is_stopped_by_recitation}. Trying next key.")
-                 llm_errors.append(f"Key {key_display}: Unexpected stream end state")
-                 last_error_type = "unexpected_stream_end"
-                 continue # Try next key
+            else: # Fallback case: Content received, not blocked/stopped, but no finish reason
+                 logging.warning(f"LLM stream ended without a finish reason for key {key_display}, but content was received. Treating as successful completion. Content received: {content_received}, Finish reason: {stream_finish_reason}, Blocked: {is_blocked_by_safety}, Stopped: {is_stopped_by_recitation}.")
+                 # Treat as successful completion since content was received
+                 logging.info(f"LLM request considered successful (stream ended without finish reason) with key {key_display}")
+                 # Yield final state indicating success, but note the missing finish reason
+                 yield None, stream_finish_reason, stream_grounding_metadata, None # Yield None for error message
+                 return # Successful completion
 
         # --- Handle Initial API Call Errors ---
         except (RateLimitError, google_api_exceptions.ResourceExhausted) as e:

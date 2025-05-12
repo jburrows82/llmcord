@@ -87,28 +87,6 @@ def get_config(filename="config.yaml"):
                  logging.error(f"Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
                  config_data["serpapi_api_keys"] = []
 
-            # Validate custom Google Lens config (optional)
-            custom_lens_cfg = config_data.get("custom_google_lens_config")
-            if custom_lens_cfg:
-                if not isinstance(custom_lens_cfg, dict):
-                    logging.error("Config Error: 'custom_google_lens_config' must be a dictionary. Disabling custom Lens.")
-                    config_data["custom_google_lens_config"] = None
-                else:
-                    user_data_dir = custom_lens_cfg.get("user_data_dir")
-                    profile_name = custom_lens_cfg.get("profile_directory_name")
-                    if not user_data_dir:
-                        logging.warning("Config Warning: 'user_data_dir' missing in 'custom_google_lens_config'. Custom Lens fallback may not work.")
-                    elif not os.path.exists(user_data_dir):
-                         logging.warning(f"Config Warning: 'user_data_dir' path does not exist: '{user_data_dir}'. Custom Lens fallback will likely fail.")
-
-                    if not profile_name:
-                        logging.warning("Config Warning: 'profile_directory_name' missing in 'custom_google_lens_config'. Custom Lens fallback may not work.")
-                    elif user_data_dir and os.path.exists(user_data_dir) and not os.path.exists(os.path.join(user_data_dir, profile_name)):
-                         logging.warning(f"Config Warning: Profile directory '{profile_name}' not found inside '{user_data_dir}'. Custom Lens fallback will likely fail.")
-
-            else:
-                 logging.info(f"Optional 'custom_google_lens_config' not found in {filename}. SerpAPI will be used for Google Lens if configured.")
-
             # Basic check for essential Discord config
             if not config_data.get("bot_token"):
                 logging.error(f"CRITICAL: bot_token is not set in {filename}")

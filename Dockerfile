@@ -9,10 +9,6 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -U -r requirements.txt
 
-# Install Playwright browsers (specifically Chrome in this case)
-# This adds significant size to the image
-RUN python -m playwright install chrome --with-deps
-
 # Copy the rest of the application code
 COPY . .
 

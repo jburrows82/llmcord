@@ -56,19 +56,6 @@ serpapi_api_keys:
   # - YOUR_SERPAPI_KEY_2
   # - ...
 
-# Custom Google Lens (Playwright) settings (PRIMARY IMPLEMENTATION):
-# Required for the primary Google Lens image processing.
-# Ensure the specified Chrome profile is NOT running when the bot starts.
-custom_google_lens_config:
-  # Path to your main Chrome User Data directory (parent folder of all profiles)
-  # Example Windows: C:\Users\YourUser\AppData\Local\Google\Chrome\User Data
-  # Example macOS: /Users/YourUser/Library/Application Support/Google/Chrome
-  # Example Linux: /home/YourUser/.config/google-chrome
-  user_data_dir: "" # REQUIRED - e.g., C:\Users\a\AppData\Local\Google\Chrome\User Data
-  # The specific Chrome profile folder name (e.g., "Default", "Profile 1")
-  # Find via chrome://version -> Profile Path (use the last part of the path)
-  profile_directory_name: "" # REQUIRED - e.g., Profile 7
-
 # LLM settings:
 
 providers:

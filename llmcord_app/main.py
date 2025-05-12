@@ -13,7 +13,6 @@ logging.basicConfig(
 logging.getLogger("discord.http").setLevel(logging.WARNING) # Reduce discord http noise
 logging.getLogger("websockets.client").setLevel(logging.WARNING) # Reduce websocket noise
 logging.getLogger("asyncprawcore").setLevel(logging.WARNING) # Reduce asyncpraw noise
-logging.getLogger("filelock").setLevel(logging.WARNING) # Reduce playwright filelock noise
 
 
 # Import necessary components using absolute paths from the package root
