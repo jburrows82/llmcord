@@ -40,11 +40,20 @@ Or run a local model with:
 - [Ollama](https://ollama.com)
 - [LM Studio](https://lmstudio.ai)
 - [vLLM](https://github.com/vllm-project/vllm)
+- [Jan](https://jan.ai)
 
 ...Or use any other OpenAI compatible API server.
 
 - **Multiple API Key Support:** Configure multiple API keys for each LLM provider (see `config.yaml`).
 - **Automatic Key Rotation & Retry:** The bot randomly rotates between available keys for each request. If an error occurs (including during response streaming), it automatically retries with another key until the request succeeds.
+- **User-Specific Preferences:** Users can set their preferred model using the `/model` command (see "Slash Commands" below).
+
+### Slash Commands
+llmcord offers slash commands for user-specific customizations:
+- **`/model <provider/model_name>`**: Set your preferred LLM provider and model (e.g., `openai/gpt-4.1`, `google/gemini-2.5-flash-preview-04-17`). This preference is saved and used for your future messages.
+- **`/systemprompt <prompt_text | "reset">`**: Set a custom system prompt for your interactions with the bot. Use `reset` to revert to the default system prompt defined in `config.yaml`.
+- **`/setgeminithinking <True|False>`**: Enable or disable the `thinkingBudget` parameter for Gemini models for your interactions. This can potentially improve response quality for complex queries but may increase latency. The actual budget value is set globally in `config.yaml`.
+User preferences for these commands are saved locally in JSON files (e.g., `user_model_prefs.json`).
 
 ### YouTube Content Extraction
 - Include YouTube URLs directly in your query.
@@ -78,28 +87,48 @@ Or run a local model with:
 - Appends the formatted results to your original query before sending it to the LLM, providing visual context for analysis or identification.
 - Handles multiple image attachments in a single query.
 
+### Advanced Query Handling & Context Enhancement
+llmcord employs several strategies to enrich the context provided to the LLM:
+- **Deep Search Keyword**: Including `deepsearch` or `deepersearch` (case-insensitive) in your query automatically attempts to switch to a pre-configured powerful model (default: `x-ai/grok-3`) for that specific request, if the model and its API keys are configured.
+- **Vision Model Fallback**: If your message includes images but your currently selected model doesn't support vision, the bot will automatically switch to a pre-configured fallback vision model (default: `google/gemini-2.5-flash-preview-04-17`) for that request, if available. A warning will inform you of the switch.
+- **SearXNG Integration for Grounding**: For non-Gemini/non-Grok models, if your query doesn't contain URLs, the bot can perform a pre-step:
+    1. A Gemini model (`gemini-2.5-flash-preview-04-17` by default) analyzes your query and conversation history to generate relevant web search queries.
+    2. These queries are run against your configured SearXNG instance.
+    3. Content from the top SearXNG result URLs (YouTube, Reddit, general web pages) is fetched, processed (with a configurable length limit for general web content via `searxng_url_content_max_length`), and formatted.
+    4. This fetched web context is then provided to your chosen LLM along with your original query.
+    This feature requires `searxng_base_url` and API keys for the grounding Gemini model to be configured.
+- **PDF Attachment Processing**:
+    - When using Gemini models (with vision/file capabilities enabled), PDF attachments are sent directly to the model.
+    - For other models, text is extracted from PDF attachments using `pypdfium2` and appended to your query.
+- **Image URL Processing**: If you include direct URLs to images (e.g., `https://example.com/image.png`) in your message text, the bot will attempt to download these images and treat them as if they were attached directly, making them available to vision models or Google Lens.
+
 ### Robust Rate Limit Handling
 - **Persistent Cooldown:** Rate-limited API keys (LLM providers & SerpAPI) are automatically detected and put on a 24-hour cooldown to prevent reuse.
 - **SQLite Database:** Cooldown information is stored in separate SQLite databases per service (in the `ratelimit_dbs/` folder), ensuring the cooldown persists even if the bot restarts.
 - **Automatic Reset:** Databases are automatically reset every 24 hours (tracked via `last_reset_timestamp.txt`). Additionally, if *all* keys for a specific service become rate-limited, that service's database is reset immediately to allow retries.
 - **Silent Retries:** Error messages are only sent to Discord if *all* configured keys for a service have been tried and failed for a single request.
 
-### Gemini Grounding with Sources
-- When using a compatible Gemini model (e.g., `gemini-2.0-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
-- If a response was enhanced by grounding, a "Show Sources" button will appear below the message.
-- Clicking "Show Sources" reveals the search queries the model used and the web sources it consulted to generate the response.
+### Interactive Response & Sources
+- **Gemini Grounding**: When using a compatible Gemini model (e.g., `gemini-2.5-flash-preview-04-17`), the bot can automatically use Google Search to ground its responses with up-to-date information.
+- **Persistent Action Buttons**: If a response was enhanced by grounding or if there's a response text, action buttons will appear below the message. These buttons are persistent and do not time out.
+    - **"Show Sources" Button**: If grounding was used, this button reveals the search queries the model used and the web sources it consulted. The sources are displayed in embeds, split into multiple messages if necessary.
+    - **"Get response as text file" Button**: Allows you to download the bot's full response as a `.txt` file.
 
 ### And more:
-- Supports image attachments when using a vision model (like gpt-4.1, claude-3, gemini-flash, llama-4, etc.)
-- Supports text file attachments (.txt, .py, .c, etc.)
-- Customizable personality (aka system prompt)
-- User identity aware (OpenAI API and xAI API only)
-- Streamed responses (turns green when complete, automatically splits into separate messages when too long)
-- Hot reloading config (you can change settings without restarting the bot)
-- Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded, or "⚠️ Could not fetch all YouTube data" if YouTube API calls fail)
-- Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
-- Fully asynchronous
-- Modular Python codebase (split from the original single file)
+- **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking` for user-specific preferences (see "Slash Commands" section).
+- Supports image attachments when using a vision model (like `gpt-4.1`, `claude-3`, `gemini-2.5-flash-preview-04-17`, etc.).
+- Supports text file attachments (.txt, .py, .c, etc.) and PDF attachments (see "Advanced Query Handling").
+- Customizable personality (default system prompt in `config.yaml`, user-overridable via `/systemprompt`).
+- User identity aware (OpenAI API and xAI API only, sends user's Discord ID as `name`).
+- Streamed responses (turns green when complete, automatically splits into separate messages when too long).
+- **Imgur URL Resending**: If the LLM includes Imgur URLs under a specific header in its response, the bot automatically resends these URLs as separate messages to ensure they embed properly.
+- **Configurable OpenAI Vision**: Vision capabilities for OpenAI models can be disabled via `disable_vision: true` in the provider config.
+- **Configurable Gemini Thinking Budget**: The `thinkingBudget` for Gemini models can be enabled and its value set globally in `config.yaml`, and users can toggle its use for their sessions via `/setgeminithinking`.
+- Hot reloading config (you can change settings without restarting the bot).
+- Displays helpful warnings when appropriate (e.g., message limits, content fetching issues, model fallbacks).
+- Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls.
+- Fully asynchronous.
+- Modular Python codebase.
 
 ## Instructions
 
@@ -123,13 +152,13 @@ Or run a local model with:
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br />(Default: `25`) |
 | **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
-| **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
+| **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups (including for threads within those categories/channels).** |
 
 ### YouTube Data API v3 settings:
 
 | Setting | Description |
 | --- | --- |
-| **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` and do not require this key. *(Note: Currently only supports a single key).* |
+| **youtube_api_key** | **Required for YouTube URL processing.** Get an API key from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Ensure the **YouTube Data API v3** is enabled for your project. This key is used to fetch video details (title, description, channel) and comments. Transcripts are fetched using `youtube-transcript-api` (which has its own proxy settings) and do not require this key. *(Note: Currently only supports a single key).* |
 
 ### Reddit API settings:
 
@@ -155,17 +184,25 @@ Or run a local model with:
 
 | Setting | Description |
 | --- | --- |
-| **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and a **list** of `api_keys`. For Google Gemini, just provide a **list** of `api_keys`. For keyless providers (like Ollama), provide an empty list `[]` for `api_keys`.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.**<br />The bot rotates through keys and retries on failure. |
-| **model** | Set to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.0-flash`<br />-`ollama/llama3.3`<br />-`openrouter/anthropic/claude-3.7-sonnet` |
-| **extra_api_parameters** | Extra API parameters for your LLM. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0` for OpenAI compatible)<br />(Gemini uses parameters like `max_output_tokens`, `temperature`, `top_p`, `top_k`) |
-| **system_prompt** | Write anything you want to customize the bot's behavior!<br />**Leave blank for no system prompt.** |
+| **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and a **list** of `api_keys`. For Google Gemini, just provide a **list** of `api_keys`. For keyless providers (like Ollama, Jan), provide an empty list `[]` for `api_keys`.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.**<br />The bot rotates through keys and retries on failure.<br />For OpenAI, you can add `disable_vision: true` to prevent image processing even if the model supports it. |
+| **model** | Set the default model to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.5-flash-preview-04-17`<br />-`ollama/llama3`<br />-`openrouter/anthropic/claude-3.5-sonnet`<br />Users can override this with the `/model` command. |
+| **searxng_base_url** | **Optional, for SearXNG grounding.** The base URL of your SearXNG instance (e.g., `http://localhost:18088`). Required if you want non-Gemini/non-Grok models to have web search capabilities. |
+| **searxng_url_content_max_length** | **Optional, for SearXNG grounding.** Maximum character length for text extracted from each URL fetched via SearXNG results. (Default: `20000`) |
+| **grounding_system_prompt** | **Optional, for SearXNG grounding.** The system prompt used for the Gemini model that generates search queries for SearXNG. |
+| **gemini_use_thinking_budget** | **Optional, for Gemini models.** Set to `true` to enable the `thinkingBudget` parameter by default for Gemini models. Users can override with `/setgeminithinking`. (Default: `false`) |
+| **gemini_thinking_budget_value** | **Optional, for Gemini models.** The actual budget value (0-24576) to use if `gemini_use_thinking_budget` is enabled. (Default: `0`) |
+| **extra_api_parameters** | Extra API parameters for the selected LLM's provider. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0` for OpenAI compatible)<br />(Gemini uses parameters like `max_output_tokens`, `temperature`, `top_p`, `top_k`) |
+| **system_prompt** | The default system prompt to customize the bot's behavior. Users can set their own with `/systemprompt`.<br />**Leave blank for no default system prompt.** |
+
+### User Preferences:
+- User-specific settings for model, system prompt, and Gemini thinking budget are stored in JSON files at the root of the project (e.g., `user_model_prefs.json`, `user_system_prompts.json`, `user_gemini_thinking_budget_prefs.json`). Consider adding these to your `.gitignore` if you manage your deployment with git.
 
 3. Install requirements:
    ```bash
     # Ensure you are in the 'llmcord' directory (the one containing requirements.txt)
     python -m pip install -U -r requirements.txt
     ```
-   *(Note: This now includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, and `google-search-results`)*
+   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, and `pypdfium2` for PDF text extraction.)*
 
 4. Run the bot:
 
@@ -194,11 +231,13 @@ Or run a local model with:
 
 - Reddit API also has rate limits. Processing many Reddit URLs quickly might lead to temporary throttling.
 
-- General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements.
+- General URL fetching uses `httpx` and `BeautifulSoup4`. It might fail on complex JavaScript-heavy sites or sites with strong anti-scraping measures. Content extraction focuses on main text areas and might miss some information or include unwanted elements. Content from general URLs fetched via SearXNG grounding has a configurable length limit (`searxng_url_content_max_length`).
 
 - Google Lens processing uses SerpAPI. Ensure you have valid SerpAPI keys configured.
 
-- **Rate Limit Handling:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder at the project root) to track rate-limited API keys (LLM & SerpAPI). Keys are put on a 24-hour cooldown. This cooldown state persists even if the bot restarts (tracked via `last_reset_timestamp.txt` at the project root). If all keys for a service become rate-limited, the cooldown is reset for that service. Error messages are only sent to Discord if all keys fail for a request. Ensure `ratelimit_dbs/` and `last_reset_timestamp.txt` are added to your `.gitignore` if you manage your deployment with git.
+- PDF text extraction for non-Gemini models is done using `pypdfium2`.
+
+- **Rate Limit Handling & User Preferences:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) and JSON files (e.g., `user_model_prefs.json`) at the project root. Ensure these (and `last_reset_timestamp.txt`) are added to your `.gitignore` if you manage your deployment with git.
 
 - PRs are welcome :)
 
