@@ -42,7 +42,7 @@ async def get_web_search_queries_from_gemini(
 
     try:
         # Use a minimal set of extra_params for the grounding call
-        grounding_extra_params = {"temperature": 0.7, "thinking_budget": 0} # Could be configurable
+        grounding_extra_params = {"temperature": 1, "thinking_budget": 0} # Could be configurable
         
         stream_generator = generate_response_stream_func(
             provider=GROUNDING_MODEL_PROVIDER,
