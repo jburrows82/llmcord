@@ -1,16 +1,12 @@
 # llmcord_app/bot.py
-import asyncio
-import base64
-from datetime import datetime as dt, timezone
 import logging
-import os
-import re # <-- Added import
+import re  # <-- Added import
 import time
-from typing import Dict, Optional, Set, List, Any
-import traceback # Keep for detailed error logging if needed
+from typing import Dict
 
 import discord
 from discord import app_commands
+
 # Use google.genai.types
 from google.genai import types as google_types
 
@@ -18,93 +14,117 @@ import httpx
 
 # Import from our modules
 # Remove the incorrect import of cfg
-from .config import get_config
 from .constants import (
-    EMBED_COLOR_COMPLETE, EMBED_COLOR_INCOMPLETE, EMBED_COLOR_ERROR,
-    STREAMING_INDICATOR, EDIT_DELAY_SECONDS, MAX_MESSAGE_NODES,
-    MAX_EMBED_DESCRIPTION_LENGTH, AT_AI_PATTERN, GOOGLE_LENS_PATTERN,
-    GOOGLE_LENS_KEYWORD, VISION_MODEL_TAGS, AVAILABLE_MODELS,
-    DEEP_SEARCH_KEYWORDS, DEEP_SEARCH_MODEL, PROVIDERS_SUPPORTING_USERNAMES,
-    AllKeysFailedError, IMGUR_HEADER, IMGUR_URL_PREFIX, IMGUR_URL_PATTERN, # <-- Added Imgur constants
-    MAX_PLAIN_TEXT_LENGTH, # <-- Added plain text limit
-    SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_NUM_RESULTS, # Added SearxNG constants
-    SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY, # <-- ADDED
-    GROUNDING_MODEL_PROVIDER, GROUNDING_MODEL_NAME, # Added Grounding model constants
-    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY, # <-- ADDED
-    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, # Added Gemini Thinking Budget keys
-    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL # <-- ADDED for configurable fallback vision model
+    MAX_MESSAGE_NODES,
+    MAX_EMBED_DESCRIPTION_LENGTH,
+    AT_AI_PATTERN,
+    GOOGLE_LENS_PATTERN,
+    VISION_MODEL_TAGS,
+    AVAILABLE_MODELS,
+    DEEP_SEARCH_KEYWORDS,
+    DEEP_SEARCH_MODEL,
+    PROVIDERS_SUPPORTING_USERNAMES,
+    MAX_PLAIN_TEXT_LENGTH,  # <-- Added plain text limit
+    GROUNDING_MODEL_PROVIDER,
+    GROUNDING_MODEL_NAME,  # Added Grounding model constants
+    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,  # <-- ADDED
+    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
+    GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,  # Added Gemini Thinking Budget keys
+    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL,  # <-- ADDED for configurable fallback vision model
 )
+
 # Corrected import: Use the models module directly
-from . import models # Import the models module
+from . import models  # Import the models module
 from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
-from .ui import ResponseActionView
 from .utils import (
-    extract_urls_with_indices, is_youtube_url, is_reddit_url, is_image_url, # Added is_image_url
-    extract_video_id, extract_reddit_submission_id, extract_text_from_pdf_bytes
-)
-from .content_fetchers import (
-    fetch_youtube_data, fetch_reddit_data, fetch_general_url_content,
-    process_google_lens_image, fetch_searxng_results # Added fetch_searxng_results
+    extract_urls_with_indices,
+    is_image_url,  # Added is_image_url
+    extract_text_from_pdf_bytes,
 )
 from .llm_handler import generate_response_stream
-from .commands import ( # Import command logic and preference getter
-    set_model_command, get_user_model_preference,
-    set_system_prompt_command, get_user_system_prompt_preference,
-    setgeminithinking, get_user_gemini_thinking_budget_preference # Added Gemini thinking budget command and getter
+from .commands import (  # Import command logic and preference getter
+    set_model_command,
+    get_user_model_preference,
+    set_system_prompt_command,
+    get_user_system_prompt_preference,
+    setgeminithinking,
+    get_user_gemini_thinking_budget_preference,  # Added Gemini thinking budget command and getter
 )
-from .permissions import is_message_allowed # Import the permission checking function
-from .external_content import fetch_external_content, format_external_content # Import external content functions
-from .grounding import get_web_search_queries_from_gemini, fetch_and_format_searxng_results # Import grounding functions
-from .prompt_utils import prepare_system_prompt # Import prompt utility
-from .response_sender import ( # Import response sending functions
-    send_initial_processing_message, handle_llm_response_stream, resend_imgur_urls,
-    _handle_llm_exception # Also import this helper if direct calls are made from bot.py for exceptions outside stream
+from .permissions import is_message_allowed  # Import the permission checking function
+from .external_content import (
+    fetch_external_content,
+    format_external_content,
+)  # Import external content functions
+from .grounding import (
+    get_web_search_queries_from_gemini,
+    fetch_and_format_searxng_results,
+)  # Import grounding functions
+from .prompt_utils import prepare_system_prompt  # Import prompt utility
+from .response_sender import (  # Import response sending functions
+    send_initial_processing_message,
+    handle_llm_response_stream,
+    resend_imgur_urls,  # Also import this helper if direct calls are made from bot.py for exceptions outside stream
 )
-from .history_utils import find_parent_message, build_message_history # Import history utilities
+from .history_utils import build_message_history  # Import history utilities
 
 
 # --- Discord Client Setup ---
 class LLMCordClient(discord.Client):
-    def __init__(self, *, intents: discord.Intents, activity: discord.CustomActivity, config: Dict):
+    def __init__(
+        self,
+        *,
+        intents: discord.Intents,
+        activity: discord.CustomActivity,
+        config: Dict,
+    ):
         super().__init__(intents=intents, activity=activity)
         self.tree = app_commands.CommandTree(self)
         # Use the correct MsgNode class from the models module
-        self.msg_nodes: Dict[int, models.MsgNode] = {} # Message cache
-        self.last_task_time: float = 0 # For stream editing delay
-        self.config = config # Store loaded config
-        self.httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True) # HTTP client for attachments/web
+        self.msg_nodes: Dict[int, models.MsgNode] = {}  # Message cache
+        self.last_task_time: float = 0  # For stream editing delay
+        self.config = config  # Store loaded config
+        self.httpx_client = httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True
+        )  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
         from .content_fetchers.youtube import initialize_ytt_api
+
         initialize_ytt_api(self.config.get("proxy_config"))
 
     async def setup_hook(self):
         """Sync slash commands when the bot is ready."""
         # Register the command function with the tree
-        self.tree.add_command(app_commands.Command(
-            name="model",
-            description="Set your preferred LLM provider and model.",
-            callback=set_model_command
-        ))
+        self.tree.add_command(
+            app_commands.Command(
+                name="model",
+                description="Set your preferred LLM provider and model.",
+                callback=set_model_command,
+            )
+        )
         # --- ADDED: Register /systemprompt command ---
-        self.tree.add_command(app_commands.Command(
-            name="systemprompt",
-            description="Set your custom system prompt for the bot.",
-            callback=set_system_prompt_command
-        ))
+        self.tree.add_command(
+            app_commands.Command(
+                name="systemprompt",
+                description="Set your custom system prompt for the bot.",
+                callback=set_system_prompt_command,
+            )
+        )
         # --- ADDED: Register /setgeminithinking command ---
-        self.tree.add_command(app_commands.Command(
-            name="setgeminithinking",
-            description="Toggle usage of the 'thinkingBudget' parameter for Gemini models.",
-            callback=setgeminithinking
-        ))
+        self.tree.add_command(
+            app_commands.Command(
+                name="setgeminithinking",
+                description="Toggle usage of the 'thinkingBudget' parameter for Gemini models.",
+                callback=setgeminithinking,
+            )
+        )
         # Sync commands
         await self.tree.sync()
-        logging.info(f'Synced slash commands for {self.user}.')
+        logging.info(f"Synced slash commands for {self.user}.")
 
     async def on_ready(self):
         """Called when the bot is ready and logged in."""
-        logging.info(f'Logged in as {self.user}')
+        logging.info(f"Logged in as {self.user}")
         # Initial check/reset of rate limits
         check_and_perform_global_reset(self.config)
 
@@ -127,15 +147,18 @@ class LLMCordClient(discord.Client):
         if is_dm:
             if allow_dms:
                 # In DMs, process unless it's a reply *not* to the bot and doesn't trigger
-                is_reply_to_bot = new_msg.reference and new_msg.reference.resolved and new_msg.reference.resolved.author == self.user
-                is_reply_to_user = new_msg.reference and new_msg.reference.resolved and new_msg.reference.resolved.author != self.user
+                is_reply_to_user = (
+                    new_msg.reference
+                    and new_msg.reference.resolved
+                    and new_msg.reference.resolved.author != self.user
+                )
 
                 if is_reply_to_user and not (mentions_bot or contains_at_ai):
-                    should_process = False # Don't process replies to other users unless explicitly triggered
+                    should_process = False  # Don't process replies to other users unless explicitly triggered
                 else:
-                    should_process = True # Process direct messages, replies to bot, or explicitly triggered replies
+                    should_process = True  # Process direct messages, replies to bot, or explicitly triggered replies
             else:
-                return # Block DMs if not allowed
+                return  # Block DMs if not allowed
         elif mentions_bot or contains_at_ai:
             should_process = True
 
@@ -149,41 +172,47 @@ class LLMCordClient(discord.Client):
 
         # --- Permissions Check ---
         if not is_message_allowed(new_msg, self.config, is_dm):
-            logging.warning(f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions.")
+            logging.warning(
+                f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions."
+            )
             return
 
         # --- Send Initial "Processing" Message ---
         _use_plain_for_initial_status = self.config.get("use_plain_responses", False)
-        processing_msg = await send_initial_processing_message(new_msg, _use_plain_for_initial_status)
-
-        # --- Config values needed for further processing ---
-        youtube_api_key = self.config.get("youtube_api_key")
-        reddit_client_id = self.config.get("reddit_client_id")
-        reddit_client_secret = self.config.get("reddit_client_secret")
-        reddit_user_agent = self.config.get("reddit_user_agent")
+        processing_msg = await send_initial_processing_message(
+            new_msg, _use_plain_for_initial_status
+        )
 
         # --- Clean Content and Check for Google Lens ---
         cleaned_content = original_content_for_processing
         if not is_dm and mentions_bot:
-            cleaned_content = cleaned_content.replace(self.user.mention, '').strip()
-        cleaned_content = AT_AI_PATTERN.sub(' ', cleaned_content).strip()
-        cleaned_content = re.sub(r'\s{2,}', ' ', cleaned_content).strip()
+            cleaned_content = cleaned_content.replace(self.user.mention, "").strip()
+        cleaned_content = AT_AI_PATTERN.sub(" ", cleaned_content).strip()
+        cleaned_content = re.sub(r"\s{2,}", " ", cleaned_content).strip()
         logging.debug(f"Cleaned content for keyword/URL check: '{cleaned_content}'")
 
         use_google_lens = False
-        image_attachments = [att for att in new_msg.attachments if att.content_type and att.content_type.startswith("image/")]
+        image_attachments = [
+            att
+            for att in new_msg.attachments
+            if att.content_type and att.content_type.startswith("image/")
+        ]
         user_warnings = set()
 
         if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
             # Removed custom_lens_ok check
             serpapi_keys_ok = bool(self.config.get("serpapi_api_keys"))
             if not serpapi_keys_ok:
-                 # Updated log and warning messages
-                 logging.warning("Google Lens requested but SerpAPI keys are not configured.")
-                 user_warnings.add("⚠️ Google Lens requested but requires SerpAPI key configuration.")
+                # Updated log and warning messages
+                logging.warning(
+                    "Google Lens requested but SerpAPI keys are not configured."
+                )
+                user_warnings.add(
+                    "⚠️ Google Lens requested but requires SerpAPI key configuration."
+                )
             else:
                 use_google_lens = True
-                cleaned_content = GOOGLE_LENS_PATTERN.sub('', cleaned_content).strip()
+                cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
                 logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
 
         # --- LLM Provider/Model Selection ---
@@ -197,60 +226,99 @@ class LLMCordClient(discord.Client):
             target_model_str = DEEP_SEARCH_MODEL
             target_provider, target_model_name = target_model_str.split("/", 1)
             if use_google_lens:
-                logging.warning(f"Both 'deepsearch'/'deepersearch' and 'googlelens' detected. Prioritizing deep search ('{target_model_str}'). Google Lens disabled.")
+                logging.warning(
+                    f"Both 'deepsearch'/'deepersearch' and 'googlelens' detected. Prioritizing deep search ('{target_model_str}'). Google Lens disabled."
+                )
                 use_google_lens = False
 
-            xai_provider_config = self.config.get("providers", {}).get(target_provider, {})
+            xai_provider_config = self.config.get("providers", {}).get(
+                target_provider, {}
+            )
             xai_keys = xai_provider_config.get("api_keys", [])
-            is_target_available = target_provider in AVAILABLE_MODELS and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
+            is_target_available = (
+                target_provider in AVAILABLE_MODELS
+                and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
+            )
 
             if xai_provider_config and xai_keys and is_target_available:
                 final_provider_slash_model = target_model_str
-                logging.info(f"Keywords {DEEP_SEARCH_KEYWORDS} detected. Overriding model to {final_provider_slash_model}.")
+                logging.info(
+                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected. Overriding model to {final_provider_slash_model}."
+                )
             else:
                 warning_reason = ""
-                if not xai_provider_config: warning_reason = f"provider '{target_provider}' not configured"
-                elif not xai_keys: warning_reason = f"no API keys for provider '{target_provider}'"
-                elif not is_target_available: warning_reason = f"model '{target_model_str}' not listed in AVAILABLE_MODELS"
-                logging.warning(f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({warning_reason}). Using original: {provider_slash_model}")
-                user_warnings.add(f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason}).")
+                if not xai_provider_config:
+                    warning_reason = f"provider '{target_provider}' not configured"
+                elif not xai_keys:
+                    warning_reason = f"no API keys for provider '{target_provider}'"
+                elif not is_target_available:
+                    warning_reason = (
+                        f"model '{target_model_str}' not listed in AVAILABLE_MODELS"
+                    )
+                logging.warning(
+                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({warning_reason}). Using original: {provider_slash_model}"
+                )
+                user_warnings.add(
+                    f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason})."
+                )
 
         # --- Validate Final Model Selection ---
         try:
             provider, model_name = final_provider_slash_model.split("/", 1)
-            if provider not in AVAILABLE_MODELS or model_name not in AVAILABLE_MODELS.get(provider, []):
-                 logging.warning(f"Final model '{final_provider_slash_model}' is invalid/unavailable. Falling back to default: {default_model_str}")
-                 final_provider_slash_model = default_model_str
-                 provider, model_name = final_provider_slash_model.split("/", 1)
+            if (
+                provider not in AVAILABLE_MODELS
+                or model_name not in AVAILABLE_MODELS.get(provider, [])
+            ):
+                logging.warning(
+                    f"Final model '{final_provider_slash_model}' is invalid/unavailable. Falling back to default: {default_model_str}"
+                )
+                final_provider_slash_model = default_model_str
+                provider, model_name = final_provider_slash_model.split("/", 1)
         except ValueError:
-            logging.error(f"Invalid model format for final selection '{final_provider_slash_model}'. Using hardcoded default.")
-            final_provider_slash_model = "google/gemini-2.0-flash" # Fallback
+            logging.error(
+                f"Invalid model format for final selection '{final_provider_slash_model}'. Using hardcoded default."
+            )
+            final_provider_slash_model = "google/gemini-2.0-flash"  # Fallback
             provider, model_name = final_provider_slash_model.split("/", 1)
 
-        logging.info(f"Final model selected for user {user_id}: '{final_provider_slash_model}'")
+        logging.info(
+            f"Final model selected for user {user_id}: '{final_provider_slash_model}'"
+        )
 
         # --- Get Config for the FINAL Provider ---
         provider_config = self.config.get("providers", {}).get(provider, {})
         if not isinstance(provider_config, dict):
-            logging.error(f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed.")
+            logging.error(
+                f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed."
+            )
             # ... (error handling for missing provider config)
             return
         all_api_keys = provider_config.get("api_keys", [])
 
         is_gemini = provider == "google"
         is_grok_model = provider == "x-ai"
-        keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
+        keys_required = provider not in [
+            "ollama",
+            "lmstudio",
+            "vllm",
+            "oobabooga",
+            "jan",
+        ]
 
         if keys_required and not all_api_keys:
-             logging.error(f"No API keys configured for the selected provider '{provider}' in config.yaml.")
-             # ... (error handling for missing API keys)
-             return
+            logging.error(
+                f"No API keys configured for the selected provider '{provider}' in config.yaml."
+            )
+            # ... (error handling for missing API keys)
+            return
 
         # --- Configuration Values ---
         accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
         if provider == "openai" and provider_config.get("disable_vision", False):
             accept_files = False
-            logging.info(f"Vision explicitly disabled for OpenAI model '{model_name}' via config.")
+            logging.info(
+                f"Vision explicitly disabled for OpenAI model '{model_name}' via config."
+            )
 
         has_potential_image_urls_in_text = False
         if cleaned_content:
@@ -261,58 +329,109 @@ class LLMCordClient(discord.Client):
         if (image_attachments or has_potential_image_urls_in_text) and not accept_files:
             original_model_for_warning = final_provider_slash_model
             fallback_model_str = FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL
-            logging.info(f"Query has images, but current model '{final_provider_slash_model}' does not support vision. Switching to '{fallback_model_str}'.")
-            user_warnings.add(f"⚠️ Images detected. Switched from '{original_model_for_warning}' to '{fallback_model_str}'.")
+            logging.info(
+                f"Query has images, but current model '{final_provider_slash_model}' does not support vision. Switching to '{fallback_model_str}'."
+            )
+            user_warnings.add(
+                f"⚠️ Images detected. Switched from '{original_model_for_warning}' to '{fallback_model_str}'."
+            )
             final_provider_slash_model = fallback_model_str
             try:
                 provider, model_name = final_provider_slash_model.split("/", 1)
                 # Re-fetch provider_config and re-evaluate accept_files for the new model
                 provider_config = self.config.get("providers", {}).get(provider, {})
-                if not isinstance(provider_config, dict): # Major issue if fallback model's provider is not configured
-                    logging.error(f"Fallback provider '{provider}' for model '{final_provider_slash_model}' not configured. This is a critical error.")
+                if not isinstance(
+                    provider_config, dict
+                ):  # Major issue if fallback model's provider is not configured
+                    logging.error(
+                        f"Fallback provider '{provider}' for model '{final_provider_slash_model}' not configured. This is a critical error."
+                    )
                     # ... (handle this critical error, maybe revert or send specific message)
                     return
                 all_api_keys = provider_config.get("api_keys", [])
                 is_gemini = provider == "google"
                 is_grok_model = provider == "x-ai"
-                keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
+                keys_required = provider not in [
+                    "ollama",
+                    "lmstudio",
+                    "vllm",
+                    "oobabooga",
+                    "jan",
+                ]
                 if keys_required and not all_api_keys:
-                    user_warnings.add(f"⚠️ Fallback model '{final_provider_slash_model}' has no API keys configured.")
+                    user_warnings.add(
+                        f"⚠️ Fallback model '{final_provider_slash_model}' has no API keys configured."
+                    )
                 accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
-                if provider == "openai" and provider_config.get("disable_vision", False):
+                if provider == "openai" and provider_config.get(
+                    "disable_vision", False
+                ):
                     accept_files = False
-                if not accept_files: # If fallback STILL doesn't accept files
-                    user_warnings.add(f"⚠️ Fallback model '{final_provider_slash_model}' also cannot process images. Check configuration.")
-            except ValueError: # Error splitting fallback model string
-                logging.error(f"Invalid format for FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL: '{fallback_model_str}'.")
-                user_warnings.add(f"⚠️ Error switching to vision model. Processing with '{original_model_for_warning}'.")
+                if not accept_files:  # If fallback STILL doesn't accept files
+                    user_warnings.add(
+                        f"⚠️ Fallback model '{final_provider_slash_model}' also cannot process images. Check configuration."
+                    )
+            except ValueError:  # Error splitting fallback model string
+                logging.error(
+                    f"Invalid format for FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL: '{fallback_model_str}'."
+                )
+                user_warnings.add(
+                    f"⚠️ Error switching to vision model. Processing with '{original_model_for_warning}'."
+                )
                 # Revert to original provider/model if fallback string is bad
-                provider, model_name = original_model_for_warning.split("/",1)
+                provider, model_name = original_model_for_warning.split("/", 1)
                 provider_config = self.config.get("providers", {}).get(provider, {})
                 all_api_keys = provider_config.get("api_keys", [])
                 is_gemini = provider == "google"
                 is_grok_model = provider == "x-ai"
-                keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
-                accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS) # Re-evaluate for original
-                if provider == "openai" and provider_config.get("disable_vision", False): accept_files = False
-
+                keys_required = provider not in [
+                    "ollama",
+                    "lmstudio",
+                    "vllm",
+                    "oobabooga",
+                    "jan",
+                ]
+                accept_files = any(
+                    x in model_name.lower() for x in VISION_MODEL_TAGS
+                )  # Re-evaluate for original
+                if provider == "openai" and provider_config.get(
+                    "disable_vision", False
+                ):
+                    accept_files = False
 
         max_files_per_message = self.config.get("max_images", 5)
-        max_tokens_for_text_config = self.config.get("max_text", 2000) # Default to 2000 tokens if not in config
+        max_tokens_for_text_config = self.config.get(
+            "max_text", 2000
+        )  # Default to 2000 tokens if not in config
         max_messages = self.config.get("max_messages", 25)
         use_plain_responses = self.config.get("use_plain_responses", False)
-        split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else MAX_PLAIN_TEXT_LENGTH
+        split_limit = (
+            MAX_EMBED_DESCRIPTION_LENGTH
+            if not use_plain_responses
+            else MAX_PLAIN_TEXT_LENGTH
+        )
 
         is_text_empty = not cleaned_content.strip()
         has_meaningful_attachments_final = any(
-            att.content_type and (
-                (att.content_type.startswith("image/") and (accept_files or use_google_lens))
+            att.content_type
+            and (
+                (
+                    att.content_type.startswith("image/")
+                    and (accept_files or use_google_lens)
+                )
                 or att.content_type.startswith("text/")
-                or (att.content_type == "application/pdf" and ((is_gemini and accept_files) or not is_gemini))
+                or (
+                    att.content_type == "application/pdf"
+                    and ((is_gemini and accept_files) or not is_gemini)
+                )
             )
             for att in new_msg.attachments
         )
-        if is_text_empty and not has_meaningful_attachments_final and not new_msg.reference:
+        if (
+            is_text_empty
+            and not has_meaningful_attachments_final
+            and not new_msg.reference
+        ):
             # ... (handle empty query)
             return
 
@@ -322,122 +441,230 @@ class LLMCordClient(discord.Client):
 
         if use_google_lens:
             url_fetch_results = await fetch_external_content(
-                cleaned_content, image_attachments, True, max_files_per_message, user_warnings, self.config, self.httpx_client
+                cleaned_content,
+                image_attachments,
+                True,
+                max_files_per_message,
+                user_warnings,
+                self.config,
+                self.httpx_client,
             )
-            if url_fetch_results: combined_context = format_external_content(url_fetch_results)
-            logging.info("Skipping Gemini grounding/SearxNG step because Google Lens is active.")
+            if url_fetch_results:
+                combined_context = format_external_content(url_fetch_results)
+            logging.info(
+                "Skipping Gemini grounding/SearxNG step because Google Lens is active."
+            )
         elif not user_has_provided_urls and not is_gemini and not is_grok_model:
-            logging.info(f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG.")
+            logging.info(
+                f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG."
+            )
             history_for_gemini_grounding = await build_message_history(
-                new_msg=new_msg, initial_cleaned_content=cleaned_content, combined_context="",
-                max_messages=max_messages, max_tokens_for_text=max_tokens_for_text_config, max_files_per_message=max_files_per_message,
-                accept_files=True, use_google_lens=False, is_target_provider_gemini=True,
-                target_provider_name=GROUNDING_MODEL_PROVIDER, target_model_name=GROUNDING_MODEL_NAME, # Uses GROUNDING_MODEL_NAME for tokenizer
-                user_warnings=user_warnings, current_message_url_fetch_results=None,
-                msg_nodes_cache=self.msg_nodes, bot_user_obj=self.user, httpx_async_client=self.httpx_client,
-                models_module=models, google_types_module=google_types,
+                new_msg=new_msg,
+                initial_cleaned_content=cleaned_content,
+                combined_context="",
+                max_messages=max_messages,
+                max_tokens_for_text=max_tokens_for_text_config,
+                max_files_per_message=max_files_per_message,
+                accept_files=True,
+                use_google_lens=False,
+                is_target_provider_gemini=True,
+                target_provider_name=GROUNDING_MODEL_PROVIDER,
+                target_model_name=GROUNDING_MODEL_NAME,  # Uses GROUNDING_MODEL_NAME for tokenizer
+                user_warnings=user_warnings,
+                current_message_url_fetch_results=None,
+                msg_nodes_cache=self.msg_nodes,
+                bot_user_obj=self.user,
+                httpx_async_client=self.httpx_client,
+                models_module=models,
+                google_types_module=google_types,
                 extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
-                at_ai_pattern_re=AT_AI_PATTERN, providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES
+                at_ai_pattern_re=AT_AI_PATTERN,
+                providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
             )
             if history_for_gemini_grounding:
-                grounding_sp_text_from_config = self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
-                system_prompt_for_grounding = prepare_system_prompt(True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config)
+                grounding_sp_text_from_config = self.config.get(
+                    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
+                )
+                system_prompt_for_grounding = prepare_system_prompt(
+                    True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config
+                )
                 web_search_queries = await get_web_search_queries_from_gemini(
-                    history_for_gemini_grounding, system_prompt_for_grounding, self.config, generate_response_stream
+                    history_for_gemini_grounding,
+                    system_prompt_for_grounding,
+                    self.config,
+                    generate_response_stream,
                 )
                 if web_search_queries:
                     searxng_derived_context = await fetch_and_format_searxng_results(
-                        web_search_queries, cleaned_content, self.config, self.httpx_client
+                        web_search_queries,
+                        cleaned_content,
+                        self.config,
+                        self.httpx_client,
                     )
                     if searxng_derived_context:
                         combined_context = searxng_derived_context
-                    else: logging.info("Failed to generate context from SearxNG, or no results found.")
-                else: logging.info("Gemini grounding did not yield any web search queries.")
-            else: logging.warning("Could not build history for Gemini grounding step. Skipping SearxNG.")
+                    else:
+                        logging.info(
+                            "Failed to generate context from SearxNG, or no results found."
+                        )
+                else:
+                    logging.info(
+                        "Gemini grounding did not yield any web search queries."
+                    )
+            else:
+                logging.warning(
+                    "Could not build history for Gemini grounding step. Skipping SearxNG."
+                )
         elif user_has_provided_urls:
             url_fetch_results = await fetch_external_content(
-                cleaned_content, image_attachments, False, max_files_per_message, user_warnings, self.config, self.httpx_client
+                cleaned_content,
+                image_attachments,
+                False,
+                max_files_per_message,
+                user_warnings,
+                self.config,
+                self.httpx_client,
             )
-            if url_fetch_results: combined_context = format_external_content(url_fetch_results)
+            if url_fetch_results:
+                combined_context = format_external_content(url_fetch_results)
 
         if url_fetch_results:
-            successfully_fetched_image_urls = {res.url for res in url_fetch_results if res.type == "image_url_content" and res.content and not res.error}
+            successfully_fetched_image_urls = {
+                res.url
+                for res in url_fetch_results
+                if res.type == "image_url_content" and res.content and not res.error
+            }
             if successfully_fetched_image_urls:
                 temp_cleaned_content = cleaned_content
                 for img_url in successfully_fetched_image_urls:
                     temp_cleaned_content = temp_cleaned_content.replace(img_url, "")
-                cleaned_content = re.sub(r'\s{2,}', ' ', temp_cleaned_content).strip()
-                logging.info(f"Removed {len(successfully_fetched_image_urls)} successfully fetched image URLs from cleaned_content.")
+                cleaned_content = re.sub(r"\s{2,}", " ", temp_cleaned_content).strip()
+                logging.info(
+                    f"Removed {len(successfully_fetched_image_urls)} successfully fetched image URLs from cleaned_content."
+                )
 
         history_for_llm = await build_message_history(
-            new_msg=new_msg, initial_cleaned_content=cleaned_content, combined_context=combined_context,
-            max_messages=max_messages, max_tokens_for_text=max_tokens_for_text_config, max_files_per_message=max_files_per_message,
-            accept_files=accept_files, use_google_lens=use_google_lens, is_target_provider_gemini=is_gemini,
-            target_provider_name=provider, target_model_name=model_name, # Uses the final model_name for tokenizer
+            new_msg=new_msg,
+            initial_cleaned_content=cleaned_content,
+            combined_context=combined_context,
+            max_messages=max_messages,
+            max_tokens_for_text=max_tokens_for_text_config,
+            max_files_per_message=max_files_per_message,
+            accept_files=accept_files,
+            use_google_lens=use_google_lens,
+            is_target_provider_gemini=is_gemini,
+            target_provider_name=provider,
+            target_model_name=model_name,  # Uses the final model_name for tokenizer
             user_warnings=user_warnings,
-            current_message_url_fetch_results=url_fetch_results if not use_google_lens else [],
-            msg_nodes_cache=self.msg_nodes, bot_user_obj=self.user, httpx_async_client=self.httpx_client,
-            models_module=models, google_types_module=google_types,
+            current_message_url_fetch_results=url_fetch_results
+            if not use_google_lens
+            else [],
+            msg_nodes_cache=self.msg_nodes,
+            bot_user_obj=self.user,
+            httpx_async_client=self.httpx_client,
+            models_module=models,
+            google_types_module=google_types,
             extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
-            at_ai_pattern_re=AT_AI_PATTERN, providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES
+            at_ai_pattern_re=AT_AI_PATTERN,
+            providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
         )
 
         if not history_for_llm:
             # ... (handle empty history)
             return
 
-        logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}")
+        logging.info(
+            f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, history length: {len(history_for_llm)}, google_lens: {use_google_lens}, warnings: {user_warnings}):\n{new_msg.content}"
+        )
 
         default_system_prompt_from_config = self.config.get("system_prompt")
-        base_system_prompt_text = get_user_system_prompt_preference(new_msg.author.id, default_system_prompt_from_config)
-        system_prompt_text = prepare_system_prompt(is_gemini, provider, base_system_prompt_text)
+        base_system_prompt_text = get_user_system_prompt_preference(
+            new_msg.author.id, default_system_prompt_from_config
+        )
+        system_prompt_text = prepare_system_prompt(
+            is_gemini, provider, base_system_prompt_text
+        )
         extra_api_params = self.config.get("extra_api_parameters", {}).copy()
 
         if is_gemini:
-            global_use_thinking_budget = self.config.get(GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False)
-            global_thinking_budget_value = self.config.get(GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0)
-            user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(new_msg.author.id, global_use_thinking_budget)
+            global_use_thinking_budget = self.config.get(
+                GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False
+            )
+            global_thinking_budget_value = self.config.get(
+                GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0
+            )
+            user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(
+                new_msg.author.id, global_use_thinking_budget
+            )
             if user_wants_thinking_budget:
                 extra_api_params["thinking_budget"] = global_thinking_budget_value
 
-        llm_call_successful, final_text, response_msgs = await handle_llm_response_stream(
-            client=self, new_msg=new_msg, processing_msg=processing_msg, provider=provider,
-            model_name=model_name, # Use the correctly split model_name here
+        (
+            llm_call_successful,
+            final_text,
+            response_msgs,
+        ) = await handle_llm_response_stream(
+            client=self,
+            new_msg=new_msg,
+            processing_msg=processing_msg,
+            provider=provider,
+            model_name=model_name,  # Use the correctly split model_name here
             history_for_llm=history_for_llm,
-            system_prompt_text=system_prompt_text, provider_config=provider_config,
-            extra_api_params=extra_api_params, initial_user_warnings=user_warnings,
-            use_plain_responses_config=use_plain_responses, split_limit_config=split_limit
+            system_prompt_text=system_prompt_text,
+            provider_config=provider_config,
+            extra_api_params=extra_api_params,
+            initial_user_warnings=user_warnings,
+            use_plain_responses_config=use_plain_responses,
+            split_limit_config=split_limit,
         )
 
         try:
-            pass # Placeholder
+            pass  # Placeholder
         finally:
             if llm_call_successful and final_text:
                 await resend_imgur_urls(new_msg, response_msgs, final_text)
 
-            logging.debug(f"Entering finally block. response_msgs count: {len(response_msgs)}")
+            logging.debug(
+                f"Entering finally block. response_msgs count: {len(response_msgs)}"
+            )
             for response_msg in response_msgs:
                 if response_msg and response_msg.id in self.msg_nodes:
                     node = self.msg_nodes[response_msg.id]
                     if llm_call_successful:
                         node.full_response_text = final_text
                     if node.lock.locked():
-                        try: node.lock.release()
-                        except RuntimeError: logging.warning(f"Attempted to release an already unlocked lock for node {response_msg.id}")
+                        try:
+                            node.lock.release()
+                        except RuntimeError:
+                            logging.warning(
+                                f"Attempted to release an already unlocked lock for node {response_msg.id}"
+                            )
                 elif response_msg:
-                     logging.warning(f"Response message {response_msg.id} not found in msg_nodes during cleanup.")
+                    logging.warning(
+                        f"Response message {response_msg.id} not found in msg_nodes during cleanup."
+                    )
 
             if (num_nodes := len(self.msg_nodes)) > MAX_MESSAGE_NODES:
-                nodes_to_delete = sorted(self.msg_nodes.keys())[:num_nodes - MAX_MESSAGE_NODES]
+                nodes_to_delete = sorted(self.msg_nodes.keys())[
+                    : num_nodes - MAX_MESSAGE_NODES
+                ]
                 for msg_id in nodes_to_delete:
                     node_to_delete = self.msg_nodes.get(msg_id)
-                    if node_to_delete and hasattr(node_to_delete, 'lock') and node_to_delete.lock.locked():
-                        try: node_to_delete.lock.release()
-                        except RuntimeError: pass
+                    if (
+                        node_to_delete
+                        and hasattr(node_to_delete, "lock")
+                        and node_to_delete.lock.locked()
+                    ):
+                        try:
+                            node_to_delete.lock.release()
+                        except RuntimeError:
+                            pass
                     self.msg_nodes.pop(msg_id, None)
 
             end_time = time.time()
-            logging.info(f"Finished processing message {new_msg.id}. Success: {llm_call_successful}. Total time: {end_time - start_time:.2f} seconds.")
+            logging.info(
+                f"Finished processing message {new_msg.id}. Success: {llm_call_successful}. Total time: {end_time - start_time:.2f} seconds."
+            )
 
     # All internal methods that were moved out are now removed from the class definition.
     # _is_allowed, _fetch_external_content, _format_external_content,

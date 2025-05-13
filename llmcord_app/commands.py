@@ -3,45 +3,57 @@ import discord
 from discord import app_commands
 from discord.app_commands import Choice
 from typing import List, Dict, Optional, Any
-import logging # <-- Add this import
-import json # <-- Add this import
-import os # <-- Add this import
+import logging  # <-- Add this import
+import json  # <-- Add this import
+import os  # <-- Add this import
 
 from .constants import (
-    AVAILABLE_MODELS, USER_SYSTEM_PROMPTS_FILENAME, USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
-    USER_MODEL_PREFS_FILENAME
+    AVAILABLE_MODELS,
+    USER_SYSTEM_PROMPTS_FILENAME,
+    USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
+    USER_MODEL_PREFS_FILENAME,
 )
 
 # Get a logger for this module
 logger = logging.getLogger(__name__)
 
+
 # --- ADDED: Helper functions for loading and saving user preferences ---
 def _load_user_preferences(filename: str) -> Dict[int, Any]:
     """Loads user preferences from a JSON file."""
     if not os.path.exists(filename):
-        logger.info(f"Preference file '{filename}' not found. Starting with empty preferences.")
+        logger.info(
+            f"Preference file '{filename}' not found. Starting with empty preferences."
+        )
         return {}
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
+        with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
             # Convert string keys from JSON back to integers
             return {int(k): v for k, v in data.items()}
     except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from '{filename}'. Starting with empty preferences.")
+        logger.error(
+            f"Error decoding JSON from '{filename}'. Starting with empty preferences."
+        )
         # Optionally, create a backup of the corrupted file here
         # os.rename(filename, filename + ".corrupted")
         return {}
     except IOError as e:
-        logger.error(f"IOError reading from '{filename}': {e}. Starting with empty preferences.")
+        logger.error(
+            f"IOError reading from '{filename}': {e}. Starting with empty preferences."
+        )
         return {}
     except Exception as e:
-        logger.error(f"Unexpected error loading preferences from '{filename}': {e}. Starting with empty preferences.")
+        logger.error(
+            f"Unexpected error loading preferences from '{filename}': {e}. Starting with empty preferences."
+        )
         return {}
+
 
 def _save_user_preferences(filename: str, data: Dict[int, Any]):
     """Saves user preferences to a JSON file."""
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
         logger.debug(f"Saved user preferences to '{filename}'.")
     except IOError as e:
@@ -53,17 +65,26 @@ def _save_user_preferences(filename: str, data: Dict[int, Any]):
 # This dictionary will store user preferences {user_id: "provider/model_name"}
 # It should be managed by the bot instance or a dedicated state manager in a real app.
 # For this refactor, we'll keep it simple as a module-level dict.
-user_model_preferences: Dict[int, str] = _load_user_preferences(USER_MODEL_PREFS_FILENAME)
+user_model_preferences: Dict[int, str] = _load_user_preferences(
+    USER_MODEL_PREFS_FILENAME
+)
 
 
 # --- MODIFIED: Initialize user-specific system prompts from file ---
-user_system_prompt_preferences: Dict[int, Optional[str]] = _load_user_preferences(USER_SYSTEM_PROMPTS_FILENAME)
+user_system_prompt_preferences: Dict[int, Optional[str]] = _load_user_preferences(
+    USER_SYSTEM_PROMPTS_FILENAME
+)
 
 # --- ADDED: Initialize user-specific Gemini thinking budget preferences ---
-user_gemini_thinking_budget_preferences: Dict[int, bool] = _load_user_preferences(USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME)
+user_gemini_thinking_budget_preferences: Dict[int, bool] = _load_user_preferences(
+    USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME
+)
+
 
 # --- Slash Command Autocomplete Functions ---
-async def model_autocomplete(interaction: discord.Interaction, current: str) -> List[Choice[str]]:
+async def model_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> List[Choice[str]]:
     """Autocompletes the model argument with combined provider/model_name."""
     choices = []
     for provider_name, models in AVAILABLE_MODELS.items():
@@ -71,15 +92,18 @@ async def model_autocomplete(interaction: discord.Interaction, current: str) -> 
             full_model_name = f"{provider_name}/{model_name}"
             if current.lower() in full_model_name.lower():
                 choices.append(Choice(name=full_model_name, value=full_model_name))
-    return choices[:25] # Limit to 25 choices
+    return choices[:25]  # Limit to 25 choices
 
 
 # --- Slash Command Definition ---
 # Note: The command registration (@discord_client.tree.command) happens in bot.py
 # This file just defines the command function and its logic.
 
+
 @app_commands.autocomplete(model_full_name=model_autocomplete)
-@app_commands.describe(model_full_name="The LLM provider and model (e.g., google/gemini-2.0-flash, openai/gpt-4.1).")
+@app_commands.describe(
+    model_full_name="The LLM provider and model (e.g., google/gemini-2.0-flash, openai/gpt-4.1)."
+)
 async def set_model_command(interaction: discord.Interaction, model_full_name: str):
     """
     Sets the user's preferred LLM (provider and model) for future interactions.
@@ -87,42 +111,56 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
     global user_model_preferences
 
     try:
-        provider, model_name = model_full_name.split('/', 1)
+        provider, model_name = model_full_name.split("/", 1)
     except ValueError:
         await interaction.response.send_message(
             f"Invalid model format: `{model_full_name}`. Please use the format `provider/model_name` (e.g., `openai/gpt-4.1`).",
-            ephemeral=False
+            ephemeral=False,
         )
         return
 
     # Validate provider
     if provider not in AVAILABLE_MODELS:
-        await interaction.response.send_message(f"Invalid provider: `{provider}`. Please choose from the suggestions.", ephemeral=False)
+        await interaction.response.send_message(
+            f"Invalid provider: `{provider}`. Please choose from the suggestions.",
+            ephemeral=False,
+        )
         return
 
     # Validate model against the selected provider
     if model_name not in AVAILABLE_MODELS.get(provider, []):
-        await interaction.response.send_message(f"Invalid model: `{model_name}` for provider `{provider}`. Please choose from the suggestions.", ephemeral=False)
+        await interaction.response.send_message(
+            f"Invalid model: `{model_name}` for provider `{provider}`. Please choose from the suggestions.",
+            ephemeral=False,
+        )
         return
 
     # Store the preference
     user_id = interaction.user.id
     user_model_preferences[user_id] = model_full_name
     # Use the logger obtained earlier
-    logger.info(f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}")
+    logger.info(
+        f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}"
+    )
 
     # --- ADDED: Save model preferences ---
     _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
     # --- END ADDED ---
 
-    await interaction.response.send_message(f"Your LLM model has been set to `{model_full_name}`.", ephemeral=False)
+    await interaction.response.send_message(
+        f"Your LLM model has been set to `{model_full_name}`.", ephemeral=False
+    )
+
 
 def get_user_model_preference(user_id: int, default_model: str) -> str:
     """Gets the user's model preference or the default."""
     return user_model_preferences.get(user_id, default_model)
 
+
 # --- ADDED: Slash Command for Setting System Prompt ---
-@app_commands.describe(prompt="Your custom system prompt. Use 'reset' to use the default prompt from config.yaml.")
+@app_commands.describe(
+    prompt="Your custom system prompt. Use 'reset' to use the default prompt from config.yaml."
+)
 async def set_system_prompt_command(interaction: discord.Interaction, prompt: str):
     """
     Sets your custom system prompt for the bot.
@@ -134,38 +172,58 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
 
     try:
         if prompt.lower() == "reset":
-            user_system_prompt_preferences[user_id] = None # None signifies using the default
-            logger.info(f"User {user_id} ({interaction.user.name}) reset their system prompt to default.")
-            await interaction.response.send_message("Your system prompt has been reset to the default.", ephemeral=False)
+            user_system_prompt_preferences[user_id] = (
+                None  # None signifies using the default
+            )
+            logger.info(
+                f"User {user_id} ({interaction.user.name}) reset their system prompt to default."
+            )
+            await interaction.response.send_message(
+                "Your system prompt has been reset to the default.", ephemeral=False
+            )
         else:
             user_system_prompt_preferences[user_id] = prompt
-            logger.info(f"User {user_id} ({interaction.user.name}) set system prompt to: \"{prompt[:100]}{'...' if len(prompt) > 100 else ''}\"")
-            await interaction.response.send_message(f"Your system prompt has been set to: \"{prompt[:200]}{'...' if len(prompt) > 200 else ''}\"", ephemeral=False)
+            logger.info(
+                f'User {user_id} ({interaction.user.name}) set system prompt to: "{prompt[:100]}{"..." if len(prompt) > 100 else ""}"'
+            )
+            await interaction.response.send_message(
+                f'Your system prompt has been set to: "{prompt[:200]}{"..." if len(prompt) > 200 else ""}"',
+                ephemeral=False,
+            )
 
         # --- ADDED: Save preferences after modification ---
-        _save_user_preferences(USER_SYSTEM_PROMPTS_FILENAME, user_system_prompt_preferences)
+        _save_user_preferences(
+            USER_SYSTEM_PROMPTS_FILENAME, user_system_prompt_preferences
+        )
 
     except Exception as e:
-        logger.exception(f"Error in set_system_prompt_command for user {user_id} (Interaction ID: {interaction.id}): {e}")
+        logger.exception(
+            f"Error in set_system_prompt_command for user {user_id} (Interaction ID: {interaction.id}): {e}"
+        )
         try:
             # Try to send an error message if the interaction hasn't been responded to yet.
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while setting your system prompt. Please check the bot logs for more details.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
             else:
                 # If already responded (e.g., error happened during _save_user_preferences, though less likely to be caught here)
                 # or if interaction is too old, try a followup.
                 await interaction.followup.send(
                     "An error occurred after the initial response while processing your system prompt. Please check the bot logs.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
         except discord.HTTPException as http_err:
-            logger.error(f"Failed to send error message followup for set_system_prompt_command (Interaction ID: {interaction.id}): {http_err}")
+            logger.error(
+                f"Failed to send error message followup for set_system_prompt_command (Interaction ID: {interaction.id}): {http_err}"
+            )
         # The command will now complete from Discord's perspective, showing the error message.
 
-def get_user_system_prompt_preference(user_id: int, default_prompt: Optional[str]) -> Optional[str]:
+
+def get_user_system_prompt_preference(
+    user_id: int, default_prompt: Optional[str]
+) -> Optional[str]:
     """
     Gets the user's system prompt preference.
     Returns the user-set prompt if available, otherwise the default_prompt.
@@ -182,8 +240,11 @@ def get_user_system_prompt_preference(user_id: int, default_prompt: Optional[str
         # User has not set any preference, use default
         return default_prompt
 
+
 # --- ADDED: Slash Command for Setting Gemini Thinking Budget Usage ---
-@app_commands.describe(enabled="Set to 'True' to use the thinking budget for Gemini, 'False' to disable it for your interactions.")
+@app_commands.describe(
+    enabled="Set to 'True' to use the thinking budget for Gemini, 'False' to disable it for your interactions."
+)
 async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
     """
     Sets your preference for using the 'thinkingBudget' parameter with Gemini models.
@@ -195,29 +256,44 @@ async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
 
     try:
         user_gemini_thinking_budget_preferences[user_id] = enabled
-        logger.info(f"User {user_id} ({interaction.user.name}) set Gemini thinking budget usage to: {enabled}")
+        logger.info(
+            f"User {user_id} ({interaction.user.name}) set Gemini thinking budget usage to: {enabled}"
+        )
         status_message = "enabled" if enabled else "disabled"
-        await interaction.response.send_message(f"Your preference for Gemini 'thinkingBudget' has been set to **{status_message}**.", ephemeral=False)
+        await interaction.response.send_message(
+            f"Your preference for Gemini 'thinkingBudget' has been set to **{status_message}**.",
+            ephemeral=False,
+        )
 
-        _save_user_preferences(USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME, user_gemini_thinking_budget_preferences)
+        _save_user_preferences(
+            USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
+            user_gemini_thinking_budget_preferences,
+        )
 
     except Exception as e:
-        logger.exception(f"Error in setgeminithinking command for user {user_id} (Interaction ID: {interaction.id}): {e}")
+        logger.exception(
+            f"Error in setgeminithinking command for user {user_id} (Interaction ID: {interaction.id}): {e}"
+        )
         try:
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while setting your Gemini thinking budget preference. Please check the bot logs.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
             else:
                 await interaction.followup.send(
                     "An error occurred after the initial response while processing your Gemini thinking budget preference.",
-                    ephemeral=True
+                    ephemeral=True,
                 )
         except discord.HTTPException as http_err:
-            logger.error(f"Failed to send error message followup for setgeminithinking (Interaction ID: {interaction.id}): {http_err}")
+            logger.error(
+                f"Failed to send error message followup for setgeminithinking (Interaction ID: {interaction.id}): {http_err}"
+            )
 
-def get_user_gemini_thinking_budget_preference(user_id: int, default_enabled: bool) -> bool:
+
+def get_user_gemini_thinking_budget_preference(
+    user_id: int, default_enabled: bool
+) -> bool:
     """
     Gets the user's preference for using the Gemini thinking budget.
     Returns the user-set preference if available, otherwise the default_enabled value from config.

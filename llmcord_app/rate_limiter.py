@@ -7,9 +7,11 @@ from typing import Set, Dict, List
 
 from .constants import DB_FOLDER, RATE_LIMIT_COOLDOWN_SECONDS, GLOBAL_RESET_FILE
 
+
 # --- Rate Limit Database Manager ---
 class RateLimitDBManager:
     """Manages the SQLite database for tracking rate-limited API keys."""
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.conn = None
@@ -23,11 +25,12 @@ class RateLimitDBManager:
             self._create_table()
         except sqlite3.Error as e:
             logging.error(f"Error connecting to database {self.db_path}: {e}")
-            self.conn = None # Ensure conn is None if connection fails
+            self.conn = None  # Ensure conn is None if connection fails
 
     def _create_table(self):
         """Creates the rate_limited_keys table if it doesn't exist."""
-        if not self.conn: return
+        if not self.conn:
+            return
         try:
             with self.conn:
                 self.conn.execute("""
@@ -44,17 +47,24 @@ class RateLimitDBManager:
         if not self.conn:
             logging.error(f"Cannot add key, no connection to {self.db_path}")
             return
-        if not api_key: # Prevent adding empty keys
-            logging.warning(f"Attempted to add empty API key to rate limit DB {self.db_path}")
+        if not api_key:  # Prevent adding empty keys
+            logging.warning(
+                f"Attempted to add empty API key to rate limit DB {self.db_path}"
+            )
             return
         timestamp = time.time()
         try:
             with self.conn:
-                self.conn.execute("""
+                self.conn.execute(
+                    """
                     INSERT OR REPLACE INTO rate_limited_keys (api_key, ratelimit_timestamp)
                     VALUES (?, ?)
-                """, (api_key, timestamp))
-            logging.info(f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}.")
+                """,
+                    (api_key, timestamp),
+                )
+            logging.info(
+                f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}."
+            )
         except sqlite3.Error as e:
             logging.error(f"Error adding key ...{api_key[-4:]} to {self.db_path}: {e}")
 
@@ -67,9 +77,12 @@ class RateLimitDBManager:
         limited_keys = set()
         try:
             with self.conn:
-                cursor = self.conn.execute("""
+                cursor = self.conn.execute(
+                    """
                     SELECT api_key FROM rate_limited_keys WHERE ratelimit_timestamp >= ?
-                """, (cutoff_time,))
+                """,
+                    (cutoff_time,),
+                )
                 limited_keys = {row[0] for row in cursor.fetchall()}
         except sqlite3.Error as e:
             logging.error(f"Error getting limited keys from {self.db_path}: {e}")
@@ -97,19 +110,24 @@ class RateLimitDBManager:
             except sqlite3.Error as e:
                 logging.error(f"Error closing database {self.db_path}: {e}")
 
+
 # --- Global Rate Limit Management ---
 db_managers: Dict[str, RateLimitDBManager] = {}
+
 
 def get_db_manager(service_name: str) -> RateLimitDBManager:
     """Gets or creates a DB manager for a specific service."""
     global db_managers
     if service_name not in db_managers:
-        db_path = os.path.join(DB_FOLDER, f"ratelimit_{service_name.lower().replace('-', '_')}.db")
+        db_path = os.path.join(
+            DB_FOLDER, f"ratelimit_{service_name.lower().replace('-', '_')}.db"
+        )
         db_managers[service_name] = RateLimitDBManager(db_path)
     # Ensure connection is alive (e.g., if it failed initially)
     if db_managers[service_name].conn is None:
-         db_managers[service_name]._connect()
+        db_managers[service_name]._connect()
     return db_managers[service_name]
+
 
 def check_and_perform_global_reset(cfg: Dict):
     """Checks if 24 hours have passed since the last reset and resets all DBs if so."""
@@ -117,16 +135,18 @@ def check_and_perform_global_reset(cfg: Dict):
     last_reset_time = 0.0
     try:
         if os.path.exists(GLOBAL_RESET_FILE):
-            with open(GLOBAL_RESET_FILE, 'r') as f:
+            with open(GLOBAL_RESET_FILE, "r") as f:
                 content = f.read().strip()
-                if content: # Ensure file is not empty
+                if content:  # Ensure file is not empty
                     last_reset_time = float(content)
                 else:
                     logging.warning(f"{GLOBAL_RESET_FILE} is empty. Forcing reset.")
                     last_reset_time = 0.0
     except (IOError, ValueError) as e:
-        logging.warning(f"Could not read last reset timestamp from {GLOBAL_RESET_FILE}: {e}. Forcing reset.")
-        last_reset_time = 0.0 # Force reset if file is invalid or missing
+        logging.warning(
+            f"Could not read last reset timestamp from {GLOBAL_RESET_FILE}: {e}. Forcing reset."
+        )
+        last_reset_time = 0.0  # Force reset if file is invalid or missing
 
     if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
         logging.info("Performing global 24-hour rate limit database reset.")
@@ -137,29 +157,38 @@ def check_and_perform_global_reset(cfg: Dict):
             # Check if provider_cfg is a dict and has non-empty api_keys list
             if isinstance(provider_cfg, dict) and provider_cfg.get("api_keys"):
                 services_in_config.add(provider_name)
-        if cfg.get("serpapi_api_keys"): # Check SerpAPI separately
+        if cfg.get("serpapi_api_keys"):  # Check SerpAPI separately
             services_in_config.add("serpapi")
         # Add other services with keys here if needed
 
         # Reset DBs for services found in config
         for service_name in services_in_config:
-             manager = get_db_manager(service_name)
-             manager.reset_db()
+            manager = get_db_manager(service_name)
+            manager.reset_db()
 
         # Also reset any managers that might exist but weren't in config scan (less likely but safe)
         # This handles cases where a DB exists but the service was removed from config
-        for manager in list(db_managers.values()): # Iterate over a copy in case dict changes
+        for manager in list(
+            db_managers.values()
+        ):  # Iterate over a copy in case dict changes
             manager.reset_db()
 
         try:
-            with open(GLOBAL_RESET_FILE, 'w') as f:
+            with open(GLOBAL_RESET_FILE, "w") as f:
                 f.write(str(now))
         except IOError as e:
-            logging.error(f"Could not write last reset timestamp to {GLOBAL_RESET_FILE}: {e}")
+            logging.error(
+                f"Could not write last reset timestamp to {GLOBAL_RESET_FILE}: {e}"
+            )
     else:
         time_since_reset = timedelta(seconds=now - last_reset_time)
-        next_reset_in = timedelta(seconds=RATE_LIMIT_COOLDOWN_SECONDS - (now - last_reset_time))
-        logging.info(f"Time since last global reset: {time_since_reset}. Next reset in approx {next_reset_in}.")
+        next_reset_in = timedelta(
+            seconds=RATE_LIMIT_COOLDOWN_SECONDS - (now - last_reset_time)
+        )
+        logging.info(
+            f"Time since last global reset: {time_since_reset}. Next reset in approx {next_reset_in}."
+        )
+
 
 async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str]:
     """Gets available (non-rate-limited) keys for a service."""
@@ -170,12 +199,17 @@ async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str
     limited_keys = db_manager.get_limited_keys(RATE_LIMIT_COOLDOWN_SECONDS)
     available_keys = [key for key in all_keys if key not in limited_keys]
 
-    if not available_keys and all_keys: # Check all_keys to avoid resetting if none were configured
-        logging.warning(f"All keys for service '{service_name}' are currently rate-limited. Resetting DB and using full list for this attempt.")
+    if (
+        not available_keys and all_keys
+    ):  # Check all_keys to avoid resetting if none were configured
+        logging.warning(
+            f"All keys for service '{service_name}' are currently rate-limited. Resetting DB and using full list for this attempt."
+        )
         db_manager.reset_db()
-        return all_keys # Return the full list after reset
+        return all_keys  # Return the full list after reset
 
     return available_keys
+
 
 def close_all_db_managers():
     """Closes all active database manager connections."""
@@ -183,5 +217,5 @@ def close_all_db_managers():
     logging.info("Closing database connections...")
     for manager in db_managers.values():
         manager.close()
-    db_managers = {} # Clear the dictionary
+    db_managers = {}  # Clear the dictionary
     logging.info("Database connections closed.")

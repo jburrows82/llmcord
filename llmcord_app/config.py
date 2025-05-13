@@ -1,12 +1,17 @@
 import yaml
 import logging
-import os
 from .constants import (
-    SEARXNG_BASE_URL_CONFIG_KEY, SEARXNG_DEFAULT_URL, GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
-    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
-    GEMINI_DEFAULT_USE_THINKING_BUDGET, GEMINI_DEFAULT_THINKING_BUDGET_VALUE,
-    GEMINI_MIN_THINKING_BUDGET_VALUE, GEMINI_MAX_THINKING_BUDGET_VALUE,
-    SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY, SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+    SEARXNG_BASE_URL_CONFIG_KEY,
+    SEARXNG_DEFAULT_URL,
+    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
+    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
+    GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    GEMINI_DEFAULT_USE_THINKING_BUDGET,
+    GEMINI_DEFAULT_THINKING_BUDGET_VALUE,
+    GEMINI_MIN_THINKING_BUDGET_VALUE,
+    GEMINI_MAX_THINKING_BUDGET_VALUE,
+    SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY,
+    SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -21,10 +26,11 @@ Output only the search queries, each on a new line. Do not add any other text, p
 """.strip()
 # --- END DEFAULT GROUNDING PROMPT ---
 
+
 def get_config(filename="config.yaml"):
     """Loads, validates, and returns the configuration from a YAML file."""
     try:
-        with open(filename, "r", encoding='utf-8') as file: # Specify encoding
+        with open(filename, "r", encoding="utf-8") as file:  # Specify encoding
             config_data = yaml.safe_load(file)
             if not isinstance(config_data, dict):
                 logging.error(f"CRITICAL: {filename} is not a valid YAML dictionary.")
@@ -34,65 +40,93 @@ def get_config(filename="config.yaml"):
             # Ensure providers have api_keys (plural) as a list
             providers = config_data.get("providers", {})
             if not isinstance(providers, dict):
-                logging.warning(f"Config Warning: 'providers' section is not a dictionary. Treating as empty.")
+                logging.warning(
+                    "Config Warning: 'providers' section is not a dictionary. Treating as empty."
+                )
                 providers = {}
-                config_data["providers"] = providers # Fix in loaded data
+                config_data["providers"] = providers  # Fix in loaded data
 
             for name, provider_cfg in providers.items():
-                if provider_cfg and isinstance(provider_cfg, dict): # Check if provider config exists and is a dict
+                if provider_cfg and isinstance(
+                    provider_cfg, dict
+                ):  # Check if provider config exists and is a dict
                     single_key = provider_cfg.get("api_key")
                     key_list = provider_cfg.get("api_keys")
 
                     if single_key and not key_list:
-                        logging.warning(f"Config Warning: Provider '{name}' uses deprecated 'api_key'. Converting to 'api_keys' list. Please update {filename}.")
+                        logging.warning(
+                            f"Config Warning: Provider '{name}' uses deprecated 'api_key'. Converting to 'api_keys' list. Please update {filename}."
+                        )
                         provider_cfg["api_keys"] = [single_key]
                         del provider_cfg["api_key"]
                     elif single_key and key_list:
-                         logging.warning(f"Config Warning: Provider '{name}' has both 'api_key' and 'api_keys'. Using 'api_keys'. Please remove 'api_key' from {filename}.")
-                         del provider_cfg["api_key"]
-                    elif key_list is None: # Handle case where api_keys is explicitly null or missing
-                         # Allow providers without keys (like Ollama)
-                         provider_cfg["api_keys"] = []
+                        logging.warning(
+                            f"Config Warning: Provider '{name}' has both 'api_key' and 'api_keys'. Using 'api_keys'. Please remove 'api_key' from {filename}."
+                        )
+                        del provider_cfg["api_key"]
+                    elif (
+                        key_list is None
+                    ):  # Handle case where api_keys is explicitly null or missing
+                        # Allow providers without keys (like Ollama)
+                        provider_cfg["api_keys"] = []
                     elif not isinstance(key_list, list):
-                         logging.error(f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty.")
-                         provider_cfg["api_keys"] = []
+                        logging.error(
+                            f"Config Error: Provider '{name}' has 'api_keys' but it's not a list. Treating as empty."
+                        )
+                        provider_cfg["api_keys"] = []
 
                     # --- ADDED: Validate disable_vision for OpenAI ---
                     if name == "openai":
                         if "disable_vision" not in provider_cfg:
-                            provider_cfg["disable_vision"] = False # Default to False
-                            logging.info(f"OpenAI 'disable_vision' not set in config. Assuming False.")
+                            provider_cfg["disable_vision"] = False  # Default to False
+                            logging.info(
+                                "OpenAI 'disable_vision' not set in config. Assuming False."
+                            )
                         elif not isinstance(provider_cfg["disable_vision"], bool):
-                            logging.warning(f"OpenAI 'disable_vision' is not a boolean. Defaulting to False.")
+                            logging.warning(
+                                "OpenAI 'disable_vision' is not a boolean. Defaulting to False."
+                            )
                             provider_cfg["disable_vision"] = False
                     # --- END ADDED ---
 
                 elif provider_cfg is not None:
-                     logging.warning(f"Config Warning: Provider '{name}' configuration is not a dictionary. Ignoring provider.")
-                     # Optionally remove invalid provider config: del providers[name] or set providers[name] = {}
+                    logging.warning(
+                        f"Config Warning: Provider '{name}' configuration is not a dictionary. Ignoring provider."
+                    )
+                    # Optionally remove invalid provider config: del providers[name] or set providers[name] = {}
 
             # Handle SerpAPI key(s)
             single_serp_key = config_data.get("serpapi_api_key")
             serp_key_list = config_data.get("serpapi_api_keys")
             if single_serp_key and not serp_key_list:
-                logging.warning(f"Config Warning: Found 'serpapi_api_key'. Converting to 'serpapi_api_keys' list. Please update {filename}.")
+                logging.warning(
+                    f"Config Warning: Found 'serpapi_api_key'. Converting to 'serpapi_api_keys' list. Please update {filename}."
+                )
                 config_data["serpapi_api_keys"] = [single_serp_key]
                 del config_data["serpapi_api_key"]
             elif single_serp_key and serp_key_list:
-                 logging.warning(f"Config Warning: Found both 'serpapi_api_key' and 'serpapi_api_keys'. Using 'serpapi_api_keys'. Please remove 'serpapi_api_key' from {filename}.")
-                 del config_data["serpapi_api_key"]
-            elif serp_key_list is None: # Handle case where serpapi_api_keys is explicitly null or missing
-                 config_data["serpapi_api_keys"] = []
+                logging.warning(
+                    f"Config Warning: Found both 'serpapi_api_key' and 'serpapi_api_keys'. Using 'serpapi_api_keys'. Please remove 'serpapi_api_key' from {filename}."
+                )
+                del config_data["serpapi_api_key"]
+            elif (
+                serp_key_list is None
+            ):  # Handle case where serpapi_api_keys is explicitly null or missing
+                config_data["serpapi_api_keys"] = []
             elif not isinstance(serp_key_list, list):
-                 logging.error(f"Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty.")
-                 config_data["serpapi_api_keys"] = []
+                logging.error(
+                    "Config Error: Found 'serpapi_api_keys' but it's not a list. Treating as empty."
+                )
+                config_data["serpapi_api_keys"] = []
 
             # Basic check for essential Discord config
             if not config_data.get("bot_token"):
                 logging.error(f"CRITICAL: bot_token is not set in {filename}")
                 # Don't exit here, let the main script handle it after logging
             if not config_data.get("client_id"):
-                 logging.warning(f"client_id not found in {filename}. Cannot generate invite URL.")
+                logging.warning(
+                    f"client_id not found in {filename}. Cannot generate invite URL."
+                )
 
             # Ensure permissions structure exists
             if "permissions" not in config_data:
@@ -108,22 +142,39 @@ def get_config(filename="config.yaml"):
 
             # Load SearxNG base URL
             if SEARXNG_BASE_URL_CONFIG_KEY not in config_data:
-                logging.info(f"'{SEARXNG_BASE_URL_CONFIG_KEY}' not found in {filename}. Using default: {SEARXNG_DEFAULT_URL}")
+                logging.info(
+                    f"'{SEARXNG_BASE_URL_CONFIG_KEY}' not found in {filename}. Using default: {SEARXNG_DEFAULT_URL}"
+                )
                 config_data[SEARXNG_BASE_URL_CONFIG_KEY] = SEARXNG_DEFAULT_URL
-            elif not config_data.get(SEARXNG_BASE_URL_CONFIG_KEY): # Check if it's empty
-                logging.warning(f"'{SEARXNG_BASE_URL_CONFIG_KEY}' is empty in {filename}. Using default: {SEARXNG_DEFAULT_URL}")
+            elif not config_data.get(
+                SEARXNG_BASE_URL_CONFIG_KEY
+            ):  # Check if it's empty
+                logging.warning(
+                    f"'{SEARXNG_BASE_URL_CONFIG_KEY}' is empty in {filename}. Using default: {SEARXNG_DEFAULT_URL}"
+                )
                 config_data[SEARXNG_BASE_URL_CONFIG_KEY] = SEARXNG_DEFAULT_URL
 
             # --- ADDED: Load Grounding System Prompt ---
-            if GROUNDING_SYSTEM_PROMPT_CONFIG_KEY not in config_data or not config_data.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY):
-                logging.info(f"'{GROUNDING_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default.")
-                config_data[GROUNDING_SYSTEM_PROMPT_CONFIG_KEY] = DEFAULT_GROUNDING_SYSTEM_PROMPT
+            if (
+                GROUNDING_SYSTEM_PROMPT_CONFIG_KEY not in config_data
+                or not config_data.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
+            ):
+                logging.info(
+                    f"'{GROUNDING_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default."
+                )
+                config_data[GROUNDING_SYSTEM_PROMPT_CONFIG_KEY] = (
+                    DEFAULT_GROUNDING_SYSTEM_PROMPT
+                )
             # --- END ADDED ---
 
             # --- ADDED: Load SearxNG URL content max length ---
             if SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY not in config_data:
-                config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
-                logging.info(f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' not found. Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}")
+                config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = (
+                    SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                )
+                logging.info(
+                    f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' not found. Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}"
+                )
             else:
                 try:
                     val = int(config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY])
@@ -132,7 +183,9 @@ def get_config(filename="config.yaml"):
                             f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' ({val}) must be positive. "
                             f"Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}"
                         )
-                        config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                        config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = (
+                            SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                        )
                     else:
                         config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = val
                 except ValueError:
@@ -140,30 +193,52 @@ def get_config(filename="config.yaml"):
                         f"'{SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY}' is not a valid integer. "
                         f"Using default: {SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH}"
                     )
-                    config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                    config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = (
+                        SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
+                    )
             # --- END ADDED ---
 
             # --- Load Gemini Thinking Budget Settings ---
             if GEMINI_USE_THINKING_BUDGET_CONFIG_KEY not in config_data:
-                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = GEMINI_DEFAULT_USE_THINKING_BUDGET
-                logging.info(f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}")
-            elif not isinstance(config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY], bool):
-                logging.warning(f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' is not a boolean. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}")
-                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = GEMINI_DEFAULT_USE_THINKING_BUDGET
+                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = (
+                    GEMINI_DEFAULT_USE_THINKING_BUDGET
+                )
+                logging.info(
+                    f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}"
+                )
+            elif not isinstance(
+                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY], bool
+            ):
+                logging.warning(
+                    f"'{GEMINI_USE_THINKING_BUDGET_CONFIG_KEY}' is not a boolean. Using default: {GEMINI_DEFAULT_USE_THINKING_BUDGET}"
+                )
+                config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = (
+                    GEMINI_DEFAULT_USE_THINKING_BUDGET
+                )
 
             if GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY not in config_data:
-                config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
-                logging.info(f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}")
+                config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
+                    GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                )
+                logging.info(
+                    f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' not found. Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}"
+                )
             else:
                 try:
                     val = int(config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY])
-                    if not (GEMINI_MIN_THINKING_BUDGET_VALUE <= val <= GEMINI_MAX_THINKING_BUDGET_VALUE):
+                    if not (
+                        GEMINI_MIN_THINKING_BUDGET_VALUE
+                        <= val
+                        <= GEMINI_MAX_THINKING_BUDGET_VALUE
+                    ):
                         logging.warning(
                             f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' ({val}) is outside the valid range "
                             f"({GEMINI_MIN_THINKING_BUDGET_VALUE}-{GEMINI_MAX_THINKING_BUDGET_VALUE}). "
                             f"Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}"
                         )
-                        config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                        config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
+                            GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                        )
                     else:
                         config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = val
                 except ValueError:
@@ -171,13 +246,17 @@ def get_config(filename="config.yaml"):
                         f"'{GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY}' is not a valid integer. "
                         f"Using default: {GEMINI_DEFAULT_THINKING_BUDGET_VALUE}"
                     )
-                    config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                    config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
+                        GEMINI_DEFAULT_THINKING_BUDGET_VALUE
+                    )
             # --- End Load Gemini Thinking Budget Settings ---
 
             return config_data
 
     except FileNotFoundError:
-        logging.error(f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it.")
+        logging.error(
+            f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it."
+        )
         exit()
     except yaml.YAMLError as e:
         logging.error(f"CRITICAL: Error parsing {filename}: {e}")
