@@ -12,10 +12,11 @@ from .constants import (
     EMBED_COLOR_COMPLETE, EMBED_COLOR_INCOMPLETE, EMBED_COLOR_ERROR,
     STREAMING_INDICATOR, EDIT_DELAY_SECONDS, MAX_EMBED_DESCRIPTION_LENGTH,
     MAX_PLAIN_TEXT_LENGTH, IMGUR_HEADER, IMGUR_URL_PATTERN, IMGUR_URL_PREFIX,
-    AllKeysFailedError
+    AllKeysFailedError, GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY
 )
 from .ui import ResponseActionView
-from .llm_handler import generate_response_stream # For type hinting and direct call
+from .llm_handler import generate_response_stream 
+from .commands import get_user_gemini_thinking_budget_preference # Added for retry logic
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
@@ -55,172 +56,276 @@ async def handle_llm_response_stream(
 ):
     """Handles the streaming, editing, and sending of LLM responses."""
     response_msgs: List[discord.Message] = []
-    final_text = ""
-    llm_call_successful = False
-    # final_view = None # This is determined within the loop
-    grounding_metadata = None
-    edit_task = None
-    # client.last_task_time should be managed by the client instance or passed if needed for reset
-    # For now, assume it's handled by the caller or we manage a local version if this function becomes very independent.
-    # Let's assume client object has 'last_task_time', 'msg_nodes'
+    final_text_to_return = ""
+    llm_call_successful_final = False
+    grounding_metadata_final = None
+    edit_task = None # Keep edit_task for embed streaming
+
+    should_retry_with_gemini_signal = False
     
-    # Initial embed for warnings and footer
-    base_embed = discord.Embed()
-    base_embed.set_footer(text=f"Model: {model_name}") # Use model_name passed in
-    for warning in sorted(initial_user_warnings): # Use initial_user_warnings
-        base_embed.add_field(name=warning, value="", inline=False)
+    original_provider_param = provider
+    original_model_name_param = model_name
+    original_provider_config_param = provider_config.copy()
+    original_extra_api_params_param = extra_api_params.copy()
 
-    try:
-        async with new_msg.channel.typing():
-            stream_generator = generate_response_stream(
-                provider=provider,
-                model_name=model_name,
-                history_for_llm=history_for_llm,
-                system_prompt_text=system_prompt_text,
-                provider_config=provider_config,
-                extra_params=extra_api_params
-            )
+    current_provider = original_provider_param
+    current_model_name = original_model_name_param
+    current_provider_config = original_provider_config_param
+    current_extra_params = original_extra_api_params_param
 
-            async for text_chunk, finish_reason, chunk_grounding_metadata, error_message in stream_generator:
-                if error_message:
-                    logging.error(f"LLM stream failed with non-retryable error: {error_message}")
-                    await _handle_stream_error(new_msg, processing_msg, response_msgs, error_message, use_plain_responses_config)
-                    llm_call_successful = False
-                    return llm_call_successful, final_text, response_msgs # Return immediately
+    for attempt_num in range(2): # 0 for original, 1 for retry
+        if attempt_num == 1:
+            if not should_retry_with_gemini_signal:
+                break 
 
-                if chunk_grounding_metadata:
-                    grounding_metadata = chunk_grounding_metadata
-                if text_chunk:
-                    final_text += text_chunk
+            logging.info(f"Original model '{original_model_name_param}' stream ended without finish reason. Retrying with Gemini...")
+            warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `gemini-2.5-pro-exp-03-25`..."
+            initial_user_warnings.add(warning_message)
 
-                if not use_plain_responses_config:
-                    is_final_chunk = finish_reason is not None
-                    if not final_text and not is_final_chunk: continue
-
-                    current_msg_index = (len(final_text) - 1) // split_limit_config if final_text else 0
-                    start_next_msg = current_msg_index >= len(response_msgs)
-                    
-                    ready_to_edit = (
-                        (edit_task is None or edit_task.done()) and
-                        (dt.now().timestamp() - client.last_task_time >= EDIT_DELAY_SECONDS)
-                    )
-
-                    if start_next_msg or ready_to_edit or is_final_chunk:
-                        if edit_task is not None and not edit_task.done():
-                            try: await edit_task
-                            except asyncio.CancelledError: logging.warning("Previous edit task cancelled.")
-                            except Exception as e: logging.error(f"Error waiting for previous edit task: {e}")
-                            edit_task = None
-                        
-                        if start_next_msg and response_msgs: # Finalize previous message
-                            prev_msg_idx = current_msg_index -1
-                            if 0 <= prev_msg_idx < len(response_msgs):
-                                prev_text = final_text[prev_msg_idx * split_limit_config : current_msg_index * split_limit_config]
-                                prev_text = prev_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
-                                temp_prev_embed = discord.Embed.from_dict(response_msgs[prev_msg_idx].embeds[0].to_dict()) if response_msgs[prev_msg_idx].embeds else discord.Embed()
-                                temp_prev_embed.description = prev_text or "..."
-                                temp_prev_embed.color = EMBED_COLOR_COMPLETE
-                                try: await response_msgs[prev_msg_idx].edit(embed=temp_prev_embed, view=None)
-                                except discord.HTTPException as e: logging.error(f"Failed to finalize prev msg {prev_msg_idx}: {e}")
-                        
-                        current_display_text = final_text[current_msg_index * split_limit_config : (current_msg_index + 1) * split_limit_config]
-                        current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH]
-
-                        view_to_attach = None
-                        is_successful_finish = finish_reason and (finish_reason.lower() in ("stop", "end_turn") or (provider == "google" and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)))
-                        is_blocked = finish_reason and finish_reason.lower() in ("safety", "recitation", "other")
-
-                        current_segment_embed = discord.Embed()
-                        current_segment_embed.set_footer(text=base_embed.footer.text if base_embed.footer else "")
-                        for field in base_embed.fields:
-                            current_segment_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-                        
-                        current_segment_embed.description = (current_display_text or "...") if is_final_chunk else ((current_display_text or "...") + STREAMING_INDICATOR)
-
-                        if is_final_chunk and is_blocked:
-                            current_segment_embed.description = (current_display_text or "...").replace(STREAMING_INDICATOR, "").strip()
-                            if finish_reason.lower() == "safety": current_segment_embed.description += "\n\n⚠️ Response blocked by safety filters."
-                            elif finish_reason.lower() == "recitation": current_segment_embed.description += "\n\n⚠️ Response stopped due to recitation."
-                            else: current_segment_embed.description += "\n\n⚠️ Response blocked (Reason: Other)."
-                            current_segment_embed.description = current_segment_embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
-                            current_segment_embed.color = EMBED_COLOR_ERROR
-                        else:
-                            current_segment_embed.color = EMBED_COLOR_COMPLETE if is_final_chunk and is_successful_finish else EMBED_COLOR_INCOMPLETE
-                            if is_final_chunk and is_successful_finish:
-                                has_sources = grounding_metadata and (getattr(grounding_metadata, 'web_search_queries', None) or getattr(grounding_metadata, 'grounding_chunks', None) or getattr(grounding_metadata, 'search_entry_point', None))
-                                has_text_content = bool(final_text)
-                                if has_sources or has_text_content:
-                                    view_to_attach = ResponseActionView(grounding_metadata=grounding_metadata, full_response_text=final_text, model_name=model_name)
-                                    if not view_to_attach or len(view_to_attach.children) == 0: view_to_attach = None
-                        
-                        if start_next_msg:
-                            if not response_msgs and processing_msg:
-                                await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach)
-                                response_msg = processing_msg
-                            else:
-                                reply_target = new_msg if not response_msgs else response_msgs[-1]
-                                response_msg = await reply_target.reply(embed=current_segment_embed, view=view_to_attach, mention_author=False)
-                            response_msgs.append(response_msg)
-                            client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                            if view_to_attach: view_to_attach.message = response_msg
-                            await client.msg_nodes[response_msg.id].lock.acquire()
-                        elif response_msgs and current_msg_index < len(response_msgs):
-                            target_msg = response_msgs[current_msg_index]
-                            if target_msg:
-                                edit_task = asyncio.create_task(target_msg.edit(embed=current_segment_embed, view=view_to_attach))
-                                if view_to_attach: view_to_attach.message = target_msg
-                        elif not response_msgs and is_final_chunk: # Short final response
-                            if processing_msg:
-                                await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach)
-                                response_msg = processing_msg
-                            else:
-                                response_msg = await new_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author=False)
-                            response_msgs.append(response_msg)
-                            client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                            if view_to_attach: view_to_attach.message = response_msg
-                            await client.msg_nodes[response_msg.id].lock.acquire()
-                        
-                        client.last_task_time = dt.now().timestamp()
-
-                if finish_reason:
-                    llm_call_successful = finish_reason.lower() in ("stop", "end_turn") or (provider == "google" and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED))
-                    break
-        
-        if use_plain_responses_config and llm_call_successful:
-            final_messages_content = [final_text[i:i+split_limit_config] for i in range(0, len(final_text), split_limit_config)]
-            if not final_messages_content: final_messages_content.append("...")
+            current_provider = "google"
+            current_model_name = "gemini-2.5-pro-exp-03-25" # Hardcoded retry model
             
-            temp_response_msgs = []
-            for i, content_chunk in enumerate(final_messages_content):
-                if i == 0 and processing_msg:
-                    await processing_msg.edit(content=content_chunk or "...", embed=None, view=None)
-                    response_msg = processing_msg
-                else:
-                    reply_target = new_msg if not temp_response_msgs else temp_response_msgs[-1]
-                    response_msg = await reply_target.reply(content=content_chunk or "...", suppress_embeds=True, view=None, mention_author=False)
-                temp_response_msgs.append(response_msg)
-                client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                node = client.msg_nodes[response_msg.id]
-                await node.lock.acquire()
-                if i == len(final_messages_content) -1:
-                    node.full_response_text = final_text
-            response_msgs = temp_response_msgs
+            # Ensure client.config is available and correctly structured
+            if not hasattr(client, 'config') or not isinstance(client.config, dict):
+                logging.error("Client configuration is missing or invalid. Cannot proceed with Gemini retry.")
+                error_text = "⚠️ Internal configuration error. Cannot retry with Gemini."
+                await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
+                return llm_call_successful_final, final_text_to_return, response_msgs
 
-    except AllKeysFailedError as e:
-        logging.error(f"LLM generation failed for message {new_msg.id}: {e}")
-        error_text = f"⚠️ All API keys for provider `{e.service_name}` failed."
-        # Simplified error reporting (can be expanded as in original)
-        last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
-        error_text += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
-        await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
-        llm_call_successful = False
-    except Exception as outer_e:
-        logging.exception(f"Unhandled error during message processing for {new_msg.id}.")
-        error_text = f"⚠️ An unexpected error occurred: {type(outer_e).__name__}"
-        await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
-        llm_call_successful = False
-    
-    return llm_call_successful, final_text, response_msgs
+            current_provider_config = client.config.get("providers", {}).get(current_provider, {})
+            if not current_provider_config or not current_provider_config.get("api_keys"):
+                logging.error(f"Cannot retry with Gemini: Provider '{current_provider}' not configured with API keys.")
+                error_text = f"⚠️ Cannot retry with Gemini: '{current_provider}' not configured. Original attempt also failed to complete."
+                await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
+                return llm_call_successful_final, final_text_to_return, response_msgs
+
+            current_extra_params = client.config.get("extra_api_parameters", {}).copy()
+            if "max_tokens" in current_extra_params and current_provider == "google":
+                 current_extra_params["max_output_tokens"] = current_extra_params.pop("max_tokens")
+            
+            global_use_thinking_budget = client.config.get(GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False)
+            user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(new_msg.author.id, global_use_thinking_budget)
+            if user_wants_thinking_budget:
+                current_extra_params["thinking_budget"] = client.config.get(GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0)
+            
+            final_text_for_this_attempt = "" 
+            grounding_metadata_for_this_attempt = None
+            
+            if processing_msg:
+                try:
+                    retry_status_text = "⏳ Retrying with Gemini..."
+                    if use_plain_responses_config:
+                        await processing_msg.edit(content=retry_status_text, embed=None, view=None)
+                    else:
+                        retry_embed = discord.Embed(description=retry_status_text, color=EMBED_COLOR_INCOMPLETE)
+                        await processing_msg.edit(embed=retry_embed, view=None)
+                    
+                    if response_msgs and processing_msg.id == response_msgs[0].id and len(response_msgs) == 1:
+                        pass 
+                    else: 
+                        response_msgs = [processing_msg] if processing_msg else []
+                except discord.HTTPException as e:
+                    logging.warning(f"Failed to edit processing_msg for Gemini retry: {e}")
+                    response_msgs = []
+            else:
+                response_msgs = []
+            should_retry_with_gemini_signal = False
+        
+        base_embed = discord.Embed()
+        footer_text = f"Model: {current_model_name}"
+        if attempt_num == 1: footer_text += f" (Retried from {original_model_name_param})"
+        base_embed.set_footer(text=footer_text)
+        for warning_text in sorted(list(initial_user_warnings)): # Use list() for sorting a set
+            base_embed.add_field(name=warning_text, value="", inline=False)
+        
+        current_attempt_llm_successful = False
+        final_text_for_this_attempt = ""
+        grounding_metadata_for_this_attempt = None
+
+        try:
+            async with new_msg.channel.typing():
+                stream_generator = generate_response_stream(
+                    provider=current_provider, model_name=current_model_name,
+                    history_for_llm=history_for_llm, system_prompt_text=system_prompt_text,
+                    provider_config=current_provider_config, extra_params=current_extra_params
+                )
+                
+                async for text_chunk, finish_reason, chunk_grounding_metadata, error_message in stream_generator:
+                    if error_message == "RETRY_WITH_GEMINI_NO_FINISH_REASON":
+                        if original_provider_param != "google" and attempt_num == 0:
+                            should_retry_with_gemini_signal = True
+                            logging.info("Signal received to retry with Gemini.")
+                            break 
+                        else:
+                            error_message = "Stream ended without finish reason." 
+
+                    if error_message:
+                        logging.error(f"LLM stream failed for {current_provider}/{current_model_name}: {error_message}")
+                        await _handle_stream_error(new_msg, processing_msg, response_msgs, error_message, use_plain_responses_config)
+                        return llm_call_successful_final, final_text_for_this_attempt, response_msgs 
+
+                    if chunk_grounding_metadata: grounding_metadata_for_this_attempt = chunk_grounding_metadata
+                    if text_chunk: final_text_for_this_attempt += text_chunk
+                    
+                    if not use_plain_responses_config:
+                        is_final_chunk_for_attempt = finish_reason is not None
+                        if not final_text_for_this_attempt and not is_final_chunk_for_attempt: continue
+
+                        current_msg_idx = (len(final_text_for_this_attempt) - 1) // split_limit_config if final_text_for_this_attempt else 0
+                        start_next_msg = current_msg_idx >= len(response_msgs)
+                        
+                        ready_to_edit = (
+                            (edit_task is None or edit_task.done()) and
+                            (dt.now().timestamp() - client.last_task_time >= EDIT_DELAY_SECONDS)
+                        )
+
+                        if start_next_msg or ready_to_edit or is_final_chunk_for_attempt:
+                            if edit_task is not None and not edit_task.done():
+                                try: await edit_task
+                                except asyncio.CancelledError: logging.warning("Previous edit task cancelled.")
+                                except Exception as e: logging.error(f"Error waiting for previous edit task: {e}")
+                                edit_task = None
+                            
+                            if start_next_msg and response_msgs: 
+                                prev_msg_idx = current_msg_idx -1
+                                if 0 <= prev_msg_idx < len(response_msgs) and response_msgs[prev_msg_idx].embeds:
+                                    prev_text = final_text_for_this_attempt[prev_msg_idx * split_limit_config : current_msg_idx * split_limit_config]
+                                    prev_text = prev_text[:MAX_EMBED_DESCRIPTION_LENGTH + len(STREAMING_INDICATOR)]
+                                    temp_prev_embed = discord.Embed.from_dict(response_msgs[prev_msg_idx].embeds[0].to_dict())
+                                    temp_prev_embed.description = prev_text or "..."
+                                    temp_prev_embed.color = EMBED_COLOR_COMPLETE
+                                    try: await response_msgs[prev_msg_idx].edit(embed=temp_prev_embed, view=None)
+                                    except discord.HTTPException as e: logging.error(f"Failed to finalize prev msg {prev_msg_idx}: {e}")
+                            
+                            current_display_text = final_text_for_this_attempt[current_msg_idx * split_limit_config : (current_msg_idx + 1) * split_limit_config]
+                            current_display_text = current_display_text[:MAX_EMBED_DESCRIPTION_LENGTH]
+
+                            view_to_attach = None
+                            is_successful_finish_attempt = finish_reason and (finish_reason.lower() in ("stop", "end_turn") or (current_provider == "google" and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)))
+                            is_blocked_attempt = finish_reason and finish_reason.lower() in ("safety", "recitation", "other")
+
+                            current_segment_embed = discord.Embed() # Start with a fresh embed for the segment
+                            current_segment_embed.set_footer(text=base_embed.footer.text if base_embed.footer else "")
+                            for field in base_embed.fields: # Copy warnings from base_embed
+                                current_segment_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                            
+                            current_segment_embed.description = (current_display_text or "...") if is_final_chunk_for_attempt else ((current_display_text or "...") + STREAMING_INDICATOR)
+
+                            if is_final_chunk_for_attempt and is_blocked_attempt:
+                                current_segment_embed.description = (current_display_text or "...").replace(STREAMING_INDICATOR, "").strip()
+                                if finish_reason.lower() == "safety": current_segment_embed.description += "\n\n⚠️ Response blocked by safety filters."
+                                elif finish_reason.lower() == "recitation": current_segment_embed.description += "\n\n⚠️ Response stopped due to recitation."
+                                else: current_segment_embed.description += f"\n\n⚠️ Response blocked (Reason: {finish_reason})."
+                                current_segment_embed.description = current_segment_embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
+                                current_segment_embed.color = EMBED_COLOR_ERROR
+                            else:
+                                current_segment_embed.color = EMBED_COLOR_COMPLETE if is_final_chunk_for_attempt and is_successful_finish_attempt else EMBED_COLOR_INCOMPLETE
+                                if is_final_chunk_for_attempt and is_successful_finish_attempt:
+                                    has_sources = grounding_metadata_for_this_attempt and (getattr(grounding_metadata_for_this_attempt, 'web_search_queries', None) or getattr(grounding_metadata_for_this_attempt, 'grounding_chunks', None) or getattr(grounding_metadata_for_this_attempt, 'search_entry_point', None))
+                                    has_text_content = bool(final_text_for_this_attempt)
+                                    if has_sources or has_text_content:
+                                        view_to_attach = ResponseActionView(grounding_metadata=grounding_metadata_for_this_attempt, full_response_text=final_text_for_this_attempt, model_name=current_model_name)
+                                        if not view_to_attach or len(view_to_attach.children) == 0: view_to_attach = None
+                            
+                            target_msg_for_node_update = None
+                            if start_next_msg:
+                                if not response_msgs and processing_msg: # First message, edit processing_msg
+                                    await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach)
+                                    response_msg = processing_msg
+                                    target_msg_for_node_update = response_msg
+                                else: # Subsequent messages, or no processing_msg
+                                    reply_target = new_msg if not response_msgs else response_msgs[-1]
+                                    response_msg = await reply_target.reply(embed=current_segment_embed, view=view_to_attach, mention_author=False)
+                                    target_msg_for_node_update = response_msg
+                                response_msgs.append(response_msg)
+                                if target_msg_for_node_update and target_msg_for_node_update.id not in client.msg_nodes:
+                                    client.msg_nodes[target_msg_for_node_update.id] = models.MsgNode(parent_msg=new_msg)
+                                    await client.msg_nodes[target_msg_for_node_update.id].lock.acquire()
+                                if view_to_attach: view_to_attach.message = response_msg
+                            elif response_msgs and current_msg_idx < len(response_msgs): # Editing existing message in stream
+                                target_msg = response_msgs[current_msg_idx]
+                                if target_msg:
+                                    edit_task = asyncio.create_task(target_msg.edit(embed=current_segment_embed, view=view_to_attach))
+                                    if view_to_attach: view_to_attach.message = target_msg
+                                    target_msg_for_node_update = target_msg
+                            elif not response_msgs and is_final_chunk_for_attempt: # Short final response, no prior stream msgs
+                                if processing_msg:
+                                    await processing_msg.edit(content=None, embed=current_segment_embed, view=view_to_attach)
+                                    response_msg = processing_msg
+                                    target_msg_for_node_update = response_msg
+                                else:
+                                    response_msg = await new_msg.reply(embed=current_segment_embed, view=view_to_attach, mention_author=False)
+                                    target_msg_for_node_update = response_msg
+                                response_msgs.append(response_msg)
+                                if target_msg_for_node_update and target_msg_for_node_update.id not in client.msg_nodes:
+                                     client.msg_nodes[target_msg_for_node_update.id] = models.MsgNode(parent_msg=new_msg)
+                                     await client.msg_nodes[target_msg_for_node_update.id].lock.acquire()
+                                if view_to_attach: view_to_attach.message = response_msg
+                            
+                            if is_final_chunk_for_attempt and target_msg_for_node_update and target_msg_for_node_update.id in client.msg_nodes:
+                                client.msg_nodes[target_msg_for_node_update.id].full_response_text = final_text_for_this_attempt
+                            
+                            client.last_task_time = dt.now().timestamp()
+
+                    if finish_reason:
+                        current_attempt_llm_successful = finish_reason.lower() in ("stop", "end_turn") or \
+                                                         (current_provider == "google" and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED))
+                        break 
+                
+                if should_retry_with_gemini_signal:
+                    final_text_for_this_attempt = "" # Discard text from this attempt
+                    continue 
+
+                llm_call_successful_final = current_attempt_llm_successful
+                final_text_to_return = final_text_for_this_attempt
+                grounding_metadata_final = grounding_metadata_for_this_attempt
+                
+                if use_plain_responses_config and llm_call_successful_final:
+                    final_messages_content = [final_text_to_return[i:i+split_limit_config] for i in range(0, len(final_text_to_return), split_limit_config)]
+                    if not final_messages_content: final_messages_content.append("...")
+                    
+                    temp_response_msgs_plain = []
+                    start_index_plain = 0
+                    if processing_msg and (not response_msgs or (response_msgs and processing_msg.id == response_msgs[0].id)):
+                        await processing_msg.edit(content=final_messages_content[0] or "...", embed=None, view=None)
+                        temp_response_msgs_plain.append(processing_msg)
+                        if processing_msg.id in client.msg_nodes: client.msg_nodes[processing_msg.id].full_response_text = final_text_to_return
+                        else: # Should not happen if processing_msg was handled correctly
+                            client.msg_nodes[processing_msg.id] = models.MsgNode(parent_msg=new_msg, full_response_text=final_text_to_return)
+                            await client.msg_nodes[processing_msg.id].lock.acquire()
+                        start_index_plain = 1
+                    
+                    reply_target_plain = temp_response_msgs_plain[-1] if temp_response_msgs_plain else new_msg
+
+                    for i in range(start_index_plain, len(final_messages_content)):
+                        content_chunk_plain = final_messages_content[i]
+                        response_msg_plain = await reply_target_plain.reply(content=content_chunk_plain or "...", suppress_embeds=True, view=None, mention_author=False)
+                        temp_response_msgs_plain.append(response_msg_plain)
+                        # Ensure new node for new reply
+                        client.msg_nodes[response_msg_plain.id] = models.MsgNode(parent_msg=new_msg)
+                        node_plain = client.msg_nodes[response_msg_plain.id]
+                        await node_plain.lock.acquire()
+                        if i == len(final_messages_content) -1 : node_plain.full_response_text = final_text_to_return
+                        reply_target_plain = response_msg_plain
+                    
+                    response_msgs = temp_response_msgs_plain
+                break 
+        except AllKeysFailedError as e:
+            logging.error(f"LLM generation failed for message {new_msg.id} (Attempt {attempt_num+1}, Model {current_model_name}): {e}")
+            error_text = f"⚠️ All API keys for provider `{e.service_name}` failed."
+            last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
+            error_text += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
+            await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
+            llm_call_successful_final = False
+            break 
+        except Exception as outer_e:
+            logging.exception(f"Unhandled error during message processing for {new_msg.id} (Attempt {attempt_num+1}, Model {current_model_name}).")
+            error_text = f"⚠️ An unexpected error occurred: {type(outer_e).__name__}"
+            await _handle_llm_exception(new_msg, processing_msg, response_msgs, error_text, use_plain_responses_config, client.config.get("use_plain_responses", False))
+            llm_call_successful_final = False
+            break
+            
+    return llm_call_successful_final, final_text_to_return, response_msgs
 
 
 async def _handle_stream_error(

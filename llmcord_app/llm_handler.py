@@ -71,73 +71,74 @@ async def generate_response_stream(
     llm_errors = []
     last_error_type = None
 
-    # --- ADD CORRECTION LOGIC BEFORE THE LOOP OR INSIDE is_gemini block ---
-    corrected_history_for_llm = []
+    # --- History Correction Logic ---
+    # This logic prepares `history_to_use_for_api_call` based on whether the current call is for Gemini or OpenAI-compatible.
+    # `history_for_llm` is the original history built by `build_message_history`.
+    history_to_use_for_api_call = []
     if is_gemini:
-        logging.debug("Correcting history parts for Gemini API format...")
-        for msg_index, msg in enumerate(history_for_llm):
-            original_parts = msg.get("parts", [])
-            # Handle case where parts might not be a list (e.g., simple string content from OpenAI history)
-            if isinstance(original_parts, str):
-                 original_parts = [google_types.Part.from_text(original_parts)]
-            elif not isinstance(original_parts, list):
-                 logging.warning(f"Unexpected 'parts' type in history message {msg_index}: {type(original_parts)}. Converting to text.")
-                 original_parts = [google_types.Part.from_text(str(original_parts))] if original_parts else []
+        logging.debug("Preparing history for Gemini API format from input history_for_llm.")
+        for msg_index, original_msg_data in enumerate(history_for_llm):
+            # original_msg_data could be from build_message_history (Gemini format or OpenAI format)
+            gemini_parts_for_this_msg = []
+            
+            # Determine the source of parts/content for this message
+            source_parts_or_content = None
+            if "parts" in original_msg_data and isinstance(original_msg_data["parts"], list):
+                # Already has a "parts" key, likely Gemini-native or pre-converted
+                source_parts_or_content = original_msg_data["parts"]
+            elif "content" in original_msg_data:
+                # Has a "content" key, likely OpenAI-native
+                openai_content = original_msg_data["content"]
+                if isinstance(openai_content, str):
+                    source_parts_or_content = [{"type": "text", "text": openai_content}] # Convert OpenAI string content to part structure
+                elif isinstance(openai_content, list):
+                    source_parts_or_content = openai_content # Already a list of OpenAI parts
+                else:
+                    logging.warning(f"Message {msg_index} (role '{original_msg_data['role']}') has 'content' of unexpected type {type(openai_content)}. Skipping.")
+                    continue
+            else:
+                logging.warning(f"Message {msg_index} (role '{original_msg_data['role']}') has neither 'parts' nor 'content'. Skipping.")
+                continue
 
-            corrected_parts = []
-            for part_index, part in enumerate(original_parts):
-                if isinstance(part, google_types.Part):
-                    corrected_parts.append(part) # Already correct format
-                elif isinstance(part, dict):
-                    part_type = part.get("type")
-                    if part_type == "image_url": # This is the OpenAI format we need to convert
-                        image_url_data = part.get("image_url", {})
-                        data_url = image_url_data.get("url")
+            # Convert source_parts_or_content to Gemini Parts
+            for part_idx, part_item in enumerate(source_parts_or_content):
+                if isinstance(part_item, google_types.Part):
+                    gemini_parts_for_this_msg.append(part_item)
+                elif isinstance(part_item, dict): # OpenAI part dict
+                    part_type = part_item.get("type")
+                    if part_type == "text":
+                        gemini_parts_for_this_msg.append(google_types.Part.from_text(text=part_item.get("text", "")))
+                    elif part_type == "image_url":
+                        image_url_dict = part_item.get("image_url", {})
+                        data_url = image_url_dict.get("url")
                         if isinstance(data_url, str) and data_url.startswith("data:image") and ";base64," in data_url:
                             try:
                                 header, encoded_data = data_url.split(";base64,", 1)
-                                # Extract mime type carefully, handle potential missing colon
-                                mime_parts = header.split(":")
-                                if len(mime_parts) > 1:
-                                    mime_type = mime_parts[1]
-                                else:
-                                     logging.warning(f"Could not extract mime type from image header: {header}. Defaulting to 'image/png'.")
-                                     mime_type = "image/png" # Or another sensible default
-
+                                mime_type_str = header.split(":")[1] if ":" in header else "image/png"
                                 img_bytes = base64.b64decode(encoded_data)
-                                corrected_parts.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
-                                logging.debug(f"Corrected OpenAI image dict (part {part_index}) to Gemini Part in message {msg_index}.")
-                            except (ValueError, IndexError, base64.binascii.Error) as e:
-                                logging.warning(f"Could not convert OpenAI image part {part_index} in message {msg_index} to Gemini Part: {e}. Skipping part: {part}")
+                                gemini_parts_for_this_msg.append(google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type_str))
+                            except Exception as e:
+                                logging.warning(f"Error converting OpenAI image_url part to Gemini Part for msg {msg_index}, part {part_idx}: {e}. Skipping part.")
                         else:
-                             logging.warning(f"Skipping unrecognized/invalid image_url dict format (part {part_index}) in Gemini history message {msg_index}: {part}")
-                    elif part_type == "text": # Handle OpenAI text part format
-                         corrected_parts.append(google_types.Part.from_text(part.get("text", "")))
-                         logging.debug(f"Corrected OpenAI text dict (part {part_index}) to Gemini Part in message {msg_index}.")
+                            logging.warning(f"Invalid data URL in OpenAI image_url part for msg {msg_index}, part {part_idx}. Skipping part.")
                     else:
-                        logging.warning(f"Skipping unrecognized dict part format (type: {part_type}, part {part_index}) in Gemini history message {msg_index}: {part}")
-                elif isinstance(part, str): # Handle plain string parts if they somehow occur
-                    corrected_parts.append(google_types.Part.from_text(part))
-                    logging.debug(f"Corrected plain string part (part {part_index}) to Gemini Part in message {msg_index}.")
+                        logging.warning(f"Unsupported OpenAI part type '{part_type}' for msg {msg_index}, part {part_idx}. Skipping part.")
+                elif isinstance(part_item, str): # Should ideally be caught by OpenAI content wrapping
+                    gemini_parts_for_this_msg.append(google_types.Part.from_text(text=part_item))
                 else:
-                    logging.warning(f"Skipping unrecognized part type '{type(part)}' (part {part_index}) in Gemini history message {msg_index}.")
-
-            # Only add message if it has valid parts after correction
-            if corrected_parts:
-                corrected_history_for_llm.append({"role": msg["role"], "parts": corrected_parts})
+                    logging.warning(f"Unsupported part item type {type(part_item)} for msg {msg_index}, part {part_idx}. Skipping part.")
+            
+            if gemini_parts_for_this_msg:
+                history_to_use_for_api_call.append({"role": original_msg_data["role"], "parts": gemini_parts_for_this_msg})
             else:
-                 logging.warning(f"Skipping message {msg_index} (role '{msg['role']}') for Gemini as it had no valid parts after correction.")
-        # Use the corrected history for the Gemini API call preparation below
-        history_to_use = corrected_history_for_llm
-    else:
-        # TODO: Add correction logic for OpenAI if needed (converting Gemini Parts back to dicts)
-        # For now, assume OpenAI history is already correct if target is OpenAI
-        history_to_use = history_for_llm
-
-    # --- END CORRECTION LOGIC ---
+                logging.warning(f"Message {msg_index} (role '{original_msg_data['role']}') resulted in no valid Gemini parts after conversion. Skipping.")
+    else: # Not Gemini, assume history_for_llm is for OpenAI-compatible
+        # For OpenAI, the history should already be in the format: {"role": ..., "content": "text" or [{"type":"text",...}]}
+        # No significant transformation needed here, but ensure it's a deep copy if modifications were planned.
+        history_to_use_for_api_call = [msg.copy() for msg in history_for_llm]
 
 
-    # --- Start the existing loop ---
+    # --- Start the API call loop ---
     for key_index, current_api_key in enumerate(keys_to_loop):
         key_display = f"...{current_api_key[-4:]}" if current_api_key != "dummy_key" else "N/A (keyless)"
         logging.info(f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index+1}/{len(keys_to_loop)})")
@@ -161,20 +162,26 @@ async def generate_response_stream(
                 llm_client = google_genai.Client(api_key=current_api_key)
 
                 # --- THIS IS THE CRITICAL PART ---
-                # Use the corrected history (history_to_use) here
+                # Use the history_to_use_for_api_call which has been prepared
                 gemini_contents = []
-                for msg in history_to_use: # Use the corrected history
-                    role = msg["role"]
-                    parts = msg.get("parts", [])
-                    # Now, 'parts' should only contain valid google_types.Part objects
+                for msg_data in history_to_use_for_api_call: 
+                    role = msg_data["role"]
+                    # 'parts' here should already be a list of google_types.Part objects due to the correction logic above
+                    parts_list = msg_data.get("parts", []) 
+                    if not parts_list: # Should not happen if correction logic is sound and msg was not skipped
+                        logging.warning(f"Message with role '{role}' has no parts after correction. Skipping for Gemini contents.")
+                        continue
                     try:
-                        gemini_contents.append(google_types.Content(role=role, parts=parts)) # This should now pass validation
+                        gemini_contents.append(google_types.Content(role=role, parts=parts_list))
                     except Exception as content_creation_error:
-                         # Add extra logging if Content creation still fails
-                         logging.error(f"FATAL: Failed to create google_types.Content even after correction! Role: {role}, Parts: {parts}", exc_info=True)
-                         # Yield an error immediately as this indicates a deeper issue
+                         logging.error(f"FATAL: Failed to create google_types.Content! Role: {role}, Parts: {parts_list}", exc_info=True)
                          yield None, None, None, f"Internal error creating Gemini content structure: {content_creation_error}"
-                         return # Stop generation
+                         return 
+
+                if not gemini_contents: # If all messages were skipped or had no parts
+                    logging.error("Gemini contents list is empty after processing history. Cannot make API call.")
+                    yield None, None, None, "Internal error: No valid content to send to Gemini after history processing."
+                    return
 
                 api_content_kwargs["contents"] = gemini_contents
 
@@ -237,9 +244,15 @@ async def generate_response_stream(
                 llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
 
                 # Ensure OpenAI correction logic is added here if needed in the future
-                openai_messages = history_to_use[:] # Copy history
+                # For OpenAI, history_to_use_for_api_call should be a list of {"role": ..., "content": ...}
+                openai_messages = history_to_use_for_api_call[:] 
                 if system_prompt_text:
-                    openai_messages.insert(0, dict(role="system", content=system_prompt_text))
+                    # Check if system prompt already exists to avoid duplicates if history_to_use_for_api_call was pre-processed
+                    if not openai_messages or openai_messages[0].get("role") != "system":
+                        openai_messages.insert(0, {"role": "system", "content": system_prompt_text})
+                    elif openai_messages[0].get("role") == "system": # Update existing system prompt if necessary
+                        openai_messages[0]["content"] = system_prompt_text
+
 
                 api_content_kwargs["messages"] = openai_messages
                 api_config = extra_params.copy()
@@ -448,6 +461,12 @@ async def generate_response_stream(
                  continue # Try next key
 
             else: # Fallback case: Content received, not blocked/stopped, but no finish reason
+                 # Check for retry condition
+                 if not is_gemini and content_received and stream_finish_reason is None and not is_blocked_by_safety and not is_stopped_by_recitation:
+                     logging.warning(f"Non-Gemini LLM stream for key {key_display} ended without finish reason but with content. Signaling for Gemini retry.")
+                     yield None, None, stream_grounding_metadata, "RETRY_WITH_GEMINI_NO_FINISH_REASON"
+                     return # Stop this attempt
+
                  logging.warning(f"LLM stream ended without a finish reason for key {key_display}, but content was received. Treating as successful completion. Content received: {content_received}, Finish reason: {stream_finish_reason}, Blocked: {is_blocked_by_safety}, Stopped: {is_stopped_by_recitation}.")
                  # Treat as successful completion since content was received
                  logging.info(f"LLM request considered successful (stream ended without finish reason) with key {key_display}")
