@@ -4,7 +4,7 @@ bot_token:
 client_id:
 status_message:
 
-max_text: 100000
+max_text: 2000 # Max tokens for a single message node's text content (text from message, attachments, URLs). Uses tiktoken.
 max_images: 5
 max_messages: 25
 

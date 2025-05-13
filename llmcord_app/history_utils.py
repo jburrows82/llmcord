@@ -5,6 +5,7 @@ import asyncio # Added asyncio
 import base64 # Added base64
 import httpx # Added httpx
 import re # Added re
+import tiktoken # Added tiktoken
 
 import discord
 
@@ -12,6 +13,40 @@ from .constants import AT_AI_PATTERN, PROVIDERS_SUPPORTING_USERNAMES, STREAMING_
 from . import models # Added models import
 # Assuming google.genai.types will be passed as google_types_module
 # Assuming extract_text_from_pdf_bytes will be passed as a function
+
+# --- ADDED: Tiktoken helper ---
+def _get_tokenizer_for_model(model_name: str):
+    """Gets the appropriate tiktoken encoder for a given model name."""
+    try:
+        return tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        logging.warning(f"No tiktoken encoder found for model '{model_name}'. Using 'cl100k_base' as fallback.")
+        return tiktoken.get_encoding("cl100k_base")
+
+def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str, int]:
+    """Truncates text to a maximum number of tokens and returns the truncated text and token count."""
+    if not text:
+        return "", 0
+    tokens = tokenizer.encode(text)
+    if len(tokens) > max_tokens:
+        truncated_tokens = tokens[:max_tokens]
+        # Attempt to decode, handling potential errors if truncation splits a multi-byte char
+        try:
+            truncated_text = tokenizer.decode(truncated_tokens)
+        except UnicodeDecodeError:
+            # If decode fails, try decoding one less token
+            try:
+                truncated_text = tokenizer.decode(truncated_tokens[:-1])
+                tokens = truncated_tokens[:-1] # Adjust token list as well
+            except Exception as e: # Catch any other decode error
+                logging.error(f"Failed to decode truncated tokens even after removing one: {e}. Returning empty string.")
+                return "", 0 # Fallback to empty if still problematic
+        # Add ellipsis if truncation happened and text is not empty
+        if truncated_text:
+            truncated_text += "..."
+        return truncated_text, len(tokens) # Return original token count before ellipsis for accurate warning
+    return text, len(tokens)
+# --- END ADDED ---
 
 async def find_parent_message(
     message: discord.Message,
@@ -78,7 +113,7 @@ async def build_message_history(
     initial_cleaned_content: str,
     combined_context: str,
     max_messages: int,
-    max_text: int,
+    max_tokens_for_text: int, # Renamed from max_text
     max_files_per_message: int,
     accept_files: bool,
     use_google_lens: bool,
@@ -199,7 +234,19 @@ async def build_message_history(
                         logging.warning(f"Failed to fetch text attachment {att.filename} in history: {resp}")
                         curr_node.has_bad_attachments = True
                 
-                curr_node.text = "\n".join(filter(None, text_parts))
+                curr_node.text = "\n".join(filter(None, text_parts)) # Initial text assembly
+
+                # --- Tokenize and truncate curr_node.text ---
+                # Use target_model_name to get the correct tokenizer for the final LLM call
+                tokenizer_for_history_node = _get_tokenizer_for_model(target_model_name)
+                truncated_node_text, node_token_count = _truncate_text_by_tokens(
+                    curr_node.text or "", tokenizer_for_history_node, max_tokens_for_text
+                )
+                curr_node.text = truncated_node_text
+                if node_token_count > max_tokens_for_text:
+                    user_warnings.add(f"⚠️ Max {max_tokens_for_text:,} tokens/msg node text (truncated)")
+                # --- End tokenization and truncation ---
+
 
                 if current_role == "user" and not is_target_provider_gemini:
                     pdf_texts_to_append = []
@@ -283,10 +330,11 @@ async def build_message_history(
             current_text_content = ""
             if curr_node.external_content:
                 current_text_content += curr_node.external_content + "\n\nUser's query:\n"
-            
+
             node_text_to_use = curr_node.full_response_text if curr_node.role == "model" and curr_node.full_response_text else (curr_node.text or "")
             current_text_content += node_text_to_use
-            current_text_content = current_text_content[:max_text] if current_text_content else ""
+            # current_text_content is already token-truncated at the node level.
+            # No further truncation needed here for max_text, as it's now max_tokens_for_text.
 
             current_api_file_parts = []
             if accept_files:
@@ -333,7 +381,7 @@ async def build_message_history(
                         message_data["name"] = str(curr_node.user_id)
                 history.append(message_data)
 
-            if curr_node.text and len(curr_node.text) > max_text: user_warnings.add(f"⚠️ Max {max_text:,} chars/msg node text")
+            # The max_text warning is now handled during tokenization further up.
             if curr_node.has_bad_attachments: user_warnings.add("⚠️ Some attachments might not have been processed.")
             if curr_node.fetch_parent_failed: user_warnings.add("⚠️ Couldn't fetch full history")
             if curr_node.parent_msg is not None and len(history) >= max_messages: user_warnings.add(f"⚠️ Only using last {max_messages} messages")

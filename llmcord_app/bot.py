@@ -298,7 +298,7 @@ class LLMCordClient(discord.Client):
 
 
         max_files_per_message = self.config.get("max_images", 5)
-        max_text = self.config.get("max_text", 100000)
+        max_tokens_for_text_config = self.config.get("max_text", 2000) # Default to 2000 tokens if not in config
         max_messages = self.config.get("max_messages", 25)
         use_plain_responses = self.config.get("use_plain_responses", False)
         split_limit = MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses else MAX_PLAIN_TEXT_LENGTH
@@ -330,9 +330,9 @@ class LLMCordClient(discord.Client):
             logging.info(f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG.")
             history_for_gemini_grounding = await build_message_history(
                 new_msg=new_msg, initial_cleaned_content=cleaned_content, combined_context="",
-                max_messages=max_messages, max_text=max_text, max_files_per_message=max_files_per_message,
+                max_messages=max_messages, max_tokens_for_text=max_tokens_for_text_config, max_files_per_message=max_files_per_message,
                 accept_files=True, use_google_lens=False, is_target_provider_gemini=True,
-                target_provider_name=GROUNDING_MODEL_PROVIDER, target_model_name=GROUNDING_MODEL_NAME,
+                target_provider_name=GROUNDING_MODEL_PROVIDER, target_model_name=GROUNDING_MODEL_NAME, # Uses GROUNDING_MODEL_NAME for tokenizer
                 user_warnings=user_warnings, current_message_url_fetch_results=None,
                 msg_nodes_cache=self.msg_nodes, bot_user_obj=self.user, httpx_async_client=self.httpx_client,
                 models_module=models, google_types_module=google_types,
@@ -371,9 +371,10 @@ class LLMCordClient(discord.Client):
 
         history_for_llm = await build_message_history(
             new_msg=new_msg, initial_cleaned_content=cleaned_content, combined_context=combined_context,
-            max_messages=max_messages, max_text=max_text, max_files_per_message=max_files_per_message,
+            max_messages=max_messages, max_tokens_for_text=max_tokens_for_text_config, max_files_per_message=max_files_per_message,
             accept_files=accept_files, use_google_lens=use_google_lens, is_target_provider_gemini=is_gemini,
-            target_provider_name=provider, target_model_name=model_name, user_warnings=user_warnings,
+            target_provider_name=provider, target_model_name=model_name, # Uses the final model_name for tokenizer
+            user_warnings=user_warnings,
             current_message_url_fetch_results=url_fetch_results if not use_google_lens else [],
             msg_nodes_cache=self.msg_nodes, bot_user_obj=self.user, httpx_async_client=self.httpx_client,
             models_module=models, google_types_module=google_types,

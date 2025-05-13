@@ -147,7 +147,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 | **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br />**Max 128 characters.** |
-| **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br />(Default: `100,000`) |
+| **max_text** | The maximum number of **tokens** (counted using `tiktoken`) allowed for the text content of a single message node in the history. This includes text from the message itself, attached text files, and extracted text from PDFs (for non-Gemini models).<br />(Default: `2000`) |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model or Google Lens.**<br />(Default: `5`) |
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br />(Default: `25`) |
 | **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
@@ -202,7 +202,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
     # Ensure you are in the 'llmcord' directory (the one containing requirements.txt)
     python -m pip install -U -r requirements.txt
     ```
-   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, and `pypdfium2` for PDF text extraction.)*
+   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, `pypdfium2` for PDF text extraction, and `tiktoken` for token counting.)*
 
 4. Run the bot:
 
