@@ -96,6 +96,15 @@ USER_SYSTEM_PROMPTS_FILENAME = "user_system_prompts.json"
 USER_MODEL_PREFS_FILENAME = "user_model_prefs.json"
 # --- End Gemini Thinking Budget ---
 
+# --- Output Sharing Settings ---
+OUTPUT_SHARING_CONFIG_KEY = "output_sharing"
+NGROK_ENABLED_CONFIG_KEY = "ngrok_enabled"
+NGROK_AUTHTOKEN_CONFIG_KEY = "ngrok_authtoken"
+GRIP_PORT_CONFIG_KEY = "grip_port"
+DEFAULT_GRIP_PORT = 6419
+OUTPUT_FILENAME = "llm_output.md"  # Filename for grip to serve
+# --- End Output Sharing Settings ---
+
 # --- Rate Limiting ---
 RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
@@ -110,7 +119,9 @@ FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04
 # --- END ADDED ---
 
 # --- ADDED: Fallback model for incomplete non-Gemini streams ---
-FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04-17"
+FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = (
+    "google/gemini-2.5-flash-preview-04-17"
+)
 # --- END ADDED ---
 
 AVAILABLE_MODELS = {

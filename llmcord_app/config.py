@@ -12,6 +12,12 @@ from .constants import (
     GEMINI_MAX_THINKING_BUDGET_VALUE,
     SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY,
     SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH,
+    # Output Sharing Constants
+    OUTPUT_SHARING_CONFIG_KEY,
+    NGROK_ENABLED_CONFIG_KEY,
+    NGROK_AUTHTOKEN_CONFIG_KEY,
+    GRIP_PORT_CONFIG_KEY,
+    DEFAULT_GRIP_PORT,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -250,6 +256,65 @@ def get_config(filename="config.yaml"):
                         GEMINI_DEFAULT_THINKING_BUDGET_VALUE
                     )
             # --- End Load Gemini Thinking Budget Settings ---
+
+            # --- Load Output Sharing Settings ---
+            if OUTPUT_SHARING_CONFIG_KEY not in config_data:
+                config_data[OUTPUT_SHARING_CONFIG_KEY] = {}
+                logging.info(
+                    f"'{OUTPUT_SHARING_CONFIG_KEY}' section not found in {filename}. Using defaults."
+                )
+
+            output_sharing_cfg = config_data[OUTPUT_SHARING_CONFIG_KEY]
+            if not isinstance(output_sharing_cfg, dict):
+                logging.warning(
+                    f"'{OUTPUT_SHARING_CONFIG_KEY}' section is not a dictionary. Using defaults for all output sharing settings."
+                )
+                output_sharing_cfg = {}  # Reset to empty dict to ensure defaults are applied
+                config_data[OUTPUT_SHARING_CONFIG_KEY] = output_sharing_cfg
+
+            if NGROK_ENABLED_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY] = False
+                logging.info(
+                    f"'{NGROK_ENABLED_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to False."
+                )
+            elif not isinstance(output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY], bool):
+                logging.warning(
+                    f"'{NGROK_ENABLED_CONFIG_KEY}' is not a boolean. Defaulting to False."
+                )
+                output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY] = False
+
+            if NGROK_AUTHTOKEN_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[NGROK_AUTHTOKEN_CONFIG_KEY] = (
+                    None  # Default to None if not present
+                )
+                logging.info(
+                    f"'{NGROK_AUTHTOKEN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to None."
+                )
+            # No specific validation for authtoken string format, user responsibility
+
+            if GRIP_PORT_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
+                logging.info(
+                    f"'{GRIP_PORT_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Using default: {DEFAULT_GRIP_PORT}"
+                )
+            else:
+                try:
+                    port_val = int(output_sharing_cfg[GRIP_PORT_CONFIG_KEY])
+                    if not (1024 <= port_val <= 65535):
+                        logging.warning(
+                            f"'{GRIP_PORT_CONFIG_KEY}' ({port_val}) is outside the valid range (1024-65535). "
+                            f"Using default: {DEFAULT_GRIP_PORT}"
+                        )
+                        output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
+                    else:
+                        output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = port_val
+                except ValueError:
+                    logging.warning(
+                        f"'{GRIP_PORT_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {DEFAULT_GRIP_PORT}"
+                    )
+                    output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
+            # --- End Load Output Sharing Settings ---
 
             return config_data
 

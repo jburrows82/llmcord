@@ -7,6 +7,10 @@ import discord
 from llmcord_app.config import get_config
 from llmcord_app.bot import LLMCordClient
 from llmcord_app.rate_limiter import close_all_db_managers  # Import cleanup function
+from llmcord_app.output_server import (
+    stop_output_server,
+    cleanup_shared_html_dir,
+)  # Import output server cleanup
 
 # Configure logging early
 logging.basicConfig(
@@ -69,6 +73,22 @@ async def main():
     finally:
         if not client.is_closed():
             await client.close()  # Ensure client resources are cleaned up
+
+        # Stop output server if it was running
+        logging.info("Attempting to stop output server...")
+        try:
+            await asyncio.to_thread(stop_output_server)
+        except Exception as e:
+            logging.error(f"Error during output server stop: {e}", exc_info=True)
+
+        logging.info("Attempting to cleanup shared HTML directory...")
+        try:
+            await asyncio.to_thread(cleanup_shared_html_dir)
+        except Exception as e:
+            logging.error(
+                f"Error during shared HTML directory cleanup: {e}", exc_info=True
+            )
+
         logging.info("Bot has been shut down.")
 
 
@@ -80,3 +100,24 @@ if __name__ == "__main__":
     finally:
         # Ensure DB connections are closed even if asyncio loop is interrupted
         close_all_db_managers()
+        # Also ensure output server is stopped on broader script exit
+        # This is a secondary cleanup, primary is in client.close() or main's finally
+        logging.info("Ensuring output server is stopped on script exit...")
+        try:
+            # Running synchronous stop_output_server directly here as asyncio loop might be closed
+            # If main's finally is called after loop closure, to_thread won't work.
+            # For simplicity, and given it's a cleanup, direct call is acceptable.
+            # If issues, this might need a separate synchronous cleanup handler or atexit.
+            # However, the call within main's async finally block with to_thread is preferred.
+            # For this specific location (outer finally), direct call is more robust if loop is gone.
+            # Re-evaluating: The asyncio.run(main()) means this finally block is outside the async context.
+            # So, a direct synchronous call to a potentially async-dependent function is tricky.
+            # The call within the async main() function's finally block is the correct place.
+            # This secondary call here might be redundant or problematic.
+            # Let's rely on the cleanup within the async main() function's `finally` block.
+            # If that fails, the atexit in output_server.py is a last resort.
+            pass  # Relying on cleanup within async main()
+        except Exception as e:
+            logging.error(
+                f"Error during final output server stop attempt: {e}", exc_info=True
+            )

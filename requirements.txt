@@ -11,3 +11,6 @@ google-search-results # SerpAPI library
 lxml
 pypdfium2 # Added for PDF text extraction
 tiktoken
+grip
+pyngrok
+markdown2

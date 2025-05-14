@@ -154,3 +154,10 @@ extra_api_parameters:
 
 system_prompt: |
   You are a helpful assistant.
+
+# --- Output Sharing Settings (Optional) ---
+# Enables sharing LLM output via a public ngrok URL using Grip to render Markdown.
+output_sharing:
+  ngrok_enabled: false # Set to true to enable this feature
+  ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Your ngrok authtoken (optional but recommended)
+  grip_port: 6419 # Local port for the Grip server

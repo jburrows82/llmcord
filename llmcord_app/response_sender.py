@@ -29,6 +29,7 @@ from .llm_handler import generate_response_stream
 from .commands import (
     get_user_gemini_thinking_budget_preference,
 )  # Added for retry logic
+from .output_server import start_output_server  # Added for output sharing
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
@@ -103,7 +104,9 @@ async def handle_llm_response_stream(
             logging.info(
                 f"Original model '{original_model_name_param}' stream ended without finish reason. Retrying with fallback model..."
             )
-            fallback_model_str = FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
+            fallback_model_str = (
+                FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
+            )
             warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
             initial_user_warnings.add(warning_message)
 
@@ -659,6 +662,35 @@ async def handle_llm_response_stream(
             )
             llm_call_successful_final = False
             break
+
+    # After the loop, if successful, try to start the output server
+    if llm_call_successful_final and final_text_to_return:
+        try:
+            # Run synchronous start_output_server in a thread
+            public_url = await asyncio.to_thread(
+                start_output_server, final_text_to_return, client.config
+            )
+            if public_url:
+                # Determine the target to reply to for the ngrok URL message
+                reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
+                try:
+                    await reply_target_for_url.reply(
+                        f"🔗 View rendered output: {public_url}",
+                        mention_author=False,
+                        suppress_embeds=True,  # Keep it clean
+                    )
+                    logging.info(f"Sent ngrok public URL: {public_url}")
+                except discord.HTTPException as e:
+                    logging.error(f"Failed to send ngrok public URL message: {e}")
+                except Exception as e:
+                    logging.error(
+                        f"Unexpected error sending ngrok public URL message: {e}",
+                        exc_info=True,
+                    )
+        except Exception as e:
+            logging.error(
+                f"Error starting or managing output server: {e}", exc_info=True
+            )
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 
