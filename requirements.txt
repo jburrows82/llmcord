@@ -9,7 +9,7 @@ asyncpraw
 beautifulsoup4
 google-search-results # SerpAPI library
 lxml
-pypdfium2 # Added for PDF text extraction
+PyMuPDF # For PDF text extraction
 tiktoken
 grip
 pyngrok

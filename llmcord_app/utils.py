@@ -3,8 +3,8 @@ import json
 from typing import List, Tuple, Optional, Any
 import discord
 from google.genai import types as google_types  # Use google.genai.types
-import pypdfium2 as pdfium  # Added import
-import asyncio  # Added import
+import pymupdf # Changed from pypdfium2
+import asyncio
 
 from .constants import (
     GENERAL_URL_PATTERN,
@@ -149,32 +149,31 @@ def add_field_safely(
 
 
 async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
-    """Extracts text from PDF bytes using pypdfium2, run in a thread."""
+    """Extracts text from PDF bytes using PyMuPDF, run in a thread."""
     if not pdf_bytes:
         return None
 
     def sync_extract():
         try:
-            pdf_doc = pdfium.PdfDocument(pdf_bytes)
-            all_text = ""
-            for page_index in range(len(pdf_doc)):
-                page = pdf_doc.get_page(page_index)
-                textpage = page.get_textpage()
-                all_text += (
-                    textpage.get_text_bounded() + "\n"
-                )  # Add newline between pages
-                textpage.close()
-                page.close()
-            pdf_doc.close()
-            return all_text.strip()
-        except Exception:
-            # The caller (in bot.py) will log this exception.
-            raise  # Re-raise to be caught by asyncio.to_thread and then the caller
+            # Open PDF from bytes stream
+            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            all_text_parts = []
+            for page_num in range(len(doc)): # Iterate through pages
+                page = doc.load_page(page_num) # Load the current page
+                all_text_parts.append(page.get_text("text")) # Extract text from page
+            doc.close() # Close the document
+            # Join parts with double newline for better separation, return None if no text
+            return "\n\n".join(all_text_parts).strip() if all_text_parts else None
+        except Exception as e:
+            # The caller (in history_utils.py or bot.py) will log this exception.
+            # Re-raise to be caught by asyncio.to_thread and then the caller
+            raise e
 
     try:
         return await asyncio.to_thread(sync_extract)
-    except Exception:  # Catch exceptions from sync_extract re-raised by to_thread
-        raise  # Re-raise for the caller in bot.py
+    except Exception as e: # Catch exceptions from sync_extract re-raised by to_thread
+        # Re-raise for the caller (e.g., in history_utils.py)
+        raise e
 
 
 def _truncate_base64_in_payload(

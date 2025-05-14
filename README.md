@@ -99,7 +99,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
     This feature requires `searxng_base_url` and API keys for the grounding Gemini model to be configured.
 - **PDF Attachment Processing**:
     - When using Gemini models (with vision/file capabilities enabled), PDF attachments are sent directly to the model.
-    - For other models, text is extracted from PDF attachments using `pypdfium2` and appended to your query.
+    - For other models, text is extracted from PDF attachments using `PyMuPDF` and appended to your query.
 - **Image URL Processing**: If you include direct URLs to images (e.g., `https://example.com/image.png`) in your message text, the bot will attempt to download these images and treat them as if they were attached directly, making them available to vision models or Google Lens.
 
 ### Robust Rate Limit Handling
@@ -202,7 +202,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
     # Ensure you are in the 'llmcord' directory (the one containing requirements.txt)
     python -m pip install -U -r requirements.txt
     ```
-   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, `pypdfium2` for PDF text extraction, and `tiktoken` for token counting.)*
+   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, `PyMuPDF` for PDF text extraction, and `tiktoken` for token counting.)*
 
 4. Run the bot:
 
@@ -235,7 +235,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 
 - Google Lens processing uses SerpAPI. Ensure you have valid SerpAPI keys configured.
 
-- PDF text extraction for non-Gemini models is done using `pypdfium2`.
+- PDF text extraction for non-Gemini models is done using `PyMuPDF`.
 
 - **Rate Limit Handling & User Preferences:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) and JSON files (e.g., `user_model_prefs.json`) at the project root. Ensure these (and `last_reset_timestamp.txt`) are added to your `.gitignore` if you manage your deployment with git.
 
