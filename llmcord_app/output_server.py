@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 import http.server
 import socketserver
 import threading
+import httpx  # Added for URL shortener
 
 from pyngrok import ngrok, conf as ngrok_conf
 from pyngrok.exception import PyngrokError
@@ -19,7 +20,9 @@ from .constants import (
     NGROK_AUTHTOKEN_CONFIG_KEY,
     GRIP_PORT_CONFIG_KEY,  # This will now be the port for our Python HTTP server
     DEFAULT_GRIP_PORT,  # Default port for our Python HTTP server
-    NGROK_STATIC_DOMAIN_CONFIG_KEY, # Added import
+    NGROK_STATIC_DOMAIN_CONFIG_KEY,
+    URL_SHORTENER_ENABLED_CONFIG_KEY,  # Added
+    URL_SHORTENER_SERVICE_CONFIG_KEY,  # Added
     # OUTPUT_FILENAME, # No longer a single output file
 )
 
@@ -75,6 +78,43 @@ def _is_ngrok_tunnel_active() -> bool:
     return False
 
 
+def _shorten_url_tinyurl(long_url: str) -> Optional[str]:
+    """Shortens a URL using TinyURL's API."""
+    if not long_url:
+        return None
+    try:
+        # TinyURL API does not require an API key for basic usage
+        api_url = f"http://tinyurl.com/api-create.php?url={long_url}"
+        response = httpx.get(api_url, timeout=10)
+        response.raise_for_status()  # Raise an exception for HTTP errors 4xx/5xx
+        short_url = response.text.strip()
+        # Basic validation: check if it looks like a URL
+        if short_url.startswith("http://") or short_url.startswith("https://"):
+            logging.info(
+                f"Successfully shortened {long_url} to {short_url} using TinyURL."
+            )
+            return short_url
+        else:
+            logging.warning(
+                f"TinyURL returned an unexpected response: '{short_url}' for URL: {long_url}"
+            )
+            return None
+    except httpx.RequestError as e:
+        logging.error(f"Error requesting TinyURL for {long_url}: {e}")
+        return None
+    except httpx.HTTPStatusError as e:
+        logging.error(
+            f"TinyURL API returned an error for {long_url}: {e.response.status_code} - {e.response.text}"
+        )
+        return None
+    except Exception as e:
+        logging.error(
+            f"Unexpected error shortening URL {long_url} with TinyURL: {e}",
+            exc_info=True,
+        )
+        return None
+
+
 def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[str]:
     """
     Converts markdown text_content to HTML, saves it to a unique file,
@@ -89,7 +129,9 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
     output_sharing_cfg = config.get(OUTPUT_SHARING_CONFIG_KEY, {})
     ngrok_enabled = output_sharing_cfg.get(NGROK_ENABLED_CONFIG_KEY, False)
     ngrok_authtoken = output_sharing_cfg.get(NGROK_AUTHTOKEN_CONFIG_KEY)
-    ngrok_static_domain = output_sharing_cfg.get(NGROK_STATIC_DOMAIN_CONFIG_KEY) # Get static domain
+    ngrok_static_domain = output_sharing_cfg.get(
+        NGROK_STATIC_DOMAIN_CONFIG_KEY
+    )  # Get static domain
     server_port_from_config = output_sharing_cfg.get(
         GRIP_PORT_CONFIG_KEY, DEFAULT_GRIP_PORT
     )
@@ -209,12 +251,14 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
                     f"Starting new ngrok tunnel for Python HTTP server on port {_server_port}..."
                 )
                 pyngrok_config = ngrok_conf.get_default()  # Get current config
-                
+
                 connect_kwargs = {"pyngrok_config": pyngrok_config}
                 if ngrok_static_domain:
                     connect_kwargs["hostname"] = ngrok_static_domain
-                    logging.info(f"Attempting to use static domain: {ngrok_static_domain}")
-                
+                    logging.info(
+                        f"Attempting to use static domain: {ngrok_static_domain}"
+                    )
+
                 _ngrok_tunnel = ngrok.connect(_server_port, "http", **connect_kwargs)
                 logging.info(f"Ngrok tunnel established: {_ngrok_tunnel.public_url}")
             except PyngrokError as e:
@@ -238,8 +282,36 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
             return None
 
         public_file_url = f"{_ngrok_tunnel.public_url}/{unique_filename}"
-        logging.info(f"Public URL for HTML output: {public_file_url}")
-        return public_file_url
+        logging.info(f"Raw public URL for HTML output: {public_file_url}")
+
+        # URL Shortening
+        shortener_enabled = output_sharing_cfg.get(
+            URL_SHORTENER_ENABLED_CONFIG_KEY, False
+        )
+        shortener_service = output_sharing_cfg.get(
+            URL_SHORTENER_SERVICE_CONFIG_KEY, "tinyurl"
+        )
+
+        final_url_to_share = public_file_url
+
+        if shortener_enabled and public_file_url:
+            logging.info(f"URL shortener enabled, service: {shortener_service}")
+            if shortener_service.lower() == "tinyurl":
+                shortened_url = _shorten_url_tinyurl(public_file_url)
+                if shortened_url:
+                    final_url_to_share = shortened_url
+                else:
+                    logging.warning(
+                        f"Failed to shorten URL with TinyURL, using original: {public_file_url}"
+                    )
+            # Add other shortener services here with 'elif shortener_service == "otherservice":'
+            else:
+                logging.warning(
+                    f"Unsupported URL shortener service: '{shortener_service}'. Using original URL."
+                )
+
+        logging.info(f"Final URL to share: {final_url_to_share}")
+        return final_url_to_share
 
     except Exception as e:
         logging.error(f"Error in start_output_server: {e}", exc_info=True)

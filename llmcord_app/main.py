@@ -83,11 +83,13 @@ async def main():
 
         # Conditionally cleanup shared HTML directory
         # Access cfg directly as it's in scope of main()
-        output_sharing_cfg = cfg.get("output_sharing", {}) 
+        output_sharing_cfg = cfg.get("output_sharing", {})
         cleanup_enabled = output_sharing_cfg.get("cleanup_on_shutdown", True)
 
         if cleanup_enabled:
-            logging.info("Attempting to cleanup shared HTML directory as cleanup_on_shutdown is true...")
+            logging.info(
+                "Attempting to cleanup shared HTML directory as cleanup_on_shutdown is true..."
+            )
             try:
                 await asyncio.to_thread(cleanup_shared_html_dir)
             except Exception as e:
@@ -95,7 +97,9 @@ async def main():
                     f"Error during shared HTML directory cleanup: {e}", exc_info=True
                 )
         else:
-            logging.info("Skipping shared HTML directory cleanup as cleanup_on_shutdown is false.")
+            logging.info(
+                "Skipping shared HTML directory cleanup as cleanup_on_shutdown is false."
+            )
 
         logging.info("Bot has been shut down.")
 

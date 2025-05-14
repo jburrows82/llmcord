@@ -163,3 +163,6 @@ output_sharing:
   grip_port: 6419 # Port for the Python HTTP server (formerly Grip server)
   ngrok_static_domain: null # Example: your-reserved-domain.ngrok-free.app (requires ngrok account)
   cleanup_on_shutdown: true # Set to false to keep shared HTML files across bot restarts
+  url_shortener_enabled: false # Set to true to use a URL shortener for the ngrok link
+  url_shortener_service: "tinyurl" # Currently supported: "tinyurl"
+  # url_shortener_api_key: null # For future services that might require an API key

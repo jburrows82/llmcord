@@ -105,6 +105,8 @@ DEFAULT_GRIP_PORT = 6419
 # OUTPUT_FILENAME = "llm_output.md" # No longer a single output file, individual HTML files now
 NGROK_STATIC_DOMAIN_CONFIG_KEY = "ngrok_static_domain"
 CLEANUP_ON_SHUTDOWN_CONFIG_KEY = "cleanup_on_shutdown"
+URL_SHORTENER_ENABLED_CONFIG_KEY = "url_shortener_enabled"
+URL_SHORTENER_SERVICE_CONFIG_KEY = "url_shortener_service"
 # --- End Output Sharing Settings ---
 
 # --- Rate Limiting ---
