@@ -22,6 +22,7 @@ from .constants import (
     AllKeysFailedError,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL,  # <-- ADDED
 )
 from .ui import ResponseActionView
 from .llm_handler import generate_response_stream
@@ -100,13 +101,28 @@ async def handle_llm_response_stream(
                 break
 
             logging.info(
-                f"Original model '{original_model_name_param}' stream ended without finish reason. Retrying with Gemini..."
+                f"Original model '{original_model_name_param}' stream ended without finish reason. Retrying with fallback model..."
             )
-            warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `gemini-2.5-pro-exp-03-25`..."
+            fallback_model_str = FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
+            warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
             initial_user_warnings.add(warning_message)
 
-            current_provider = "google"
-            current_model_name = "gemini-2.5-pro-exp-03-25"  # Hardcoded retry model
+            try:
+                current_provider, current_model_name = fallback_model_str.split("/", 1)
+            except ValueError:
+                logging.error(
+                    f"Invalid format for FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL: '{fallback_model_str}'. Cannot retry."
+                )
+                error_text = f"⚠️ Internal configuration error: Invalid fallback model format ('{fallback_model_str}'). Cannot retry."
+                await _handle_llm_exception(
+                    new_msg,
+                    processing_msg,
+                    response_msgs,
+                    error_text,
+                    use_plain_responses_config,
+                    client.config.get("use_plain_responses", False),
+                )
+                return llm_call_successful_final, final_text_to_return, response_msgs
 
             # Ensure client.config is available and correctly structured
             if not hasattr(client, "config") or not isinstance(client.config, dict):

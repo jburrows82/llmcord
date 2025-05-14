@@ -109,6 +109,10 @@ DB_FOLDER = "ratelimit_dbs"
 FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04-17"
 # --- END ADDED ---
 
+# --- ADDED: Fallback model for incomplete non-Gemini streams ---
+FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04-17"
+# --- END ADDED ---
+
 AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-04-17",
