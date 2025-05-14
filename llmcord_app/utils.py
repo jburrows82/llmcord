@@ -3,7 +3,7 @@ import json
 from typing import List, Tuple, Optional, Any
 import discord
 from google.genai import types as google_types  # Use google.genai.types
-import pymupdf # Changed from pypdfium2
+import pymupdf  # Changed from pypdfium2
 import asyncio
 
 from .constants import (
@@ -158,10 +158,10 @@ async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
             # Open PDF from bytes stream
             doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
             all_text_parts = []
-            for page_num in range(len(doc)): # Iterate through pages
-                page = doc.load_page(page_num) # Load the current page
-                all_text_parts.append(page.get_text("text")) # Extract text from page
-            doc.close() # Close the document
+            for page_num in range(len(doc)):  # Iterate through pages
+                page = doc.load_page(page_num)  # Load the current page
+                all_text_parts.append(page.get_text("text"))  # Extract text from page
+            doc.close()  # Close the document
             # Join parts with double newline for better separation, return None if no text
             return "\n\n".join(all_text_parts).strip() if all_text_parts else None
         except Exception as e:
@@ -171,7 +171,7 @@ async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
 
     try:
         return await asyncio.to_thread(sync_extract)
-    except Exception as e: # Catch exceptions from sync_extract re-raised by to_thread
+    except Exception as e:  # Catch exceptions from sync_extract re-raised by to_thread
         # Re-raise for the caller (e.g., in history_utils.py)
         raise e
 

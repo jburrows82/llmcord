@@ -102,13 +102,65 @@ async def handle_llm_response_stream(
                 break
 
             logging.info(
-                f"Original model '{original_model_name_param}' stream ended without finish reason. Retrying with fallback model..."
+                f"Original model '{original_model_name_param}' stream ended without finish reason. Deleting incomplete messages and retrying with fallback model..."
             )
+
+            # --- Deletion Logic for Incomplete Messages ---
+            deleted_processing_msg_original_id = None
+            if processing_msg:  # Store original processing_msg's ID
+                deleted_processing_msg_original_id = processing_msg.id
+
+            if response_msgs:
+                logging.info(
+                    f"Deleting {len(response_msgs)} incomplete response message(s) before retrying."
+                )
+                # Iterate over a copy for safe modification and access to original objects
+                temp_response_msgs_copy = list(response_msgs)
+                response_msgs.clear()  # Clear the main list that will be used for the retry attempt
+
+                for msg_to_delete in reversed(temp_response_msgs_copy):
+                    try:
+                        await msg_to_delete.delete()
+                        await asyncio.sleep(
+                            0.2
+                        )  # Small delay to avoid hitting Discord rate limits on delete
+                    except discord.NotFound:
+                        logging.warning(
+                            f"Message {msg_to_delete.id} was already deleted (NotFound)."
+                        )
+                    except discord.HTTPException as e:
+                        logging.error(
+                            f"Failed to delete message {msg_to_delete.id}: {e}"
+                        )
+                    finally:
+                        # Clean up from msg_nodes cache
+                        if msg_to_delete.id in client.msg_nodes:
+                            node_to_delete = client.msg_nodes.pop(
+                                msg_to_delete.id, None
+                            )
+                            if node_to_delete and node_to_delete.lock.locked():
+                                try:
+                                    node_to_delete.lock.release()
+                                except RuntimeError:
+                                    logging.debug(
+                                        f"Lock for node {msg_to_delete.id} was already released."
+                                    )
+                                    pass  # Lock already released
+                        # If the original processing_msg was one of the deleted messages, nullify the variable
+                        if (
+                            deleted_processing_msg_original_id
+                            and deleted_processing_msg_original_id == msg_to_delete.id
+                        ):
+                            processing_msg = None
+            # --- End Deletion Logic ---
+
             fallback_model_str = (
                 FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
             )
             warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
-            initial_user_warnings.add(warning_message)
+            initial_user_warnings.add(
+                warning_message
+            )  # This warning will be shown in the retry message
 
             try:
                 current_provider, current_model_name = fallback_model_str.split("/", 1)
