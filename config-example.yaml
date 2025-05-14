@@ -160,4 +160,6 @@ system_prompt: |
 output_sharing:
   ngrok_enabled: false # Set to true to enable this feature
   ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Your ngrok authtoken (optional but recommended)
-  grip_port: 6419 # Local port for the Grip server
+  grip_port: 6419 # Port for the Python HTTP server (formerly Grip server)
+  ngrok_static_domain: null # Example: your-reserved-domain.ngrok-free.app (requires ngrok account)
+  cleanup_on_shutdown: true # Set to false to keep shared HTML files across bot restarts

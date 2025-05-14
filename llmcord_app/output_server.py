@@ -19,6 +19,7 @@ from .constants import (
     NGROK_AUTHTOKEN_CONFIG_KEY,
     GRIP_PORT_CONFIG_KEY,  # This will now be the port for our Python HTTP server
     DEFAULT_GRIP_PORT,  # Default port for our Python HTTP server
+    NGROK_STATIC_DOMAIN_CONFIG_KEY, # Added import
     # OUTPUT_FILENAME, # No longer a single output file
 )
 
@@ -88,6 +89,7 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
     output_sharing_cfg = config.get(OUTPUT_SHARING_CONFIG_KEY, {})
     ngrok_enabled = output_sharing_cfg.get(NGROK_ENABLED_CONFIG_KEY, False)
     ngrok_authtoken = output_sharing_cfg.get(NGROK_AUTHTOKEN_CONFIG_KEY)
+    ngrok_static_domain = output_sharing_cfg.get(NGROK_STATIC_DOMAIN_CONFIG_KEY) # Get static domain
     server_port_from_config = output_sharing_cfg.get(
         GRIP_PORT_CONFIG_KEY, DEFAULT_GRIP_PORT
     )
@@ -207,10 +209,13 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
                     f"Starting new ngrok tunnel for Python HTTP server on port {_server_port}..."
                 )
                 pyngrok_config = ngrok_conf.get_default()  # Get current config
-                # pyngrok_config.region = os.environ.get("NGROK_REGION", "us") # Optional: region setting
-                _ngrok_tunnel = ngrok.connect(
-                    _server_port, "http", pyngrok_config=pyngrok_config
-                )
+                
+                connect_kwargs = {"pyngrok_config": pyngrok_config}
+                if ngrok_static_domain:
+                    connect_kwargs["hostname"] = ngrok_static_domain
+                    logging.info(f"Attempting to use static domain: {ngrok_static_domain}")
+                
+                _ngrok_tunnel = ngrok.connect(_server_port, "http", **connect_kwargs)
                 logging.info(f"Ngrok tunnel established: {_ngrok_tunnel.public_url}")
             except PyngrokError as e:
                 logging.error(f"Failed to start ngrok tunnel: {e}")

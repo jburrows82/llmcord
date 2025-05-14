@@ -18,6 +18,8 @@ from .constants import (
     NGROK_AUTHTOKEN_CONFIG_KEY,
     GRIP_PORT_CONFIG_KEY,
     DEFAULT_GRIP_PORT,
+    NGROK_STATIC_DOMAIN_CONFIG_KEY,
+    CLEANUP_ON_SHUTDOWN_CONFIG_KEY,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -314,6 +316,30 @@ def get_config(filename="config.yaml"):
                         f"Using default: {DEFAULT_GRIP_PORT}"
                     )
                     output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
+
+            if NGROK_STATIC_DOMAIN_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = None # Default to None
+                logging.info(
+                    f"'{NGROK_STATIC_DOMAIN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to None."
+                )
+            elif output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] == "": # Treat empty string as None
+                 output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = None
+            elif not isinstance(output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY], (str, type(None))):
+                logging.warning(
+                    f"'{NGROK_STATIC_DOMAIN_CONFIG_KEY}' is not a string or null. Defaulting to None."
+                )
+                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = None
+            
+            if CLEANUP_ON_SHUTDOWN_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY] = True # Default to True
+                logging.info(
+                    f"'{CLEANUP_ON_SHUTDOWN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to True."
+                )
+            elif not isinstance(output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY], bool):
+                logging.warning(
+                    f"'{CLEANUP_ON_SHUTDOWN_CONFIG_KEY}' is not a boolean. Defaulting to True."
+                )
+                output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY] = True
             # --- End Load Output Sharing Settings ---
 
             return config_data

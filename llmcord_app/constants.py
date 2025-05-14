@@ -102,7 +102,9 @@ NGROK_ENABLED_CONFIG_KEY = "ngrok_enabled"
 NGROK_AUTHTOKEN_CONFIG_KEY = "ngrok_authtoken"
 GRIP_PORT_CONFIG_KEY = "grip_port"
 DEFAULT_GRIP_PORT = 6419
-OUTPUT_FILENAME = "llm_output.md"  # Filename for grip to serve
+# OUTPUT_FILENAME = "llm_output.md" # No longer a single output file, individual HTML files now
+NGROK_STATIC_DOMAIN_CONFIG_KEY = "ngrok_static_domain"
+CLEANUP_ON_SHUTDOWN_CONFIG_KEY = "cleanup_on_shutdown"
 # --- End Output Sharing Settings ---
 
 # --- Rate Limiting ---
