@@ -29,7 +29,6 @@ from .llm_handler import generate_response_stream
 from .commands import (
     get_user_gemini_thinking_budget_preference,
 )  # Added for retry logic
-from .output_server import start_output_server  # Added for output sharing
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
@@ -501,6 +500,7 @@ async def handle_llm_response_stream(
                                             grounding_metadata=grounding_metadata_for_this_attempt,
                                             full_response_text=final_text_for_this_attempt,
                                             model_name=current_model_name,
+                                            app_config=client.config,  # Pass app_config
                                         )
                                         if (
                                             not view_to_attach
@@ -520,6 +520,8 @@ async def handle_llm_response_stream(
                                     )
                                     response_msg = processing_msg
                                     target_msg_for_node_update = response_msg
+                                    if view_to_attach:  # Set message for the view
+                                        view_to_attach.message = response_msg
                                 else:  # Subsequent messages, or no processing_msg
                                     reply_target = (
                                         new_msg
@@ -532,6 +534,8 @@ async def handle_llm_response_stream(
                                         mention_author=False,
                                     )
                                     target_msg_for_node_update = response_msg
+                                    if view_to_attach:  # Set message for the view
+                                        view_to_attach.message = response_msg
                                 response_msgs.append(response_msg)
                                 if (
                                     target_msg_for_node_update
@@ -571,6 +575,8 @@ async def handle_llm_response_stream(
                                     )
                                     response_msg = processing_msg
                                     target_msg_for_node_update = response_msg
+                                    if view_to_attach:  # Set message for the view
+                                        view_to_attach.message = response_msg
                                 else:
                                     response_msg = await new_msg.reply(
                                         embed=current_segment_embed,
@@ -578,6 +584,8 @@ async def handle_llm_response_stream(
                                         mention_author=False,
                                     )
                                     target_msg_for_node_update = response_msg
+                                    if view_to_attach:  # Set message for the view
+                                        view_to_attach.message = response_msg
                                 response_msgs.append(response_msg)
                                 if (
                                     target_msg_for_node_update
@@ -716,33 +724,34 @@ async def handle_llm_response_stream(
             break
 
     # After the loop, if successful, try to start the output server
-    if llm_call_successful_final and final_text_to_return:
-        try:
-            # Run synchronous start_output_server in a thread
-            public_url = await asyncio.to_thread(
-                start_output_server, final_text_to_return, client.config
-            )
-            if public_url:
-                # Determine the target to reply to for the ngrok URL message
-                reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
-                try:
-                    await reply_target_for_url.reply(
-                        f"🔗 View rendered output: {public_url}",
-                        mention_author=False,
-                        suppress_embeds=True,  # Keep it clean
-                    )
-                    logging.info(f"Sent ngrok public URL: {public_url}")
-                except discord.HTTPException as e:
-                    logging.error(f"Failed to send ngrok public URL message: {e}")
-                except Exception as e:
-                    logging.error(
-                        f"Unexpected error sending ngrok public URL message: {e}",
-                        exc_info=True,
-                    )
-        except Exception as e:
-            logging.error(
-                f"Error starting or managing output server: {e}", exc_info=True
-            )
+    # THIS BLOCK IS REMOVED as the functionality is moved to a button
+    # if llm_call_successful_final and final_text_to_return:
+    #     try:
+    #         # Run synchronous start_output_server in a thread
+    #         public_url = await asyncio.to_thread(
+    #             start_output_server, final_text_to_return, client.config
+    #         )
+    #         if public_url:
+    #             # Determine the target to reply to for the ngrok URL message
+    #             reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
+    #             try:
+    #                 await reply_target_for_url.reply(
+    #                     f"🔗 View rendered output: {public_url}",
+    #                     mention_author=False,
+    #                     suppress_embeds=True,  # Keep it clean
+    #                 )
+    #                 logging.info(f"Sent ngrok public URL: {public_url}")
+    #             except discord.HTTPException as e:
+    #                 logging.error(f"Failed to send ngrok public URL message: {e}")
+    #             except Exception as e:
+    #                 logging.error(
+    #                     f"Unexpected error sending ngrok public URL message: {e}",
+    #                     exc_info=True,
+    #                 )
+    #     except Exception as e:
+    #         logging.error(
+    #             f"Error starting or managing output server: {e}", exc_info=True
+    #         )
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 

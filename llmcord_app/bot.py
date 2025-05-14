@@ -482,7 +482,9 @@ class LLMCordClient(discord.Client):
                 at_ai_pattern_re=AT_AI_PATTERN,
                 providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
                 system_prompt_text_for_budgeting=prepare_system_prompt(
-                    True, GROUNDING_MODEL_PROVIDER, self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
+                    True,
+                    GROUNDING_MODEL_PROVIDER,
+                    self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY),
                 ),
             )
             if history_for_gemini_grounding:
@@ -490,12 +492,12 @@ class LLMCordClient(discord.Client):
                     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
                 )
                 # This system_prompt_for_grounding is what's actually sent to the API
-                system_prompt_for_grounding = prepare_system_prompt( 
+                system_prompt_for_grounding = prepare_system_prompt(
                     True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config
                 )
                 web_search_queries = await get_web_search_queries_from_gemini(
                     history_for_gemini_grounding,
-                    system_prompt_for_grounding, # This is the prompt sent to the API
+                    system_prompt_for_grounding,  # This is the prompt sent to the API
                     self.config,
                     generate_response_stream,
                 )
@@ -574,9 +576,11 @@ class LLMCordClient(discord.Client):
             providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
             # Pass the main system prompt for budgeting
             system_prompt_text_for_budgeting=prepare_system_prompt(
-                is_gemini, provider, get_user_system_prompt_preference(
+                is_gemini,
+                provider,
+                get_user_system_prompt_preference(
                     new_msg.author.id, self.config.get("system_prompt")
-                )
+                ),
             ),
         )
 

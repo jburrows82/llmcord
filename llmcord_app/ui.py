@@ -6,10 +6,17 @@ import logging
 import io
 import re
 import json
-from typing import Optional, Any  # Added List import
+from typing import Optional, Any, Dict  # Added Dict
+import asyncio  # Added asyncio
 
-from .constants import EMBED_COLOR_COMPLETE, MAX_EMBED_FIELD_VALUE_LENGTH
+from .constants import (
+    EMBED_COLOR_COMPLETE,
+    MAX_EMBED_FIELD_VALUE_LENGTH,
+    OUTPUT_SHARING_CONFIG_KEY,
+    NGROK_ENABLED_CONFIG_KEY,
+)
 from .utils import add_field_safely
+from .output_server import start_output_server  # Added for output sharing
 
 
 class ResponseActionView(ui.View):
@@ -21,6 +28,7 @@ class ResponseActionView(ui.View):
         grounding_metadata: Optional[Any] = None,
         full_response_text: Optional[str] = None,
         model_name: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,  # Added app_config
         # timeout=300): # Default timeout 5 minutes - OLD VALUE
         timeout=None,
     ):  # Set timeout to None for persistent view - NEW VALUE
@@ -28,6 +36,7 @@ class ResponseActionView(ui.View):
         self.grounding_metadata = grounding_metadata
         self.full_response_text = full_response_text
         self.model_name = model_name or "llm"  # Default filename model name
+        self.app_config = app_config  # Store app_config
         self.message: Optional[discord.Message] = (
             None  # Will be set after sending the message
         )
@@ -52,10 +61,34 @@ class ResponseActionView(ui.View):
             self.add_item(self.ShowSourcesButton())
             has_sources_button = True
 
+        # Determine row for GetTextFileButton
+        text_file_button_row = 1 if has_sources_button else 0
         if self.full_response_text:
-            # Determine row based on whether sources button exists
-            row = 1 if has_sources_button else 0
-            self.add_item(self.GetTextFileButton(row=row))
+            self.add_item(self.GetTextFileButton(row=text_file_button_row))
+
+        # Conditionally add "View Rendered Output" button
+        output_sharing_cfg = (
+            self.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
+            if self.app_config
+            else {}
+        )
+        ngrok_is_enabled = output_sharing_cfg.get(NGROK_ENABLED_CONFIG_KEY, False)
+
+        if self.full_response_text and ngrok_is_enabled:
+            # Determine row for ViewRenderedOutputButton
+            # If sources button exists, and text file button also exists, this goes to row 2
+            # If only sources button exists, this goes to row 1 (same as text file would)
+            # If only text file button exists (no sources), this goes to row 1
+            # If neither sources nor text file button exists, this goes to row 0
+            rendered_output_button_row = 0
+            if has_sources_button:
+                rendered_output_button_row = 1
+                if self.full_response_text:  # if text file button is also present
+                    rendered_output_button_row = 2
+            elif self.full_response_text:  # only text file button is present
+                rendered_output_button_row = 1
+
+            self.add_item(self.ViewRenderedOutputButton(row=rendered_output_button_row))
 
     # on_timeout is still useful if a timeout *is* set, but won't be called if timeout=None
     async def on_timeout(self):
@@ -231,16 +264,19 @@ class ResponseActionView(ui.View):
                     logging.error(f"Error sending raw metadata: {e}")
                     await interaction.response.send_message(
                         "No grounding source information could be extracted.",
-                        ephemeral=False,
+                        ephemeral=False,  # Changed to False
                     )
                 return
 
             try:
                 await interaction.response.send_message(
-                    embed=embeds_to_send[0], ephemeral=False
+                    embed=embeds_to_send[0],
+                    ephemeral=False,  # Changed to False
                 )
                 for embed in embeds_to_send[1:]:
-                    await interaction.followup.send(embed=embed, ephemeral=False)
+                    await interaction.followup.send(
+                        embed=embed, ephemeral=False
+                    )  # Changed to False
 
             except discord.HTTPException as e:
                 logging.error(
@@ -249,7 +285,7 @@ class ResponseActionView(ui.View):
                 # Use followup because initial response was already sent
                 await interaction.followup.send(
                     "Failed to send sources as embeds (likely too large).",
-                    ephemeral=False,
+                    ephemeral=False,  # Changed to False
                 )
             except Exception as e:
                 logging.error(f"Unexpected error sending source embeds: {e}")
@@ -257,7 +293,7 @@ class ResponseActionView(ui.View):
                     # Use followup because initial response was already sent
                     await interaction.followup.send(
                         "An unexpected error occurred while sending sources.",
-                        ephemeral=False,
+                        ephemeral=False,  # Changed to False
                     )
                 except discord.HTTPException:
                     logging.error("Failed to send followup error message for sources.")
@@ -275,7 +311,8 @@ class ResponseActionView(ui.View):
             view: "ResponseActionView" = self.view
             if not view.full_response_text:
                 await interaction.response.send_message(
-                    "No response text available to send.", ephemeral=False
+                    "No response text available to send.",
+                    ephemeral=False,  # Changed to False
                 )
                 return
 
@@ -291,10 +328,74 @@ class ResponseActionView(ui.View):
                 discord_file = discord.File(fp=file_content, filename=filename)
 
                 await interaction.response.send_message(
-                    file=discord_file, ephemeral=False
+                    file=discord_file,
+                    ephemeral=False,  # Changed to False
                 )
             except Exception as e:
                 logging.error(f"Error creating or sending text file: {e}")
                 await interaction.response.send_message(
-                    "Sorry, I couldn't create the text file.", ephemeral=False
+                    "Sorry, I couldn't create the text file.",
+                    ephemeral=False,  # Changed to False
+                )
+
+    class ViewRenderedOutputButton(ui.Button):
+        def __init__(self, row: int):
+            super().__init__(
+                label="View Output Properly (especially tables)",
+                style=discord.ButtonStyle.grey,  # Changed to grey
+                row=row,
+                emoji="🔗",  # Adding an emoji
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            view: "ResponseActionView" = self.view
+            if not view.full_response_text:
+                await interaction.response.send_message(
+                    "No response text available to render.", ephemeral=True
+                )
+                return
+            if not view.app_config:
+                await interaction.response.send_message(
+                    "Application configuration is not available for rendering.",
+                    ephemeral=True,
+                )
+                return
+
+            output_sharing_cfg = view.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
+            ngrok_is_enabled = output_sharing_cfg.get(NGROK_ENABLED_CONFIG_KEY, False)
+
+            if not ngrok_is_enabled:
+                await interaction.response.send_message(
+                    "Output sharing (ngrok) is not enabled in the configuration.",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(
+                ephemeral=True, thinking=True
+            )  # Defer while processing
+
+            try:
+                public_url = await asyncio.to_thread(
+                    start_output_server, view.full_response_text, view.app_config
+                )
+                if public_url:
+                    await interaction.followup.send(
+                        f"🔗 View rendered output: {public_url}",
+                        ephemeral=True,
+                    )
+                    logging.info(f"Sent ngrok public URL via button: {public_url}")
+                else:
+                    await interaction.followup.send(
+                        "Could not generate a public link for the rendered output.",
+                        ephemeral=True,
+                    )
+            except Exception as e:
+                logging.error(
+                    f"Error starting or managing output server via button: {e}",
+                    exc_info=True,
+                )
+                await interaction.followup.send(
+                    "An error occurred while trying to generate the rendered output link.",
+                    ephemeral=True,
                 )
