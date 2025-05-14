@@ -167,6 +167,7 @@ async def build_message_history(
     extract_text_from_pdf_bytes_func: callable,
     at_ai_pattern_re: Any,
     providers_supporting_usernames_const: tuple,
+    system_prompt_text_for_budgeting: Optional[str] = None,  # Moved to the end
 ) -> List[Dict[str, Any]]:
     raw_history_entries_reversed = []  # Oldest last initially, will be reversed
 
@@ -559,9 +560,25 @@ async def build_message_history(
 
     # 2. Tokenize and Prepare for Truncation
     tokenizer = _get_tokenizer_for_model(target_model_name)
+
+    # Adjust max_tokens_for_text budget for the system prompt
+    effective_max_tokens_for_messages = max_tokens_for_text
+    if system_prompt_text_for_budgeting:
+        system_prompt_tokens = len(tokenizer.encode(system_prompt_text_for_budgeting))
+        effective_max_tokens_for_messages = max(
+            0, max_tokens_for_text - system_prompt_tokens
+        )
+        logging.debug(
+            f"Original max_tokens_for_text: {max_tokens_for_text}. System prompt tokens: {system_prompt_tokens}. Effective budget for messages: {effective_max_tokens_for_messages}"
+        )
+
     tokenized_entries = []
     for entry_data in chronological_entries_data:
-        text_for_token_count = (
+        # This text_for_token_count is ONLY for calculating this specific entry's token contribution.
+        # It includes its own text and its own external_content.
+        # Image tokens (if any, for OpenAI) would be added here if we were to count them against this entry's budget.
+        # However, the prompt error was about total prompt size, so we focus on text for now.
+        current_entry_text_content = (
             (
                 entry_data["external_content"]
                 + "\n\nUser's query:\n"
@@ -570,8 +587,27 @@ async def build_message_history(
             if entry_data["external_content"]
             else (entry_data["text"] or "")
         )
-        # Note: File token counting is complex and model-specific. This focuses on text tokens as per "max_text".
-        token_count = len(tokenizer.encode(text_for_token_count))
+        
+        # Add token count for base64 images if OpenAI provider and files exist for this entry
+        # This part is for accurate token counting of each message part.
+        if (
+            target_provider_name == "openai" and entry_data["files"]
+        ): 
+            base64_image_token_text_for_entry = ""
+            for file_part_struct in entry_data["files"]:
+                if (
+                    isinstance(file_part_struct, dict)
+                    and file_part_struct.get("type") == "image_url"
+                ):
+                    img_url_dict = file_part_struct.get("image_url", {})
+                    data_url_val = img_url_dict.get("url", "")
+                    if data_url_val.startswith("data:image") and ";base64," in data_url_val:
+                        base64_image_token_text_for_entry += data_url_val + "\n"
+            
+            if base64_image_token_text_for_entry:
+                current_entry_text_content += "\n\n--- Image Data ---\n" + base64_image_token_text_for_entry
+
+        token_count = len(tokenizer.encode(current_entry_text_content))
         tokenized_entries.append({**entry_data, "token_count": token_count})
 
     # 3. Separate Latest Query
@@ -581,124 +617,107 @@ async def build_message_history(
         latest_query_data = tokenized_entries.pop()
     history_data_to_truncate = tokenized_entries  # Remaining entries are prior history
 
-    # 4. Perform Truncation
-    final_api_message_parts = []  # This will store the final list of dicts/parts for the API
+    # 4. Perform Truncation using effective_max_tokens_for_messages
+    final_api_message_parts = []
 
     if not history_data_to_truncate:  # No prior history
         if latest_query_data:
-            query_text_for_api = (
-                (
-                    latest_query_data["external_content"]
-                    + "\n\nUser's query:\n"
-                    + (latest_query_data["text"] or "")
-                )
-                if latest_query_data["external_content"]
-                else (latest_query_data["text"] or "")
-            )
-            _, query_actual_tokens = _truncate_text_by_tokens(
-                query_text_for_api, tokenizer, 0
-            )  # Get actual token count
+            # latest_query_data["token_count"] includes its text, external_content, and any image data tokens
+            query_actual_tokens = latest_query_data["token_count"]
 
-            if query_actual_tokens > max_tokens_for_text:
-                # Truncate the user's text part, preserving external_content
-                budget_for_user_text = max_tokens_for_text
+            if query_actual_tokens > effective_max_tokens_for_messages:
+                # Truncate the 'text' field of latest_query_data
+                budget_for_latest_query_node_text_field = effective_max_tokens_for_messages
+                
+                # Subtract tokens for external_content and image data from the budget for the text field
                 if latest_query_data["external_content"]:
-                    external_content_header_tokens = len(
-                        tokenizer.encode(
-                            latest_query_data["external_content"]
-                            + "\n\nUser's query:\n"
-                        )
-                    )
-                    budget_for_user_text = max(
-                        0, max_tokens_for_text - external_content_header_tokens
-                    )
+                    budget_for_latest_query_node_text_field -= len(tokenizer.encode(latest_query_data["external_content"] + "\n\nUser's query:\n"))
+                
+                if target_provider_name == "openai" and latest_query_data["files"]:
+                    latest_query_base64_text = ""
+                    for file_part_struct in latest_query_data["files"]:
+                        if isinstance(file_part_struct, dict) and file_part_struct.get("type") == "image_url":
+                            img_url_dict = file_part_struct.get("image_url", {})
+                            data_url_val = img_url_dict.get("url", "")
+                            if data_url_val.startswith("data:image") and ";base64," in data_url_val:
+                                latest_query_base64_text += data_url_val + "\n"
+                    if latest_query_base64_text:
+                        budget_for_latest_query_node_text_field -= len(tokenizer.encode("\n\n--- Image Data ---\n" + latest_query_base64_text))
+                
+                budget_for_latest_query_node_text_field = max(0, budget_for_latest_query_node_text_field)
 
                 truncated_user_text, _ = _truncate_text_by_tokens(
-                    latest_query_data["text"] or "", tokenizer, budget_for_user_text
+                    latest_query_data["text"] or "", tokenizer, budget_for_latest_query_node_text_field
                 )
-                latest_query_data["text"] = truncated_user_text  # Update the text part
+                latest_query_data["text"] = truncated_user_text
                 user_warnings.add(
-                    f"⚠️ Query truncated to fit token limit ({max_tokens_for_text:,})"
+                    f"⚠️ Query truncated to fit token limit ({effective_max_tokens_for_messages:,})"
                 )
             final_api_message_parts.append(latest_query_data)
     else:  # Prior history exists
         current_history_token_sum = sum(
             e["token_count"] for e in history_data_to_truncate
-        )
+        ) # This sum includes text, external_content, and image data for each history entry.
+        
+        latest_query_actual_tokens = latest_query_data["token_count"] if latest_query_data else 0
+        # latest_query_actual_tokens also includes its text, external_content, and image data.
 
-        latest_query_actual_tokens = 0
-        if latest_query_data:
-            query_text_for_tokens = (
-                (
-                    latest_query_data["external_content"]
-                    + "\n\nUser's query:\n"
-                    + (latest_query_data["text"] or "")
-                )
-                if latest_query_data["external_content"]
-                else (latest_query_data["text"] or "")
-            )
-            latest_query_actual_tokens = len(tokenizer.encode(query_text_for_tokens))
-
-        if current_history_token_sum + latest_query_actual_tokens > max_tokens_for_text:
+        if current_history_token_sum + latest_query_actual_tokens > effective_max_tokens_for_messages:
             user_warnings.add(
-                f"⚠️ History truncated to fit token limit ({max_tokens_for_text:,})"
+                f"⚠️ History truncated to fit token limit ({effective_max_tokens_for_messages:,})"
             )
-            retained_history_data = list(history_data_to_truncate)  # Work with a copy
+            retained_history_data = list(history_data_to_truncate)
 
             while retained_history_data:
                 sum_retained_tokens = sum(
                     e["token_count"] for e in retained_history_data
                 )
                 if (
-                    sum_retained_tokens + latest_query_actual_tokens
-                    <= max_tokens_for_text
+                    sum_retained_tokens + latest_query_actual_tokens <= effective_max_tokens_for_messages
                 ):
                     break
-
                 if (
                     len(retained_history_data) >= 2
                     and retained_history_data[0]["role"] == "user"
                     and retained_history_data[1]["role"] in ("assistant", "model")
                 ):
-                    retained_history_data.pop(0)  # user
+                    retained_history_data.pop(0)
                     if retained_history_data:
-                        retained_history_data.pop(0)  # model
+                        retained_history_data.pop(0)
                 elif retained_history_data:
-                    retained_history_data.pop(0)  # Oldest single message
-                else:  # Should not happen if loop condition is sum_retained_tokens + ... > limit
+                    retained_history_data.pop(0)
+                else:
                     break
-
+            
             history_data_to_truncate = retained_history_data
             current_history_token_sum = sum(
                 e["token_count"] for e in history_data_to_truncate
             )
 
-            # If still not enough space, truncate the latest query
-            if latest_query_data and (
-                current_history_token_sum + latest_query_actual_tokens
-                > max_tokens_for_text
-            ):
-                budget_for_latest_query = (
-                    max_tokens_for_text - current_history_token_sum
-                )
-
-                budget_for_user_text = budget_for_latest_query
+            if latest_query_data and (current_history_token_sum + latest_query_actual_tokens > effective_max_tokens_for_messages):
+                budget_for_latest_query_node_text_field = effective_max_tokens_for_messages - current_history_token_sum
+                
                 if latest_query_data["external_content"]:
-                    external_content_header_tokens = len(
-                        tokenizer.encode(
-                            latest_query_data["external_content"]
-                            + "\n\nUser's query:\n"
-                        )
-                    )
-                    budget_for_user_text = max(
-                        0, budget_for_latest_query - external_content_header_tokens
-                    )
+                    budget_for_latest_query_node_text_field -= len(tokenizer.encode(latest_query_data["external_content"] + "\n\nUser's query:\n"))
 
+                if target_provider_name == "openai" and latest_query_data["files"]:
+                    latest_query_base64_text = ""
+                    for file_part_struct in latest_query_data["files"]:
+                        if isinstance(file_part_struct, dict) and file_part_struct.get("type") == "image_url":
+                            img_url_dict = file_part_struct.get("image_url", {})
+                            data_url_val = img_url_dict.get("url", "")
+                            if data_url_val.startswith("data:image") and ";base64," in data_url_val:
+                                latest_query_base64_text += data_url_val + "\n"
+                    if latest_query_base64_text:
+                         budget_for_latest_query_node_text_field -= len(tokenizer.encode("\n\n--- Image Data ---\n" + latest_query_base64_text))
+
+                budget_for_latest_query_node_text_field = max(0, budget_for_latest_query_node_text_field)
+                
                 truncated_user_text, _ = _truncate_text_by_tokens(
-                    latest_query_data["text"] or "", tokenizer, budget_for_user_text
+                    latest_query_data["text"] or "", tokenizer, budget_for_latest_query_node_text_field
                 )
                 latest_query_data["text"] = truncated_user_text
-
+        
         final_api_message_parts.extend(history_data_to_truncate)
         if latest_query_data:
             final_api_message_parts.append(latest_query_data)

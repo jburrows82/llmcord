@@ -474,23 +474,28 @@ class LLMCordClient(discord.Client):
                 current_message_url_fetch_results=None,
                 msg_nodes_cache=self.msg_nodes,
                 bot_user_obj=self.user,
+                # Pass the grounding system prompt for budgeting
                 httpx_async_client=self.httpx_client,
                 models_module=models,
                 google_types_module=google_types,
                 extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
                 at_ai_pattern_re=AT_AI_PATTERN,
                 providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
+                system_prompt_text_for_budgeting=prepare_system_prompt(
+                    True, GROUNDING_MODEL_PROVIDER, self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
+                ),
             )
             if history_for_gemini_grounding:
                 grounding_sp_text_from_config = self.config.get(
                     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
                 )
-                system_prompt_for_grounding = prepare_system_prompt(
+                # This system_prompt_for_grounding is what's actually sent to the API
+                system_prompt_for_grounding = prepare_system_prompt( 
                     True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config
                 )
                 web_search_queries = await get_web_search_queries_from_gemini(
                     history_for_gemini_grounding,
-                    system_prompt_for_grounding,
+                    system_prompt_for_grounding, # This is the prompt sent to the API
                     self.config,
                     generate_response_stream,
                 )
@@ -567,6 +572,12 @@ class LLMCordClient(discord.Client):
             extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
             at_ai_pattern_re=AT_AI_PATTERN,
             providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
+            # Pass the main system prompt for budgeting
+            system_prompt_text_for_budgeting=prepare_system_prompt(
+                is_gemini, provider, get_user_system_prompt_preference(
+                    new_msg.author.id, self.config.get("system_prompt")
+                )
+            ),
         )
 
         if not history_for_llm:
@@ -581,6 +592,7 @@ class LLMCordClient(discord.Client):
         base_system_prompt_text = get_user_system_prompt_preference(
             new_msg.author.id, default_system_prompt_from_config
         )
+        # This system_prompt_text is what's actually sent to the API
         system_prompt_text = prepare_system_prompt(
             is_gemini, provider, base_system_prompt_text
         )
