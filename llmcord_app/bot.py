@@ -88,9 +88,19 @@ class LLMCordClient(discord.Client):
         )  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
-        from .content_fetchers.youtube import initialize_ytt_api
+        from .content_fetchers.youtube import (
+            initialize_ytt_api,
+            initialize_youtube_data_api,
+        )
+        from .content_fetchers.reddit import initialize_reddit_client
 
         initialize_ytt_api(self.config.get("proxy_config"))
+        initialize_youtube_data_api(self.config.get("youtube_api_key"))
+        initialize_reddit_client(
+            client_id=self.config.get("reddit_client_id"),
+            client_secret=self.config.get("reddit_client_secret"),
+            user_agent=self.config.get("reddit_user_agent"),
+        )
 
     async def setup_hook(self):
         """Sync slash commands when the bot is ready."""
@@ -692,6 +702,18 @@ class LLMCordClient(discord.Client):
         """Clean up resources when the bot is shutting down."""
         logging.info("Closing HTTPX client...")
         await self.httpx_client.aclose()
+
+        # Close Reddit client
+        # Import here to avoid circular dependency at module level if reddit.py also imports from bot.py (though it doesn't seem to)
+        from .content_fetchers.reddit import reddit_client_instance
+
+        if reddit_client_instance:
+            logging.info("Closing Reddit client...")
+            try:
+                await reddit_client_instance.close()
+            except Exception as e:
+                logging.error(f"Error closing Reddit client: {e}")
+
         logging.info("Closing database connections...")
         close_all_db_managers()
         await super().close()

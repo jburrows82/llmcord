@@ -140,11 +140,9 @@ async def fetch_external_content(
 
             fetch_tasks.append(fetch_image_url_content(url, index))
         else:  # General web page
-            # Pass httpx_client to fetch_general_url_content if it needs it (assuming it uses a global or gets it passed)
-            # Modification needed in fetch_general_url_content if it doesn't already accept httpx_client
             fetch_tasks.append(
-                fetch_general_url_content(url, index)
-            )  # Assuming fetch_general_url_content uses its own client or a global one for now
+                fetch_general_url_content(url, index, httpx_client)  # Pass the client
+            )
 
     # Fetch non-Lens content concurrently
     if fetch_tasks:

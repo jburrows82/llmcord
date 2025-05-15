@@ -11,6 +11,35 @@ from asyncprawcore.exceptions import (
 
 from ..models import UrlFetchResult
 
+# Global asyncpraw.Reddit instance
+reddit_client_instance: Optional[asyncpraw.Reddit] = None
+
+
+def initialize_reddit_client(
+    client_id: Optional[str], client_secret: Optional[str], user_agent: Optional[str]
+):
+    """Initializes the global asyncpraw.Reddit client instance."""
+    global reddit_client_instance
+    if not all([client_id, client_secret, user_agent]):
+        logging.warning(
+            "Reddit API credentials not fully configured. Reddit client not initialized."
+        )
+        reddit_client_instance = None
+        return
+
+    try:
+        reddit_client_instance = asyncpraw.Reddit(
+            client_id=client_id,
+            client_secret=client_secret,
+            user_agent=user_agent,
+            read_only=True,
+            check_for_async=False,  # Suitable for environments where event loop might be running
+        )
+        logging.info("Async PRAW Reddit client initialized successfully.")
+    except Exception:
+        logging.exception("Failed to initialize Async PRAW Reddit client.")
+        reddit_client_instance = None
+
 
 async def fetch_reddit_data(
     url: str,
@@ -29,25 +58,30 @@ async def fetch_reddit_data(
             type="reddit",
             original_index=index,
         )
-
-    reddit = None  # Initialize outside try block
-    try:
-        # Initialize asyncpraw.Reddit instance within the task
-        # Use check_for_async=False if running in an environment where event loop might already be running (like Discord bots)
-        reddit = asyncpraw.Reddit(
-            client_id=client_id,
-            client_secret=client_secret,
-            user_agent=user_agent,
-            read_only=True,
-            check_for_async=False,
+    global reddit_client_instance
+    if not reddit_client_instance:
+        logging.error("Reddit client not initialized. Cannot fetch Reddit data.")
+        # Optionally, could try a one-off initialization here if credentials are provided,
+        # but ideally it should be initialized at startup.
+        # For now, just return an error.
+        return UrlFetchResult(
+            url=url,
+            content=None,
+            error="Reddit client not initialized.",
+            type="reddit",
+            original_index=index,
         )
-        logging.debug(f"Async PRAW initialized for Reddit URL: {url}")
 
-        submission = await reddit.submission(id=submission_id)
+    # reddit = None # No longer initializing locally
+    try:
+        # Use the global reddit_client_instance
+        submission = await reddit_client_instance.submission(id=submission_id)
         # Use fetch=True to ensure data is loaded, replaces await submission.load()
         await submission.load()  # Keep load() as it fetches comments too
 
-        logging.debug(f"Fetched Reddit submission: {submission.title}")
+        logging.debug(
+            f"Fetched Reddit submission: {submission.title} using global client."
+        )
 
         content_data = {"title": submission.title}
         if submission.selftext:
@@ -128,10 +162,5 @@ async def fetch_reddit_data(
             original_index=index,
         )
     finally:
-        # Ensure the Reddit client is closed if it was initialized
-        if reddit:
-            try:
-                await reddit.close()
-                logging.debug(f"Closed Async PRAW session for Reddit URL: {url}")
-            except Exception as close_err:
-                logging.error(f"Error closing Async PRAW session: {close_err}")
+        # The global client is not closed here; it's closed when the bot shuts down.
+        pass

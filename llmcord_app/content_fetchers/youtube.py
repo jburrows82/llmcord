@@ -24,6 +24,32 @@ from ..utils import extract_video_id
 
 # Initialize ytt_api globally within this module, potentially configured with proxy
 ytt_api = None
+youtube_service_client = None  # Global client for YouTube Data API
+
+
+def initialize_youtube_data_api(api_key: Optional[str]):
+    """Initializes the YouTube Data API service client."""
+    global youtube_service_client
+    if not api_key:
+        logging.warning("YouTube Data API key not provided. Cannot initialize client.")
+        youtube_service_client = None
+        return
+    try:
+        youtube_service_client = build_google_api_client(
+            "youtube", "v3", developerKey=api_key
+        )
+        logging.info("YouTube Data API service client initialized successfully.")
+    except HttpError as e_build:
+        error_reason = getattr(e_build, "reason", str(e_build))
+        status_code = getattr(e_build.resp, "status", "Unknown")
+        logging.error(
+            f"Failed to initialize YouTube Data API client (Status: {status_code}): {error_reason}. "
+            "Video detail fetching will likely fail."
+        )
+        youtube_service_client = None
+    except Exception:
+        logging.exception("Unexpected error initializing YouTube Data API client.")
+        youtube_service_client = None
 
 
 def initialize_ytt_api(proxy_config_data: Optional[Dict] = None):
@@ -181,14 +207,40 @@ async def get_youtube_video_details(
     try:
         # Run blocking Google API client calls in a separate thread
         def sync_get_details():
+            global youtube_service_client
             _details = {}
             _errors = []
-            try:
-                youtube = build_google_api_client("youtube", "v3", developerKey=api_key)
 
+            if not youtube_service_client:
+                # Attempt to initialize if not already (e.g. if key was missing at startup but added later, though less likely with current flow)
+                # Or, if this function is somehow called before initialize_youtube_data_api
+                logging.warning(
+                    "YouTube Data API client not initialized in sync_get_details. Attempting to build locally for this call."
+                )
+                try:
+                    local_youtube_client = build_google_api_client(
+                        "youtube", "v3", developerKey=api_key
+                    )
+                except Exception as e_build_local:
+                    logging.error(
+                        f"Failed to build local YouTube client in sync_get_details: {e_build_local}"
+                    )
+                    _errors.append(
+                        f"YouTube Data API client not available: {e_build_local}"
+                    )
+                    return None, _errors
+            else:
+                local_youtube_client = (
+                    youtube_service_client  # Use the global/module-level client
+                )
+
+            try:
                 # Get video details (snippet)
                 try:
-                    video_request = youtube.videos().list(part="snippet", id=video_id)
+                    video_request = local_youtube_client.videos().list(
+                        part="snippet", id=video_id
+                    )
+                    # video_request = youtube.videos().list(part="snippet", id=video_id) # Removed duplicate/incorrect line
                     video_response = video_request.execute()
                     if video_response.get("items"):
                         snippet = video_response["items"][0]["snippet"]
@@ -214,7 +266,7 @@ async def get_youtube_video_details(
 
                 # Get top comments (commentThreads) - Proceed even if details failed
                 try:
-                    comment_request = youtube.commentThreads().list(
+                    comment_request = local_youtube_client.commentThreads().list(
                         part="snippet",
                         videoId=video_id,
                         order="relevance",

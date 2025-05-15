@@ -205,14 +205,14 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while setting your system prompt. Please check the bot logs for more details.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
             else:
                 # If already responded (e.g., error happened during _save_user_preferences, though less likely to be caught here)
                 # or if interaction is too old, try a followup.
                 await interaction.followup.send(
                     "An error occurred after the initial response while processing your system prompt. Please check the bot logs.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
         except discord.HTTPException as http_err:
             logger.error(
@@ -278,12 +278,12 @@ async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while setting your Gemini thinking budget preference. Please check the bot logs.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
             else:
                 await interaction.followup.send(
                     "An error occurred after the initial response while processing your Gemini thinking budget preference.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
         except discord.HTTPException as http_err:
             logger.error(

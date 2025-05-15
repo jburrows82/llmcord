@@ -136,12 +136,20 @@ AVAILABLE_MODELS = {
         # Add other Gemini models as needed/supported
     ],
     "openai": [
-        "gpt-4.1"
+        "gpt-4.1",
+        "claude-3.7-sonnet",
+        "claude-3.7-sonnet-thought",
+        "o4-mini",
+        "gemini-2.5-pro",
         # Add other OpenAI models as needed/supported
     ],
     "x-ai": [
         "grok-3"
         # Add other xAI models as needed/supported
+    ],
+    "mistral": [
+        "mistral-medium-latest"
+        # Add other Mistral models as needed/supported
     ],
 }
 # Keywords for Model Override

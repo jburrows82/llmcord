@@ -219,7 +219,10 @@ async def fetch_and_format_searxng_results(
         else:
             url_content_processing_tasks.append(
                 fetch_general_url_content(
-                    url_str, idx, max_text_length=searxng_content_limit
+                    url_str,
+                    idx,
+                    httpx_client,
+                    max_text_length=searxng_content_limit,  # Pass httpx_client
                 )
             )
 

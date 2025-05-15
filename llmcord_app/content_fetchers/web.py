@@ -10,11 +10,14 @@ from ..models import UrlFetchResult
 # Define httpx_client here or pass it in
 # For simplicity, let's define it here for this module's use
 # In a larger app, dependency injection might be better
-httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
+# httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True) # Removed module-level client
 
 
 async def fetch_general_url_content(
-    url: str, index: int, max_text_length: Optional[int] = None
+    url: str,
+    index: int,
+    client: httpx.AsyncClient,  # Added client parameter
+    max_text_length: Optional[int] = None,
 ) -> UrlFetchResult:
     """Fetches and extracts text content from a general URL using BeautifulSoup."""
     try:
@@ -23,7 +26,7 @@ async def fetch_general_url_content(
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         logging.debug(f"Fetching general URL: {url}")
-        async with httpx_client.stream(
+        async with client.stream(  # Use passed-in client
             "GET", url, headers=headers, timeout=15.0
         ) as response:
             # Check status code early

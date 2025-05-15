@@ -444,11 +444,16 @@ async def build_message_history(
                                     )
                                 )
                             else:
+                                # Offload base64 encoding
+                                base64_encoded_image = await asyncio.to_thread(
+                                    lambda b: base64.b64encode(b).decode("utf-8"),
+                                    file_bytes_for_api,
+                                )
                                 temp_api_file_parts.append(
                                     dict(
                                         type="image_url",
                                         image_url=dict(
-                                            url=f"data:{mime_type_for_api};base64,{base64.b64encode(file_bytes_for_api).decode('utf-8')}"
+                                            url=f"data:{mime_type_for_api};base64,{base64_encoded_image}"
                                         ),
                                     )
                                 )
@@ -494,11 +499,18 @@ async def build_message_history(
                                             )
                                         )
                                     else:
+                                        # Offload base64 encoding
+                                        base64_encoded_image = await asyncio.to_thread(
+                                            lambda b: base64.b64encode(b).decode(
+                                                "utf-8"
+                                            ),
+                                            img_bytes,
+                                        )
                                         temp_api_file_parts.append(
                                             dict(
                                                 type="image_url",
                                                 image_url=dict(
-                                                    url=f"data:{mime_type};base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+                                                    url=f"data:{mime_type};base64,{base64_encoded_image}"
                                                 ),
                                             )
                                         )
@@ -857,9 +869,11 @@ async def build_message_history(
                     ):  # Convert Gemini to OpenAI
                         try:
                             if part_in_node.inline_data.mime_type.startswith("image/"):
-                                b64_data = base64.b64encode(
-                                    part_in_node.inline_data.data
-                                ).decode("utf-8")
+                                # Offload base64 encoding
+                                b64_data = await asyncio.to_thread(
+                                    lambda b: base64.b64encode(b).decode("utf-8"),
+                                    part_in_node.inline_data.data,
+                                )
                                 current_api_file_parts.append(
                                     {
                                         "type": "image_url",

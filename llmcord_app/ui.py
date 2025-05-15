@@ -350,13 +350,13 @@ class ResponseActionView(ui.View):
             view: "ResponseActionView" = self.view
             if not view.full_response_text:
                 await interaction.response.send_message(
-                    "No response text available to render.", ephemeral=True
+                    "No response text available to render.", ephemeral=False
                 )
                 return
             if not view.app_config:
                 await interaction.response.send_message(
                     "Application configuration is not available for rendering.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
@@ -366,12 +366,12 @@ class ResponseActionView(ui.View):
             if not ngrok_is_enabled:
                 await interaction.response.send_message(
                     "Output sharing (ngrok) is not enabled in the configuration.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
                 return
 
             await interaction.response.defer(
-                ephemeral=True, thinking=True
+                ephemeral=False, thinking=True
             )  # Defer while processing
 
             try:
@@ -381,13 +381,13 @@ class ResponseActionView(ui.View):
                 if public_url:
                     await interaction.followup.send(
                         f"🔗 View rendered output: {public_url}",
-                        ephemeral=True,
+                        ephemeral=False,
                     )
                     logging.info(f"Sent ngrok public URL via button: {public_url}")
                 else:
                     await interaction.followup.send(
                         "Could not generate a public link for the rendered output.",
-                        ephemeral=True,
+                        ephemeral=False,
                     )
             except Exception as e:
                 logging.error(
@@ -396,5 +396,5 @@ class ResponseActionView(ui.View):
                 )
                 await interaction.followup.send(
                     "An error occurred while trying to generate the rendered output link.",
-                    ephemeral=True,
+                    ephemeral=False,
                 )
