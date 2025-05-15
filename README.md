@@ -41,6 +41,7 @@ Or run a local model with:
 - [LM Studio](https://lmstudio.ai)
 - [vLLM](https://github.com/vllm-project/vllm)
 - [Jan](https://jan.ai)
+- [Oobabooga's WebUI](https://github.com/oobabooga/text-generation-webui) (via its OpenAI compatible API)
 
 ...Or use any other OpenAI compatible API server.
 
@@ -113,6 +114,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 - **Persistent Action Buttons**: If a response was enhanced by grounding or if there's a response text, action buttons will appear below the message. These buttons are persistent and do not time out.
     - **"Show Sources" Button**: If grounding was used, this button reveals the search queries the model used and the web sources it consulted. The sources are displayed in embeds, split into multiple messages if necessary.
     - **"Get response as text file" Button**: Allows you to download the bot's full response as a `.txt` file.
+    - **"View output properly (especially tables)" Button**: If enabled in `config.yaml`, this button shares the LLM's full Markdown response via a temporary public ngrok URL. The content is rendered as an HTML page using a local Grip server, making complex Markdown (like tables) easier to read.
 
 ### And more:
 - **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking` for user-specific preferences (see "Slash Commands" section).
@@ -193,6 +195,18 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 | **gemini_thinking_budget_value** | **Optional, for Gemini models.** The actual budget value (0-24576) to use if `gemini_use_thinking_budget` is enabled. (Default: `0`) |
 | **extra_api_parameters** | Extra API parameters for the selected LLM's provider. Add more entries as needed.<br />**Refer to your provider's documentation for supported API parameters.**<br />(Default: `max_tokens=4096, temperature=1.0` for OpenAI compatible)<br />(Gemini uses parameters like `max_output_tokens`, `temperature`, `top_p`, `top_k`) |
 | **system_prompt** | The default system prompt to customize the bot's behavior. Users can set their own with `/systemprompt`.<br />**Leave blank for no default system prompt.** |
+
+### Output Sharing Settings (for "View output properly" button):
+
+| Setting | Description |
+| --- | --- |
+| **output_sharing.ngrok_enabled** | Set to `true` to enable the "View output properly" button, which uses ngrok to share rendered Markdown. (Default: `false`) |
+| **output_sharing.ngrok_authtoken** | Your ngrok authtoken. Optional but recommended for stable ngrok usage. Find it on your [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken). |
+| **output_sharing.grip_port** | The local port number for the Python HTTP server (formerly Grip server) that renders the Markdown to HTML. (Default: `6419`) |
+| **output_sharing.ngrok_static_domain** | **Optional:** If you have a reserved static domain with ngrok (requires a paid plan), you can specify it here (e.g., `your-cool-domain.ngrok-free.app`). Otherwise, a random ngrok subdomain will be used. |
+| **output_sharing.cleanup_on_shutdown** | Set to `false` to keep the generated HTML files in the `shared_html/` directory across bot restarts. If `true`, the directory is cleaned up when the bot shuts down. (Default: `true`) |
+| **output_sharing.url_shortener_enabled** | Set to `true` to shorten the ngrok URL using a service like TinyURL. (Default: `false`) |
+| **output_sharing.url_shortener_service** | The URL shortener service to use. Currently supported: `"tinyurl"`. (Default: `"tinyurl"`) |
 
 ### User Preferences:
 - User-specific settings for model, system prompt, and Gemini thinking budget are stored in JSON files at the root of the project (e.g., `user_model_prefs.json`, `user_system_prompts.json`, `user_gemini_thinking_budget_prefs.json`). Consider adding these to your `.gitignore` if you manage your deployment with git.
