@@ -341,10 +341,9 @@ class ResponseActionView(ui.View):
     class ViewRenderedOutputButton(ui.Button):
         def __init__(self, row: int):
             super().__init__(
-                label="View Output Properly (especially tables)",
+                label="View output properly (especially tables)",
                 style=discord.ButtonStyle.grey,  # Changed to grey
                 row=row,
-                emoji="🔗",  # Adding an emoji
             )
 
         async def callback(self, interaction: discord.Interaction):

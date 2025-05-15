@@ -588,29 +588,37 @@ async def build_message_history(
             else (entry_data["text"] or "")
         )
 
-        # Add token count for base64 images if OpenAI provider and files exist for this entry
-        # This part is for accurate token counting of each message part.
-        if target_provider_name == "openai" and entry_data["files"]:
-            base64_image_token_text_for_entry = ""
+        # Calculate token count for text and external content first
+        text_only_token_count = len(tokenizer.encode(current_entry_text_content))
+        image_token_cost_for_entry = 0
+
+        # Add fixed token cost for images if files exist
+        if entry_data["files"]:  # Removed target_provider_name == "openai"
+            num_images_in_entry = 0
             for file_part_struct in entry_data["files"]:
                 if (
                     isinstance(file_part_struct, dict)
                     and file_part_struct.get("type") == "image_url"
                 ):
+                    # Check if it's a data URL, implying an image processed for an API
                     img_url_dict = file_part_struct.get("image_url", {})
                     data_url_val = img_url_dict.get("url", "")
                     if (
-                        data_url_val.startswith("data:image")
+                        data_url_val.startswith(
+                            "data:image"
+                        )  # Covers OpenAI and similar base64 images
                         and ";base64," in data_url_val
+                    ) or (  # Also consider Gemini parts if they are image bytes
+                        is_target_provider_gemini
+                        and isinstance(file_part_struct, google_types_module.Part)
+                        and hasattr(file_part_struct, "inline_data")
+                        and file_part_struct.inline_data
+                        and file_part_struct.inline_data.mime_type.startswith("image/")
                     ):
-                        base64_image_token_text_for_entry += data_url_val + "\n"
+                        num_images_in_entry += 1
+            image_token_cost_for_entry = num_images_in_entry * 765
 
-            if base64_image_token_text_for_entry:
-                current_entry_text_content += (
-                    "\n\n--- Image Data ---\n" + base64_image_token_text_for_entry
-                )
-
-        token_count = len(tokenizer.encode(current_entry_text_content))
+        token_count = text_only_token_count + image_token_cost_for_entry
         tokenized_entries.append({**entry_data, "token_count": token_count})
 
     # 3. Separate Latest Query
@@ -643,25 +651,38 @@ async def build_message_history(
                         )
                     )
 
-                if target_provider_name == "openai" and latest_query_data["files"]:
-                    latest_query_base64_text = ""
+                if latest_query_data[
+                    "files"
+                ]:  # Removed target_provider_name == "openai"
+                    num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
                         if (
                             isinstance(file_part_struct, dict)
                             and file_part_struct.get("type") == "image_url"
                         ):
+                            # Check if it's a data URL, implying an image processed for an API
                             img_url_dict = file_part_struct.get("image_url", {})
                             data_url_val = img_url_dict.get("url", "")
                             if (
-                                data_url_val.startswith("data:image")
+                                data_url_val.startswith(
+                                    "data:image"
+                                )  # Covers OpenAI and similar base64 images
                                 and ";base64," in data_url_val
+                            ) or (  # Also consider Gemini parts if they are image bytes
+                                is_target_provider_gemini
+                                and isinstance(
+                                    file_part_struct, google_types_module.Part
+                                )
+                                and hasattr(file_part_struct, "inline_data")
+                                and file_part_struct.inline_data
+                                and file_part_struct.inline_data.mime_type.startswith(
+                                    "image/"
+                                )
                             ):
-                                latest_query_base64_text += data_url_val + "\n"
-                    if latest_query_base64_text:
-                        budget_for_latest_query_node_text_field -= len(
-                            tokenizer.encode(
-                                "\n\n--- Image Data ---\n" + latest_query_base64_text
-                            )
+                                num_images_in_latest_query += 1
+                    if num_images_in_latest_query > 0:
+                        budget_for_latest_query_node_text_field -= (
+                            num_images_in_latest_query * 765
                         )
 
                 budget_for_latest_query_node_text_field = max(
@@ -740,25 +761,38 @@ async def build_message_history(
                         )
                     )
 
-                if target_provider_name == "openai" and latest_query_data["files"]:
-                    latest_query_base64_text = ""
+                if latest_query_data[
+                    "files"
+                ]:  # Removed target_provider_name == "openai"
+                    num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
                         if (
                             isinstance(file_part_struct, dict)
                             and file_part_struct.get("type") == "image_url"
                         ):
+                            # Check if it's a data URL, implying an image processed for an API
                             img_url_dict = file_part_struct.get("image_url", {})
                             data_url_val = img_url_dict.get("url", "")
                             if (
-                                data_url_val.startswith("data:image")
+                                data_url_val.startswith(
+                                    "data:image"
+                                )  # Covers OpenAI and similar base64 images
                                 and ";base64," in data_url_val
+                            ) or (  # Also consider Gemini parts if they are image bytes
+                                is_target_provider_gemini
+                                and isinstance(
+                                    file_part_struct, google_types_module.Part
+                                )
+                                and hasattr(file_part_struct, "inline_data")
+                                and file_part_struct.inline_data
+                                and file_part_struct.inline_data.mime_type.startswith(
+                                    "image/"
+                                )
                             ):
-                                latest_query_base64_text += data_url_val + "\n"
-                    if latest_query_base64_text:
-                        budget_for_latest_query_node_text_field -= len(
-                            tokenizer.encode(
-                                "\n\n--- Image Data ---\n" + latest_query_base64_text
-                            )
+                                num_images_in_latest_query += 1
+                    if num_images_in_latest_query > 0:
+                        budget_for_latest_query_node_text_field -= (
+                            num_images_in_latest_query * 765
                         )
 
                 budget_for_latest_query_node_text_field = max(
