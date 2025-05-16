@@ -31,7 +31,7 @@ from .constants import (
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,  # Added Gemini Thinking Budget keys
     FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL,  # <-- ADDED for configurable fallback vision model
-    EMBED_COLOR_ERROR, # <-- ADDED for empty query error
+    EMBED_COLOR_ERROR,  # <-- ADDED for empty query error
 )
 
 # Corrected import: Use the models module directly
@@ -452,7 +452,9 @@ class LLMCordClient(discord.Client):
             try:
                 if processing_msg:
                     if use_plain:
-                        await processing_msg.edit(content=error_message_text, embed=None, view=None)
+                        await processing_msg.edit(
+                            content=error_message_text, embed=None, view=None
+                        )
                     else:
                         error_embed = discord.Embed(
                             description=error_message_text, color=EMBED_COLOR_ERROR
@@ -461,7 +463,11 @@ class LLMCordClient(discord.Client):
                 else:
                     # Fallback if processing_msg couldn't be sent
                     if use_plain:
-                        await new_msg.reply(error_message_text, mention_author=False, suppress_embeds=True)
+                        await new_msg.reply(
+                            error_message_text,
+                            mention_author=False,
+                            suppress_embeds=True,
+                        )
                     else:
                         error_embed = discord.Embed(
                             description=error_message_text, color=EMBED_COLOR_ERROR
@@ -470,7 +476,10 @@ class LLMCordClient(discord.Client):
             except discord.HTTPException as e:
                 logging.error(f"Failed to send/edit empty query error message: {e}")
             except Exception as e:
-                logging.error(f"Unexpected error sending/editing empty query error message: {e}", exc_info=True)
+                logging.error(
+                    f"Unexpected error sending/editing empty query error message: {e}",
+                    exc_info=True,
+                )
             return
 
         combined_context = ""
