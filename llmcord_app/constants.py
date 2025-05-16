@@ -124,7 +124,7 @@ FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04
 
 # --- ADDED: Fallback model for incomplete non-Gemini streams ---
 FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = (
-    "google/gemini-2.5-flash-preview-04-17"
+    "mistral/mistral-medium-latest"
 )
 # --- END ADDED ---
 

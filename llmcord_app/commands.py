@@ -299,3 +299,55 @@ def get_user_gemini_thinking_budget_preference(
     Returns the user-set preference if available, otherwise the default_enabled value from config.
     """
     return user_gemini_thinking_budget_preferences.get(user_id, default_enabled)
+
+
+# --- ADDED: Slash Command for Help ---
+async def help_command(interaction: discord.Interaction):
+    """Displays all available commands and how to use them."""
+    embed = discord.Embed(
+        title="LLMCord Bot Help",
+        description="Here are the available commands:",
+        color=discord.Color.blue(),
+    )
+
+    commands_info = [
+        {
+            "name": "/model `model_full_name`",
+            "value": "Sets your preferred LLM provider and model (e.g., `google/gemini-2.0-flash`, `openai/gpt-4.1`). This preference is saved for your future messages.",
+            "inline": False,
+        },
+        {
+            "name": "/systemprompt `prompt`",
+            "value": "Sets your custom system prompt. Use `reset` to revert to the default prompt from `config.yaml`. This guides the AI's responses for you.",
+            "inline": False,
+        },
+        {
+            "name": "/setgeminithinking `enabled`",
+            "value": "Sets your preference for using the 'thinkingBudget' parameter with Gemini models (`True` or `False`). This can potentially improve response quality but may increase latency. The actual budget value is set globally in `config.yaml`.",
+            "inline": False,
+        },
+        {
+            "name": "/help",
+            "value": "Displays this help message, showing all available commands and their usage.",
+            "inline": False,
+        },
+    ]
+
+    for cmd_info in commands_info:
+        embed.add_field(
+            name=cmd_info["name"], value=cmd_info["value"], inline=cmd_info["inline"]
+        )
+
+    embed.set_footer(
+        text="Use these commands to customize your interaction with the bot."
+    )
+
+    try:
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    except discord.HTTPException as e:
+        logger.error(f"Failed to send help message: {e}")
+        # Fallback if embed fails or is too large, though unlikely for this content
+        await interaction.response.send_message(
+            "Could not display help information. Please check bot logs.",
+            ephemeral=True,
+        )

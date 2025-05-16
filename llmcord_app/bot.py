@@ -50,6 +50,7 @@ from .commands import (  # Import command logic and preference getter
     get_user_system_prompt_preference,
     setgeminithinking,
     get_user_gemini_thinking_budget_preference,  # Added Gemini thinking budget command and getter
+    help_command,  # <-- ADDED: Import help_command
 )
 from .permissions import is_message_allowed  # Import the permission checking function
 from .external_content import (
@@ -127,6 +128,14 @@ class LLMCordClient(discord.Client):
                 name="setgeminithinking",
                 description="Toggle usage of the 'thinkingBudget' parameter for Gemini models.",
                 callback=setgeminithinking,
+            )
+        )
+        # --- ADDED: Register /help command ---
+        self.tree.add_command(
+            app_commands.Command(
+                name="help",
+                description="Displays all available commands and how to use them.",
+                callback=help_command,
             )
         )
         # Sync commands

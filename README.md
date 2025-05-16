@@ -54,6 +54,7 @@ llmcord offers slash commands for user-specific customizations:
 - **`/model <provider/model_name>`**: Set your preferred LLM provider and model (e.g., `openai/gpt-4.1`, `google/gemini-2.5-flash-preview-04-17`). This preference is saved and used for your future messages.
 - **`/systemprompt <prompt_text | "reset">`**: Set a custom system prompt for your interactions with the bot. Use `reset` to revert to the default system prompt defined in `config.yaml`.
 - **`/setgeminithinking <True|False>`**: Enable or disable the `thinkingBudget` parameter for Gemini models for your interactions. This can potentially improve response quality for complex queries but may increase latency. The actual budget value is set globally in `config.yaml`.
+- **`/help`**: Displays a help message listing all available commands and their usage.
 User preferences for these commands are saved locally in JSON files (e.g., `user_model_prefs.json`).
 
 ### YouTube Content Extraction
@@ -117,7 +118,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
     - **"View output properly (especially tables)" Button**: If enabled in `config.yaml`, this button shares the LLM's full Markdown response via a temporary public ngrok URL. The content is rendered as an HTML page using a local Grip server, making complex Markdown (like tables) easier to read.
 
 ### And more:
-- **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking` for user-specific preferences (see "Slash Commands" section).
+- **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking`, `/help` for user-specific preferences and help (see "Slash Commands" section).
 - Supports image attachments when using a vision model (like `gpt-4.1`, `claude-3`, `gemini-2.5-flash-preview-04-17`, etc.).
 - Supports text file attachments (.txt, .py, .c, etc.) and PDF attachments (see "Advanced Query Handling").
 - Customizable personality (default system prompt in `config.yaml`, user-overridable via `/systemprompt`).
