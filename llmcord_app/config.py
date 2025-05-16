@@ -22,6 +22,8 @@ from .constants import (
     CLEANUP_ON_SHUTDOWN_CONFIG_KEY,
     URL_SHORTENER_ENABLED_CONFIG_KEY,
     URL_SHORTENER_SERVICE_CONFIG_KEY,
+    FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,  # <-- ADDED
+    DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT,  # <-- ADDED
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -386,6 +388,19 @@ def get_config(filename="config.yaml"):
                 )
                 output_sharing_cfg[URL_SHORTENER_SERVICE_CONFIG_KEY] = "tinyurl"
             # --- End Load Output Sharing Settings ---
+
+            # --- Load Fallback Model System Prompt ---
+            if (
+                FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY not in config_data
+                or not config_data.get(FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY)
+            ):
+                logging.info(
+                    f"'{FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default."
+                )
+                config_data[FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY] = (
+                    DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT
+                )
+            # --- End Load Fallback Model System Prompt ---
 
             return config_data
 

@@ -22,10 +22,12 @@ from .constants import (
     AllKeysFailedError,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
-    FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL,  # <-- ADDED
+    FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL,
+    FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,  # <-- ADDED
 )
 from .ui import ResponseActionView
 from .llm_handler import generate_response_stream
+from .prompt_utils import prepare_system_prompt  # <-- ADDED
 from .commands import (
     get_user_gemini_thinking_budget_preference,
 )  # Added for retry logic
@@ -84,25 +86,36 @@ async def handle_llm_response_stream(
     edit_task = None  # Keep edit_task for embed streaming
 
     should_retry_with_gemini_signal = False
+    should_retry_due_to_unprocessable_entity = False  # New flag for 422 error
 
     original_provider_param = provider
     original_model_name_param = model_name
     original_provider_config_param = provider_config.copy()
     original_extra_api_params_param = extra_api_params.copy()
+    original_system_prompt_text = system_prompt_text  # Store original system prompt
 
     current_provider = original_provider_param
     current_model_name = original_model_name_param
     current_provider_config = original_provider_config_param
     current_extra_params = original_extra_api_params_param
+    current_system_prompt_text = original_system_prompt_text  # Initialize with original
 
     for attempt_num in range(2):  # 0 for original, 1 for retry
-        if attempt_num == 1:
-            if not should_retry_with_gemini_signal:
-                break
+        if attempt_num == 1:  # This block is for the retry attempt
+            if not (
+                should_retry_with_gemini_signal
+                or should_retry_due_to_unprocessable_entity
+            ):
+                break  # No signal to retry, so exit the loop
 
-            logging.info(
-                f"Original model '{original_model_name_param}' stream ended without finish reason. Deleting incomplete messages and retrying with fallback model..."
-            )
+            if should_retry_with_gemini_signal:
+                logging.info(
+                    f"Original model '{original_model_name_param}' stream ended without finish reason. Deleting incomplete messages and retrying with fallback model..."
+                )
+            elif should_retry_due_to_unprocessable_entity:
+                logging.info(
+                    f"Original model '{original_model_name_param}' failed with Unprocessable Entity. Deleting incomplete messages and retrying with fallback model..."
+                )
 
             # --- Deletion Logic for Incomplete Messages ---
             deleted_processing_msg_original_id = None
@@ -156,7 +169,12 @@ async def handle_llm_response_stream(
             fallback_model_str = (
                 FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
             )
-            warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
+            if should_retry_with_gemini_signal:
+                warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
+            elif should_retry_due_to_unprocessable_entity:
+                warning_message = f"⚠️ Original model ({original_model_name_param}) failed (422 Error). Retrying with `{fallback_model_str}`..."
+            else:  # Should not happen if loop condition is correct
+                warning_message = f"⚠️ Retrying with `{fallback_model_str}` due to an unspecified issue with {original_model_name_param}."
             initial_user_warnings.add(
                 warning_message
             )  # This warning will be shown in the retry message
@@ -215,21 +233,52 @@ async def handle_llm_response_stream(
                 return llm_call_successful_final, final_text_to_return, response_msgs
 
             current_extra_params = client.config.get("extra_api_parameters", {}).copy()
-            if "max_tokens" in current_extra_params and current_provider == "google":
+            # Determine if the fallback model is Gemini to adjust parameters
+            is_fallback_gemini = current_provider == "google"
+
+            if "max_tokens" in current_extra_params and is_fallback_gemini:
                 current_extra_params["max_output_tokens"] = current_extra_params.pop(
                     "max_tokens"
                 )
-
-            global_use_thinking_budget = client.config.get(
-                GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False
-            )
-            user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(
-                new_msg.author.id, global_use_thinking_budget
-            )
-            if user_wants_thinking_budget:
-                current_extra_params["thinking_budget"] = client.config.get(
-                    GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0
+            # Remove max_output_tokens if fallback is not Gemini and it was added for Gemini
+            elif (
+                "max_output_tokens" in current_extra_params
+                and not is_fallback_gemini
+                and "max_tokens" not in current_extra_params
+            ):
+                current_extra_params["max_tokens"] = current_extra_params.pop(
+                    "max_output_tokens"
                 )
+
+            if is_fallback_gemini:
+                global_use_thinking_budget = client.config.get(
+                    GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False
+                )
+                user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(
+                    new_msg.author.id, global_use_thinking_budget
+                )
+                if user_wants_thinking_budget:
+                    current_extra_params["thinking_budget"] = client.config.get(
+                        GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0
+                    )
+            else:  # Remove Gemini specific params if fallback is not Gemini
+                current_extra_params.pop("thinking_budget", None)
+                current_extra_params.pop(
+                    "max_output_tokens", None
+                )  # Ensure this is removed if not already handled by max_tokens logic
+
+            # Get and prepare the system prompt for the fallback model
+            fallback_system_prompt_text_from_config = client.config.get(
+                FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY
+            )
+            current_system_prompt_text = prepare_system_prompt(
+                is_fallback_gemini,
+                current_provider,
+                fallback_system_prompt_text_from_config,
+            )
+            logging.info(
+                f"Using fallback system prompt for retry: '{current_system_prompt_text}'"
+            )
 
             final_text_for_this_attempt = ""
             grounding_metadata_for_this_attempt = None
@@ -263,6 +312,9 @@ async def handle_llm_response_stream(
             else:
                 response_msgs = []
             should_retry_with_gemini_signal = False
+            should_retry_due_to_unprocessable_entity = (
+                False  # Reset flag after initiating retry
+            )
 
         base_embed = discord.Embed()
         footer_text = f"Model: {current_model_name}"
@@ -284,7 +336,7 @@ async def handle_llm_response_stream(
                     provider=current_provider,
                     model_name=current_model_name,
                     history_for_llm=history_for_llm,
-                    system_prompt_text=system_prompt_text,
+                    system_prompt_text=current_system_prompt_text,  # Use current_system_prompt_text
                     provider_config=current_provider_config,
                     extra_params=current_extra_params,
                 )
@@ -296,16 +348,34 @@ async def handle_llm_response_stream(
                     error_message,
                 ) in stream_generator:
                     if error_message == "RETRY_WITH_GEMINI_NO_FINISH_REASON":
-                        if original_provider_param != "google" and attempt_num == 0:
+                        if (
+                            original_provider_param != "google" and attempt_num == 0
+                        ):  # Only on first attempt for non-Gemini
                             should_retry_with_gemini_signal = True
-                            logging.info("Signal received to retry with Gemini.")
-                            break
-                        else:
+                            logging.info(
+                                "Signal received: RETRY_WITH_GEMINI_NO_FINISH_REASON."
+                            )
+                            break  # Break from stream_generator loop to trigger retry logic
+                        else:  # If it's already Gemini or a retry attempt, treat as a normal error
                             error_message = "Stream ended without finish reason."
+                    elif (
+                        error_message
+                        == "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY"
+                    ):
+                        if attempt_num == 0:  # Only on first attempt
+                            should_retry_due_to_unprocessable_entity = True
+                            logging.info(
+                                "Signal received: RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY."
+                            )
+                            break  # Break from stream_generator loop to trigger retry logic
+                        else:  # If it's already a retry attempt, treat as a normal error
+                            error_message = (
+                                "Unprocessable Entity error on retry attempt."
+                            )
 
-                    if error_message:
+                    if error_message:  # Handles cases where error_message was set above or passed directly
                         logging.error(
-                            f"LLM stream failed for {current_provider}/{current_model_name}: {error_message}"
+                            f"LLM stream failed for {current_provider}/{current_model_name} (Attempt {attempt_num + 1}): {error_message}"
                         )
                         await _handle_stream_error(
                             new_msg,
@@ -621,10 +691,14 @@ async def handle_llm_response_stream(
                             and finish_reason
                             == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
                         )
-                        break
+                        break  # Break from stream_generator loop
 
-                if should_retry_with_gemini_signal:
+                if (
+                    should_retry_with_gemini_signal
+                    or should_retry_due_to_unprocessable_entity
+                ):
                     final_text_for_this_attempt = ""  # Discard text from this attempt
+                    # The outer loop (for attempt_num in range(2)) will continue to the retry logic
                     continue
 
                 llm_call_successful_final = current_attempt_llm_successful

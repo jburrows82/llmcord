@@ -126,6 +126,14 @@ FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04
 FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = (
     "mistral/mistral-medium-latest"
 )
+# --- System prompt for the fallback model ---
+FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY = "fallback_model_system_prompt"
+DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT = """
+You are a concise assistant. The previous attempt to generate a response by another model was incomplete or failed.
+Please provide a very brief, helpful, and directly relevant answer to the user's query based on the provided context.
+If the query seems to imply a very long or complex answer that cannot be brief, it's okay to state that a concise answer isn't possible for that specific query.
+Do not apologize for the previous model. Focus on fulfilling the user's request succinctly.
+""".strip()
 # --- END ADDED ---
 
 AVAILABLE_MODELS = {

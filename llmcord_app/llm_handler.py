@@ -12,6 +12,7 @@ from openai import (
     AuthenticationError,
     APIConnectionError,
     BadRequestError,
+    UnprocessableEntityError,  # Added import
 )
 
 # Google Gemini specific imports
@@ -19,7 +20,11 @@ from google import genai as google_genai
 from google.genai import types as google_types
 from google.api_core import exceptions as google_api_exceptions
 
-from .constants import GEMINI_SAFETY_SETTINGS_DICT, AllKeysFailedError
+from .constants import (
+    GEMINI_SAFETY_SETTINGS_DICT,
+    AllKeysFailedError,
+    PROVIDERS_SUPPORTING_USERNAMES,
+)  # Added PROVIDERS_SUPPORTING_USERNAMES
 from .rate_limiter import get_db_manager, get_available_keys
 from .utils import _truncate_base64_in_payload, default_serializer
 
@@ -370,7 +375,9 @@ async def generate_response_stream(
 
                 # Ensure OpenAI correction logic is added here if needed in the future
                 # For OpenAI, history_to_use_for_api_call should be a list of {"role": ..., "content": ...}
-                openai_messages = history_to_use_for_api_call[:]
+                openai_messages = [
+                    msg.copy() for msg in history_to_use_for_api_call
+                ]  # Use deepish copy for modification
                 if system_prompt_text:
                     # Check if system prompt already exists to avoid duplicates if history_to_use_for_api_call was pre-processed
                     if (
@@ -384,6 +391,15 @@ async def generate_response_stream(
                         openai_messages[0].get("role") == "system"
                     ):  # Update existing system prompt if necessary
                         openai_messages[0]["content"] = system_prompt_text
+
+                # Safeguard: Remove 'name' field from user messages if provider doesn't support it
+                if provider not in PROVIDERS_SUPPORTING_USERNAMES:
+                    for msg_data in openai_messages:
+                        if msg_data.get("role") == "user" and "name" in msg_data:
+                            del msg_data["name"]
+                            logging.debug(
+                                f"Removed 'name' field for user message for provider '{provider}'"
+                            )
 
                 api_content_kwargs["messages"] = openai_messages
                 api_config = extra_params.copy()
@@ -814,6 +830,16 @@ async def generate_response_stream(
                     )
             llm_errors.append(f"Key {key_display}: Initial Bad Request - {e}")
             raise AllKeysFailedError(provider, llm_errors) from e
+        except (
+            UnprocessableEntityError
+        ) as e:  # Catch 422 Unprocessable Entity specifically
+            logging.warning(
+                f"Initial Request Unprocessable Entity error for provider '{provider}' with key {key_display}. Error: {e}. Signaling for fallback."
+            )
+            llm_errors.append(f"Key {key_display}: Initial Unprocessable Entity - {e}")
+            last_error_type = "unprocessable_entity"
+            yield None, None, None, "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY"
+            return  # Stop this attempt and signal for fallback
         except APIError as e:  # Catch other OpenAI API errors
             logging.exception(f"Initial Request OpenAI API Error for key {key_display}")
             llm_errors.append(

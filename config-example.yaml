@@ -155,6 +155,12 @@ extra_api_parameters:
 system_prompt: |
   You are a helpful assistant.
 
+# System prompt for the fallback model (e.g., when a non-Gemini stream is incomplete or a 422 error occurs).
+# This prompt guides the fallback model (default: mistral/mistral-medium-latest) on how to respond concisely.
+# If commented out or empty, a default prompt emphasizing brevity will be used.
+# fallback_model_system_prompt: |
+#   You are a very concise assistant. The previous model failed. Briefly answer the user's query.
+
 # --- Output Sharing Settings (Optional) ---
 # Enables sharing LLM output via a public ngrok URL using Grip to render Markdown.
 output_sharing:
