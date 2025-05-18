@@ -51,6 +51,7 @@ from .commands import (  # Import command logic and preference getter
     setgeminithinking,
     get_user_gemini_thinking_budget_preference,  # Added Gemini thinking budget command and getter
     help_command,  # <-- ADDED: Import help_command
+    load_all_preferences,  # <-- ADDED: Import preference loader
 )
 from .permissions import is_message_allowed  # Import the permission checking function
 from .external_content import (
@@ -105,7 +106,11 @@ class LLMCordClient(discord.Client):
         )
 
     async def setup_hook(self):
-        """Sync slash commands when the bot is ready."""
+        """Sync slash commands and load preferences when the bot is ready."""
+        # --- ADDED: Load user preferences ---
+        await load_all_preferences()
+        # --- END ADDED ---
+
         # Register the command function with the tree
         self.tree.add_command(
             app_commands.Command(
@@ -146,7 +151,7 @@ class LLMCordClient(discord.Client):
         """Called when the bot is ready and logged in."""
         logging.info(f"Logged in as {self.user}")
         # Initial check/reset of rate limits
-        check_and_perform_global_reset(self.config)
+        await check_and_perform_global_reset(self.config)
 
     async def on_message(self, new_msg: discord.Message):
         """Handles incoming messages."""
@@ -187,8 +192,8 @@ class LLMCordClient(discord.Client):
 
         # --- Reload config & Check Global Reset ---
         # Config is now an instance variable, consider if reloading is needed per message
-        # self.config = get_config() # Uncomment if hot-reloading is desired
-        check_and_perform_global_reset(self.config)
+        # self.config = await get_config() # Uncomment if hot-reloading is desired, get_config is now async
+        await check_and_perform_global_reset(self.config)
 
         # --- Permissions Check ---
         if not is_message_allowed(new_msg, self.config, is_dm):

@@ -1,5 +1,6 @@
 import yaml
 import logging
+import aiofiles  # Added
 from .constants import (
     SEARXNG_BASE_URL_CONFIG_KEY,
     SEARXNG_DEFAULT_URL,
@@ -39,11 +40,14 @@ Output only the search queries, each on a new line. Do not add any other text, p
 # --- END DEFAULT GROUNDING PROMPT ---
 
 
-def get_config(filename="config.yaml"):
-    """Loads, validates, and returns the configuration from a YAML file."""
+async def get_config(filename="config.yaml"):
+    """Loads, validates, and returns the configuration from a YAML file asynchronously."""
     try:
-        with open(filename, "r", encoding="utf-8") as file:  # Specify encoding
-            config_data = yaml.safe_load(file)
+        async with aiofiles.open(
+            filename, "r", encoding="utf-8"
+        ) as file:  # Specify encoding
+            content = await file.read()
+            config_data = yaml.safe_load(content)
             if not isinstance(config_data, dict):
                 logging.error(f"CRITICAL: {filename} is not a valid YAML dictionary.")
                 exit()
@@ -408,10 +412,11 @@ def get_config(filename="config.yaml"):
         logging.error(
             f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it."
         )
-        exit()
+        # Instead of exit(), raise an exception or return None to be handled by the caller
+        raise  # Or return None / raise specific error
     except yaml.YAMLError as e:
         logging.error(f"CRITICAL: Error parsing {filename}: {e}")
-        exit()
+        raise  # Or return None / raise specific error
     except Exception as e:
         logging.error(f"CRITICAL: Unexpected error loading config from {filename}: {e}")
-        exit()
+        raise  # Or return None / raise specific error

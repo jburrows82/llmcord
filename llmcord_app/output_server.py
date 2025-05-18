@@ -1,16 +1,18 @@
 # llmcord_app/output_server.py
 import logging
 import os
-import shutil  # For directory cleanup
+
+# import shutil  # Replaced by aio_os operations
+import aiofiles.os as aio_os  # Added
 import time
 import uuid
 from typing import Optional, Dict, Any
-import http.server
-import socketserver
-import threading
+import http.server  # Remains synchronous
+import socketserver  # Remains synchronous
+import threading  # Remains synchronous
 import httpx  # Added for URL shortener
 
-from pyngrok import ngrok, conf as ngrok_conf
+from pyngrok import ngrok, conf as ngrok_conf  # Remains synchronous
 from pyngrok.exception import PyngrokError
 import markdown2
 
@@ -380,16 +382,45 @@ def stop_output_server():
     logging.info("Output server cleanup process complete.")
 
 
-def cleanup_shared_html_dir():
-    """Removes the shared HTML directory and its contents."""
-    if os.path.exists(SHARED_HTML_DIR):
+async def async_rmtree(path: str):
+    """Asynchronously removes a directory tree."""
+    if not await aio_os.path.isdir(path):
+        logging.warning(f"async_rmtree: {path} is not a directory or does not exist.")
+        return
+    try:
+        entries = await aio_os.listdir(path)
+        for entry in entries:
+            entry_path = os.path.join(
+                path, entry
+            )  # os.path.join is fine for path manipulation
+            if await aio_os.path.isdir(entry_path):
+                await async_rmtree(entry_path)
+            else:
+                await aio_os.remove(entry_path)
+        await aio_os.rmdir(path)
+        logging.debug(f"Successfully removed directory tree: {path}")
+    except Exception as e:
+        logging.error(f"Error in async_rmtree for {path}: {e}", exc_info=True)
+        # Depending on desired behavior, you might want to re-raise or handle more gracefully
+
+
+async def cleanup_shared_html_dir():
+    """Asynchronously removes the shared HTML directory and its contents."""
+    if await aio_os.path.exists(SHARED_HTML_DIR):
         try:
-            shutil.rmtree(SHARED_HTML_DIR)
-            logging.info(f"Removed shared HTML directory: {SHARED_HTML_DIR}")
-        except OSError as e:
-            logging.error(
-                f"Error removing shared HTML directory {SHARED_HTML_DIR}: {e}"
+            await async_rmtree(SHARED_HTML_DIR)
+            logging.info(
+                f"Asynchronously removed shared HTML directory: {SHARED_HTML_DIR}"
             )
+        except Exception as e:  # Catching broader exceptions from async_rmtree if any
+            logging.error(
+                f"Error asynchronously removing shared HTML directory {SHARED_HTML_DIR}: {e}",
+                exc_info=True,
+            )
+    else:
+        logging.info(
+            f"Shared HTML directory {SHARED_HTML_DIR} does not exist. No cleanup needed."
+        )
 
 
 # No atexit here, cleanup should be managed by main.py

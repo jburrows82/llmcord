@@ -6,6 +6,8 @@ from typing import List, Dict, Optional, Any
 import logging  # <-- Add this import
 import json  # <-- Add this import
 import os  # <-- Add this import
+import aiofiles  # <-- Add this import
+import aiofiles.os as aio_os  # <-- Add this import
 
 from .constants import (
     AVAILABLE_MODELS,
@@ -19,16 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 # --- ADDED: Helper functions for loading and saving user preferences ---
-def _load_user_preferences(filename: str) -> Dict[int, Any]:
-    """Loads user preferences from a JSON file."""
-    if not os.path.exists(filename):
+async def _load_user_preferences(filename: str) -> Dict[int, Any]:
+    """Loads user preferences from a JSON file asynchronously."""
+    if not await aio_os.path.exists(filename):
         logger.info(
             f"Preference file '{filename}' not found. Starting with empty preferences."
         )
         return {}
     try:
-        with open(filename, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        async with aiofiles.open(filename, "r", encoding="utf-8") as f:
+            content = await f.read()
+            data = json.loads(content)
             # Convert string keys from JSON back to integers
             return {int(k): v for k, v in data.items()}
     except json.JSONDecodeError:
@@ -36,7 +39,7 @@ def _load_user_preferences(filename: str) -> Dict[int, Any]:
             f"Error decoding JSON from '{filename}'. Starting with empty preferences."
         )
         # Optionally, create a backup of the corrupted file here
-        # os.rename(filename, filename + ".corrupted")
+        # await aio_os.rename(filename, filename + ".corrupted")
         return {}
     except IOError as e:
         logger.error(
@@ -50,11 +53,16 @@ def _load_user_preferences(filename: str) -> Dict[int, Any]:
         return {}
 
 
-def _save_user_preferences(filename: str, data: Dict[int, Any]):
-    """Saves user preferences to a JSON file."""
+async def _save_user_preferences(filename: str, data: Dict[int, Any]):
+    """Saves user preferences to a JSON file asynchronously."""
     try:
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+        # Ensure the directory exists
+        directory = os.path.dirname(filename)
+        if directory and not await aio_os.path.exists(directory):
+            await aio_os.makedirs(directory)
+
+        async with aiofiles.open(filename, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(data, indent=4))
         logger.debug(f"Saved user preferences to '{filename}'.")
     except IOError as e:
         logger.error(f"IOError writing to '{filename}': {e}")
@@ -62,23 +70,36 @@ def _save_user_preferences(filename: str, data: Dict[int, Any]):
         logger.error(f"Unexpected error saving preferences to '{filename}': {e}")
 
 
-# This dictionary will store user preferences {user_id: "provider/model_name"}
-# It should be managed by the bot instance or a dedicated state manager in a real app.
-# For this refactor, we'll keep it simple as a module-level dict.
-user_model_preferences: Dict[int, str] = _load_user_preferences(
-    USER_MODEL_PREFS_FILENAME
-)
+# These dictionaries will store user preferences.
+# They will be loaded asynchronously during bot setup.
+user_model_preferences: Dict[int, str] = {}
+user_system_prompt_preferences: Dict[int, Optional[str]] = {}
+user_gemini_thinking_budget_preferences: Dict[int, bool] = {}
 
 
-# --- MODIFIED: Initialize user-specific system prompts from file ---
-user_system_prompt_preferences: Dict[int, Optional[str]] = _load_user_preferences(
-    USER_SYSTEM_PROMPTS_FILENAME
-)
+# --- ADDED: Function to load all preferences ---
+async def load_all_preferences():
+    """Loads all user preferences from their respective files."""
+    global \
+        user_model_preferences, \
+        user_system_prompt_preferences, \
+        user_gemini_thinking_budget_preferences
 
-# --- ADDED: Initialize user-specific Gemini thinking budget preferences ---
-user_gemini_thinking_budget_preferences: Dict[int, bool] = _load_user_preferences(
-    USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME
-)
+    loaded_model_prefs = await _load_user_preferences(USER_MODEL_PREFS_FILENAME)
+    if loaded_model_prefs:  # Only update if loading was successful and returned data
+        user_model_preferences.update(loaded_model_prefs)
+
+    loaded_system_prompts = await _load_user_preferences(USER_SYSTEM_PROMPTS_FILENAME)
+    if loaded_system_prompts:
+        user_system_prompt_preferences.update(loaded_system_prompts)
+
+    loaded_gemini_prefs = await _load_user_preferences(
+        USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME
+    )
+    if loaded_gemini_prefs:
+        user_gemini_thinking_budget_preferences.update(loaded_gemini_prefs)
+
+    logger.info("User preferences loaded.")
 
 
 # --- Slash Command Autocomplete Functions ---
@@ -144,7 +165,7 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
     )
 
     # --- ADDED: Save model preferences ---
-    _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
+    await _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
     # --- END ADDED ---
 
     await interaction.response.send_message(
@@ -192,7 +213,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
             )
 
         # --- ADDED: Save preferences after modification ---
-        _save_user_preferences(
+        await _save_user_preferences(
             USER_SYSTEM_PROMPTS_FILENAME, user_system_prompt_preferences
         )
 
@@ -265,7 +286,7 @@ async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
             ephemeral=False,
         )
 
-        _save_user_preferences(
+        await _save_user_preferences(
             USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
             user_gemini_thinking_budget_preferences,
         )

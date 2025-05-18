@@ -4,6 +4,8 @@ import time
 import logging
 from datetime import timedelta
 from typing import Set, Dict, List
+import aiofiles  # Added
+import aiofiles.os as aio_os  # Added
 
 from .constants import DB_FOLDER, RATE_LIMIT_COOLDOWN_SECONDS, GLOBAL_RESET_FILE
 
@@ -17,9 +19,11 @@ class RateLimitDBManager:
         self.conn = None
         self._connect()
 
-    def _connect(self):
+    def _connect(self):  # This remains synchronous due to sqlite3
         """Establishes connection to the database and creates table if needed."""
         try:
+            # Synchronous os.makedirs is fine here as it's part of a sync method
+            # If this whole class were to be made async with aiosqlite, this would change.
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self.conn = sqlite3.connect(self.db_path)
             self._create_table()
@@ -119,24 +123,30 @@ def get_db_manager(service_name: str) -> RateLimitDBManager:
     """Gets or creates a DB manager for a specific service."""
     global db_managers
     if service_name not in db_managers:
+        # Ensure DB_FOLDER exists before creating RateLimitDBManager
+        # This is a synchronous operation, acceptable during initialization.
+        if not os.path.exists(DB_FOLDER):
+            os.makedirs(DB_FOLDER, exist_ok=True)
+
         db_path = os.path.join(
             DB_FOLDER, f"ratelimit_{service_name.lower().replace('-', '_')}.db"
         )
         db_managers[service_name] = RateLimitDBManager(db_path)
     # Ensure connection is alive (e.g., if it failed initially)
     if db_managers[service_name].conn is None:
-        db_managers[service_name]._connect()
+        db_managers[service_name]._connect()  # This is a sync connect
     return db_managers[service_name]
 
 
-def check_and_perform_global_reset(cfg: Dict):
-    """Checks if 24 hours have passed since the last reset and resets all DBs if so."""
+async def check_and_perform_global_reset(cfg: Dict):
+    """Checks if 24 hours have passed since the last reset and resets all DBs if so. (Async file ops)"""
     now = time.time()
     last_reset_time = 0.0
     try:
-        if os.path.exists(GLOBAL_RESET_FILE):
-            with open(GLOBAL_RESET_FILE, "r") as f:
-                content = f.read().strip()
+        if await aio_os.path.exists(GLOBAL_RESET_FILE):
+            async with aiofiles.open(GLOBAL_RESET_FILE, "r") as f:
+                content = await f.read()
+                content = content.strip()
                 if content:  # Ensure file is not empty
                     last_reset_time = float(content)
                 else:
@@ -150,32 +160,29 @@ def check_and_perform_global_reset(cfg: Dict):
 
     if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
         logging.info("Performing global 24-hour rate limit database reset.")
-        # Ensure all potential DB managers are instantiated before resetting
+
+        # Ensure DB_FOLDER exists before any DB operations
+        if not await aio_os.path.exists(DB_FOLDER):
+            await aio_os.makedirs(DB_FOLDER)
+
         services_in_config = set()
         providers = cfg.get("providers", {})
         for provider_name, provider_cfg in providers.items():
-            # Check if provider_cfg is a dict and has non-empty api_keys list
             if isinstance(provider_cfg, dict) and provider_cfg.get("api_keys"):
                 services_in_config.add(provider_name)
-        if cfg.get("serpapi_api_keys"):  # Check SerpAPI separately
+        if cfg.get("serpapi_api_keys"):
             services_in_config.add("serpapi")
-        # Add other services with keys here if needed
 
-        # Reset DBs for services found in config
         for service_name in services_in_config:
-            manager = get_db_manager(service_name)
-            manager.reset_db()
+            manager = get_db_manager(service_name)  # get_db_manager is sync
+            manager.reset_db()  # reset_db is sync
 
-        # Also reset any managers that might exist but weren't in config scan (less likely but safe)
-        # This handles cases where a DB exists but the service was removed from config
-        for manager in list(
-            db_managers.values()
-        ):  # Iterate over a copy in case dict changes
-            manager.reset_db()
+        for manager in list(db_managers.values()):
+            manager.reset_db()  # reset_db is sync
 
         try:
-            with open(GLOBAL_RESET_FILE, "w") as f:
-                f.write(str(now))
+            async with aiofiles.open(GLOBAL_RESET_FILE, "w") as f:
+                await f.write(str(now))
         except IOError as e:
             logging.error(
                 f"Could not write last reset timestamp to {GLOBAL_RESET_FILE}: {e}"
@@ -191,12 +198,19 @@ def check_and_perform_global_reset(cfg: Dict):
 
 
 async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str]:
-    """Gets available (non-rate-limited) keys for a service."""
+    """Gets available (non-rate-limited) keys for a service. (DB ops remain sync)"""
     if not all_keys:
         return []
 
-    db_manager = get_db_manager(service_name)
-    limited_keys = db_manager.get_limited_keys(RATE_LIMIT_COOLDOWN_SECONDS)
+    # Ensure DB_FOLDER exists before get_db_manager is called, if it might create a new DB
+    # This is a bit redundant if check_and_perform_global_reset already ran, but safe.
+    if not await aio_os.path.exists(DB_FOLDER) and service_name not in db_managers:
+        await aio_os.makedirs(DB_FOLDER)
+
+    db_manager = get_db_manager(service_name)  # get_db_manager is sync
+    limited_keys = db_manager.get_limited_keys(
+        RATE_LIMIT_COOLDOWN_SECONDS
+    )  # get_limited_keys is sync
     available_keys = [key for key in all_keys if key not in limited_keys]
 
     if (
@@ -205,13 +219,13 @@ async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str
         logging.warning(
             f"All keys for service '{service_name}' are currently rate-limited. Resetting DB and using full list for this attempt."
         )
-        db_manager.reset_db()
+        db_manager.reset_db()  # reset_db is sync
         return all_keys  # Return the full list after reset
 
     return available_keys
 
 
-def close_all_db_managers():
+def close_all_db_managers():  # This remains synchronous
     """Closes all active database manager connections."""
     global db_managers
     logging.info("Closing database connections...")

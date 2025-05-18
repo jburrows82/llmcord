@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import discord
+import yaml  # Added import
 
 # Import necessary components using absolute paths from the package root
 from llmcord_app.config import get_config
@@ -29,7 +30,25 @@ logging.getLogger("asyncprawcore").setLevel(logging.WARNING)  # Reduce asyncpraw
 async def main():
     """Main entry point for the bot."""
     # Load configuration
-    cfg = get_config()  # Load config once
+    try:
+        cfg = await get_config()  # Load config once, now async
+    except FileNotFoundError:
+        logging.critical(
+            "CRITICAL: config.yaml not found. Please copy config-example.yaml to config.yaml and configure it. Exiting."
+        )
+        return
+    except yaml.YAMLError as e:
+        logging.critical(f"CRITICAL: Error parsing config.yaml: {e}. Exiting.")
+        return
+    except Exception as e:
+        logging.critical(
+            f"CRITICAL: Unexpected error loading config.yaml: {e}. Exiting."
+        )
+        return
+
+    if cfg is None:  # Should be caught by exceptions above, but as a safeguard
+        logging.critical("CRITICAL: Configuration could not be loaded. Exiting.")
+        return
 
     # Basic check for bot token after loading config
     bot_token = cfg.get("bot_token")
@@ -91,7 +110,7 @@ async def main():
                 "Attempting to cleanup shared HTML directory as cleanup_on_shutdown is true..."
             )
             try:
-                await asyncio.to_thread(cleanup_shared_html_dir)
+                await cleanup_shared_html_dir()  # Changed from asyncio.to_thread
             except Exception as e:
                 logging.error(
                     f"Error during shared HTML directory cleanup: {e}", exc_info=True
