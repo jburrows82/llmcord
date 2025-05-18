@@ -140,8 +140,6 @@ Do not apologize for the previous model. Focus on fulfilling the user's request 
 AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-04-17",
-        "gemini-2.5-pro-exp-03-25",  # Note: Experimental
-        "gemini-2.0-flash",
         # Add other Gemini models as needed/supported
     ],
     "openai": [
@@ -149,7 +147,6 @@ AVAILABLE_MODELS = {
         "claude-3.7-sonnet",
         "claude-3.7-sonnet-thought",
         "o4-mini",
-        "gemini-2.5-pro",
         # Add other OpenAI models as needed/supported
     ],
     "x-ai": [
