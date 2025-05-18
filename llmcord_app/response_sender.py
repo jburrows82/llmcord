@@ -87,6 +87,7 @@ async def handle_llm_response_stream(
 
     should_retry_with_gemini_signal = False
     should_retry_due_to_unprocessable_entity = False  # New flag for 422 error
+    should_retry_due_to_all_keys_failed = False  # New flag for all keys failed
 
     original_provider_param = provider
     original_model_name_param = model_name
@@ -105,6 +106,7 @@ async def handle_llm_response_stream(
             if not (
                 should_retry_with_gemini_signal
                 or should_retry_due_to_unprocessable_entity
+                or should_retry_due_to_all_keys_failed  # Check new flag
             ):
                 break  # No signal to retry, so exit the loop
 
@@ -115,6 +117,10 @@ async def handle_llm_response_stream(
             elif should_retry_due_to_unprocessable_entity:
                 logging.info(
                     f"Original model '{original_model_name_param}' failed with Unprocessable Entity. Deleting incomplete messages and retrying with fallback model..."
+                )
+            elif should_retry_due_to_all_keys_failed:
+                logging.info(
+                    f"Original model '{original_model_name_param}' failed due to all API keys exhausted. Deleting incomplete messages and retrying with fallback model..."
                 )
 
             # --- Deletion Logic for Incomplete Messages ---
@@ -173,6 +179,8 @@ async def handle_llm_response_stream(
                 warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
             elif should_retry_due_to_unprocessable_entity:
                 warning_message = f"⚠️ Original model ({original_model_name_param}) failed (422 Error). Retrying with `{fallback_model_str}`..."
+            elif should_retry_due_to_all_keys_failed:
+                warning_message = f"⚠️ Original model ({original_model_name_param}) failed (All API keys exhausted). Retrying with `{fallback_model_str}`..."
             else:  # Should not happen if loop condition is correct
                 warning_message = f"⚠️ Retrying with `{fallback_model_str}` due to an unspecified issue with {original_model_name_param}."
             initial_user_warnings.add(
@@ -311,10 +319,11 @@ async def handle_llm_response_stream(
                     response_msgs = []
             else:
                 response_msgs = []
+
+            # Reset all retry flags after initiating the retry
             should_retry_with_gemini_signal = False
-            should_retry_due_to_unprocessable_entity = (
-                False  # Reset flag after initiating retry
-            )
+            should_retry_due_to_unprocessable_entity = False
+            should_retry_due_to_all_keys_failed = False
 
         base_embed = discord.Embed()
         footer_text = f"Model: {current_model_name}"
@@ -768,19 +777,28 @@ async def handle_llm_response_stream(
             logging.error(
                 f"LLM generation failed for message {new_msg.id} (Attempt {attempt_num + 1}, Model {current_model_name}): {e}"
             )
-            error_text = f"⚠️ All API keys for provider `{e.service_name}` failed."
-            last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
-            error_text += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
-            await _handle_llm_exception(
-                new_msg,
-                processing_msg,
-                response_msgs,
-                error_text,
-                use_plain_responses_config,
-                client.config.get("use_plain_responses", False),
-            )
-            llm_call_successful_final = False
-            break
+            if attempt_num == 0:  # Original attempt failed due to all keys
+                logging.info(
+                    f"AllKeysFailedError on original attempt for {current_provider}/{current_model_name}. Setting flag to retry with fallback."
+                )
+                should_retry_due_to_all_keys_failed = True
+                # Don't break yet, let the loop continue to the retry logic
+                continue
+            else:  # AllKeysFailedError on the retry attempt, this is a final failure
+                error_text = f"⚠️ All API keys for fallback provider `{e.service_name}` also failed."
+                last_err_str = str(e.errors[-1]) if e.errors else "Unknown reason."
+                error_text += f"\nLast error: `{last_err_str[:100]}{'...' if len(last_err_str) > 100 else ''}`"
+                await _handle_llm_exception(
+                    new_msg,
+                    processing_msg,
+                    response_msgs,
+                    error_text,
+                    use_plain_responses_config,
+                    client.config.get("use_plain_responses", False),
+                )
+                llm_call_successful_final = False
+                break  # Break from the attempt loop
+
         except Exception as outer_e:
             logging.exception(
                 f"Unhandled error during message processing for {new_msg.id} (Attempt {attempt_num + 1}, Model {current_model_name})."

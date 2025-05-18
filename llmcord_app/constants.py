@@ -18,7 +18,7 @@ VISION_MODEL_TAGS = (
     "vl",
     "flash",
     "grok",
-    "mistral"
+    "mistral",
 )
 PROVIDERS_SUPPORTING_USERNAMES = (
     "openai"  # x-ai might support it too, needs verification
