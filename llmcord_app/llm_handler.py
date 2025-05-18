@@ -41,6 +41,10 @@ async def generate_response_stream(
 ) -> AsyncGenerator[
     Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
 ]:
+    # Track image compression information
+    compression_occurred = False
+    final_quality = 100  # Start with original quality
+    final_resize = 1.0  # Start with original size
     """
     Generates a response stream from the specified LLM provider.
 
@@ -629,6 +633,14 @@ async def generate_response_stream(
                         logging.info(
                             f"LLM request successful with key {key_display} on compression attempt {compression_attempt + 1}"
                         )
+
+                        # Add compression warning if compression occurred
+                        if compression_occurred:
+                            quality_pct = final_quality
+                            resize_pct = int(final_resize * 100)
+                            user_warning = f"⚠️ The image is at {quality_pct}% of the original quality and has been resized to {resize_pct}% so the request works."
+                            yield None, None, None, f"COMPRESSION_INFO:{user_warning}"
+
                         yield (
                             None,
                             stream_finish_reason,
@@ -878,6 +890,11 @@ async def generate_response_stream(
                             msg_data["content"] = new_content_parts
 
                     if history_was_modified_by_compression:
+                        # Track compression information
+                        compression_occurred = True
+                        final_quality = min(final_quality, current_compression_quality)
+                        final_resize = min(final_resize, current_resize_factor)
+
                         history_for_current_compression_cycle = temp_compressed_history  # Use compressed history for next attempt with this key
                         # Adjust parameters for the *next* compression attempt with this key
                         current_compression_quality = max(
@@ -1063,6 +1080,11 @@ async def generate_response_stream(
                             msg_data["parts"] = new_gemini_parts
 
                     if history_was_modified_by_compression:
+                        # Track compression information
+                        compression_occurred = True
+                        final_quality = min(final_quality, current_compression_quality)
+                        final_resize = min(final_resize, current_resize_factor)
+
                         history_for_current_compression_cycle = temp_compressed_history
                         current_compression_quality = max(
                             10, current_compression_quality - 20

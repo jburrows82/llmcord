@@ -382,6 +382,50 @@ async def handle_llm_response_stream(
                                 "Unprocessable Entity error on retry attempt."
                             )
 
+                    # Check for compression warning message
+                    if error_message and error_message.startswith("COMPRESSION_INFO:"):
+                        try:
+                            # Extract compression information from the error_message
+                            compression_msg = error_message.replace(
+                                "COMPRESSION_INFO:", ""
+                            ).strip()
+                            logging.info(
+                                f"Image compression detected: {compression_msg}"
+                            )
+
+                            # Create a new embed with the same properties
+                            new_embed = discord.Embed(color=base_embed.color)
+
+                            # Copy footer if exists
+                            if base_embed.footer:
+                                new_embed.set_footer(text=base_embed.footer.text)
+
+                            # Copy fields except existing compression warnings
+                            for field in base_embed.fields:
+                                if not field.name.startswith(
+                                    "⚠️ The image is at"
+                                ) and not field.name.startswith("⚠️ the image is at"):
+                                    new_embed.add_field(
+                                        name=field.name,
+                                        value=field.value,
+                                        inline=field.inline,
+                                    )
+
+                            # Add the new compression warning
+                            warning_field_name = compression_msg
+                            new_embed.add_field(
+                                name=warning_field_name, value="", inline=False
+                            )
+
+                            # Replace the base_embed with our new one
+                            base_embed = new_embed
+
+                            # Continue processing, this isn't a fatal error
+                            error_message = None
+                        except Exception as e:
+                            logging.error(f"Error processing compression warning: {e}")
+                            # Continue with normal processing if parsing fails
+
                     if error_message:  # Handles cases where error_message was set above or passed directly
                         logging.error(
                             f"LLM stream failed for {current_provider}/{current_model_name} (Attempt {attempt_num + 1}): {error_message}"
