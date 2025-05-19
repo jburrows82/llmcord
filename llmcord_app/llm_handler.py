@@ -14,7 +14,7 @@ from openai import (
     AuthenticationError,
     APIConnectionError,
     BadRequestError,
-    UnprocessableEntityError,  # Added import
+    UnprocessableEntityError,
 )
 
 # Google Gemini specific imports
@@ -26,7 +26,7 @@ from .constants import (
     GEMINI_SAFETY_SETTINGS_DICT,
     AllKeysFailedError,
     PROVIDERS_SUPPORTING_USERNAMES,
-)  # Added PROVIDERS_SUPPORTING_USERNAMES
+)
 from .rate_limiter import get_db_manager, get_available_keys
 from .utils import _truncate_base64_in_payload, default_serializer
 
@@ -616,7 +616,7 @@ async def generate_response_stream(
                         stream_grounding_metadata,
                         f"Response {'blocked by safety' if is_blocked_by_safety else 'stopped by recitation'}.",
                     )
-                    return  # Stop generation entirely if safety/recitation block from any key.
+                    return
 
                 if (
                     stream_finish_reason and content_received
@@ -710,7 +710,7 @@ async def generate_response_stream(
                             stream_grounding_metadata,
                             "RETRY_WITH_GEMINI_NO_FINISH_REASON",
                         )
-                        return  # Stop this attempt, let outer logic handle retry signal
+                        return
                     else:  # Gemini stream ended with content but no explicit finish reason (should be rare)
                         logging.warning(
                             f"Gemini stream for key {key_display} ended with content but no explicit finish reason. Treating as complete."
@@ -720,7 +720,7 @@ async def generate_response_stream(
                             "stop",
                             stream_grounding_metadata,
                             None,
-                        )  # Assume stop
+                        )
                         return
 
                 # If no content, no finish reason, and stream didn't break unexpectedly (e.g. empty response)
@@ -734,10 +734,10 @@ async def generate_response_stream(
                     )
                     llm_errors.append(f"Key {key_display}: Empty response")
                     last_error_type = "empty_response"
-                    break  # Break compression loop, try next API key
+                    break
 
                 # If we fall through here, it implies an issue not caught above, break compression loop.
-                break  # Break compression loop by default if no other condition met after stream.
+                break
 
             # --- Handle Initial API Call Errors / Compression Trigger ---
             except APIError as e:  # OpenAI specific
@@ -754,7 +754,7 @@ async def generate_response_stream(
                         llm_errors.append(
                             f"Key {key_display}: Max compression retries for 413 failed."
                         )
-                        break  # Break compression loop, try next API key
+                        break
 
                     logging.info(
                         f"Attempting image compression (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
@@ -906,7 +906,7 @@ async def generate_response_stream(
                         logging.info(
                             f"Retrying API call for key {key_display} with compressed images (Attempt {compression_attempt}/{max_compression_attempts})."
                         )
-                        continue  # Continue to next iteration of the compression `while` loop
+                        continue
                     else:
                         logging.warning(
                             f"413 error for key {key_display}, but no images were compressed/modified. Trying next API key."
@@ -914,7 +914,7 @@ async def generate_response_stream(
                         llm_errors.append(
                             f"Key {key_display}: 413 but no images to compress or compression ineffective."
                         )
-                        break  # Break compression loop, try next API key
+                        break
                 else:  # Other APIError for OpenAI
                     logging.warning(
                         f"Initial Request OpenAI API Error for key {key_display}: {type(e).__name__} - {e}. Trying next key."
@@ -927,7 +927,7 @@ async def generate_response_stream(
                         if current_api_key != "dummy_key":
                             llm_db_manager.add_key(current_api_key)
                         last_error_type = "rate_limit"
-                    break  # Break compression loop, try next API key
+                    break
 
             except (RateLimitError, google_api_exceptions.ResourceExhausted) as e:
                 logging.warning(
@@ -937,7 +937,7 @@ async def generate_response_stream(
                     llm_db_manager.add_key(current_api_key)
                 llm_errors.append(f"Key {key_display}: Initial Rate Limited")
                 last_error_type = "rate_limit"
-                break  # Break compression loop, try next API key
+                break
             except (AuthenticationError, google_api_exceptions.PermissionDenied) as e:
                 logging.error(
                     f"Initial Request Authentication failed for provider '{provider}' with key {key_display}. Error: {e}. Aborting retries for all keys."
@@ -956,7 +956,7 @@ async def generate_response_stream(
                     f"Key {key_display}: Initial Connection/Service Error - {type(e).__name__}"
                 )
                 last_error_type = "connection"
-                break  # Break compression loop, try next API key
+                break
 
             except (BadRequestError, google_api_exceptions.InvalidArgument) as e:
                 # Check if Gemini error is due to "request entity too large"
@@ -981,7 +981,7 @@ async def generate_response_stream(
                         llm_errors.append(
                             f"Key {key_display}: Max compression retries for Gemini 'too large' failed."
                         )
-                        break  # Break compression loop, try next API key
+                        break
 
                     logging.info(
                         f"Attempting image compression for Gemini (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
@@ -1093,7 +1093,7 @@ async def generate_response_stream(
                         logging.info(
                             f"Retrying Gemini API call for key {key_display} with compressed images (Attempt {compression_attempt}/{max_compression_attempts})."
                         )
-                        continue  # Continue to next iteration of the compression `while` loop
+                        continue
                     else:
                         logging.warning(
                             f"Gemini 'too large' error for key {key_display}, but no images were compressed/modified. Trying next API key."
@@ -1101,7 +1101,7 @@ async def generate_response_stream(
                         llm_errors.append(
                             f"Key {key_display}: Gemini 'too large' but no images to compress or compression ineffective."
                         )
-                        break  # Break compression loop, try next API key
+                        break
                 else:  # Other BadRequestError or InvalidArgument
                     logging.error(
                         f"Initial Request Bad request error for provider '{provider}' with key {key_display}. Error: {e}. Aborting retries for all keys."
@@ -1137,7 +1137,7 @@ async def generate_response_stream(
                     f"Key {key_display}: Initial Google API Error - {type(e).__name__}: {e}"
                 )
                 last_error_type = "google_api"
-                break  # Break compression loop, try next API key
+                break
             except Exception as e:  # Catch other unexpected errors
                 logging.exception(
                     f"Unexpected error during initial LLM call with key {key_display}"
@@ -1146,7 +1146,7 @@ async def generate_response_stream(
                     f"Key {key_display}: Unexpected Initial Error - {type(e).__name__}"
                 )
                 last_error_type = "unexpected"
-                break  # Break compression loop, try next API key
+                break
         # --- End of inner compression retry while-loop ---
 
         # If the compression loop was broken (e.g. by a non-413 error, or max compression attempts for 413),

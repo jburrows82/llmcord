@@ -1,19 +1,15 @@
-# llmcord_app/bot.py
 import logging
-import re  # <-- Added import
+import re
 import time
 from typing import Dict
 
 import discord
 from discord import app_commands
 
-# Use google.genai.types
 from google.genai import types as google_types
 
 import httpx
 
-# Import from our modules
-# Remove the incorrect import of cfg
 from .constants import (
     MAX_MESSAGE_NODES,
     MAX_EMBED_DESCRIPTION_LENGTH,
@@ -24,54 +20,51 @@ from .constants import (
     DEEP_SEARCH_KEYWORDS,
     DEEP_SEARCH_MODEL,
     PROVIDERS_SUPPORTING_USERNAMES,
-    MAX_PLAIN_TEXT_LENGTH,  # <-- Added plain text limit
+    MAX_PLAIN_TEXT_LENGTH,
     GROUNDING_MODEL_PROVIDER,
-    GROUNDING_MODEL_NAME,  # Added Grounding model constants
-    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,  # <-- ADDED
+    GROUNDING_MODEL_NAME,
+    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
-    GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,  # Added Gemini Thinking Budget keys
-    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL,  # <-- ADDED for configurable fallback vision model
-    EMBED_COLOR_ERROR,  # <-- ADDED for empty query error
+    GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL,
+    EMBED_COLOR_ERROR,
 )
 
-# Corrected import: Use the models module directly
-from . import models  # Import the models module
+from . import models
 from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
 from .utils import (
     extract_urls_with_indices,
-    is_image_url,  # Added is_image_url
+    is_image_url,
     extract_text_from_pdf_bytes,
 )
 from .llm_handler import generate_response_stream
-from .commands import (  # Import command logic and preference getter
+from .commands import (
     set_model_command,
     get_user_model_preference,
     set_system_prompt_command,
     get_user_system_prompt_preference,
     setgeminithinking,
-    get_user_gemini_thinking_budget_preference,  # Added Gemini thinking budget command and getter
-    help_command,  # <-- ADDED: Import help_command
-    load_all_preferences,  # <-- ADDED: Import preference loader
+    get_user_gemini_thinking_budget_preference,
+    help_command,
+    load_all_preferences,
 )
-from .permissions import is_message_allowed  # Import the permission checking function
+from .permissions import is_message_allowed
 from .external_content import (
     fetch_external_content,
     format_external_content,
-)  # Import external content functions
+)
 from .grounding import (
     get_web_search_queries_from_gemini,
     fetch_and_format_searxng_results,
-)  # Import grounding functions
-from .prompt_utils import prepare_system_prompt  # Import prompt utility
-from .response_sender import (  # Import response sending functions
+)
+from .prompt_utils import prepare_system_prompt
+from .response_sender import (
     send_initial_processing_message,
     handle_llm_response_stream,
-    resend_imgur_urls,  # Also import this helper if direct calls are made from bot.py for exceptions outside stream
+    resend_imgur_urls,
 )
-from .history_utils import build_message_history  # Import history utilities
+from .history_utils import build_message_history
 
-
-# --- Discord Client Setup ---
 class LLMCordClient(discord.Client):
     def __init__(
         self,
@@ -107,9 +100,7 @@ class LLMCordClient(discord.Client):
 
     async def setup_hook(self):
         """Sync slash commands and load preferences when the bot is ready."""
-        # --- ADDED: Load user preferences ---
         await load_all_preferences()
-        # --- END ADDED ---
 
         # Register the command function with the tree
         self.tree.add_command(
@@ -119,7 +110,6 @@ class LLMCordClient(discord.Client):
                 callback=set_model_command,
             )
         )
-        # --- ADDED: Register /systemprompt command ---
         self.tree.add_command(
             app_commands.Command(
                 name="systemprompt",
@@ -127,7 +117,6 @@ class LLMCordClient(discord.Client):
                 callback=set_system_prompt_command,
             )
         )
-        # --- ADDED: Register /setgeminithinking command ---
         self.tree.add_command(
             app_commands.Command(
                 name="setgeminithinking",
@@ -135,7 +124,6 @@ class LLMCordClient(discord.Client):
                 callback=setgeminithinking,
             )
         )
-        # --- ADDED: Register /help command ---
         self.tree.add_command(
             app_commands.Command(
                 name="help",
@@ -155,7 +143,6 @@ class LLMCordClient(discord.Client):
 
     async def on_message(self, new_msg: discord.Message):
         """Handles incoming messages."""
-        # --- Basic Checks and Trigger ---
         if new_msg.author.bot or new_msg.author == self.user:
             return
         start_time = time.time()
@@ -190,25 +177,19 @@ class LLMCordClient(discord.Client):
         if not should_process:
             return
 
-        # --- Reload config & Check Global Reset ---
-        # Config is now an instance variable, consider if reloading is needed per message
-        # self.config = await get_config() # Uncomment if hot-reloading is desired, get_config is now async
         await check_and_perform_global_reset(self.config)
 
-        # --- Permissions Check ---
         if not is_message_allowed(new_msg, self.config, is_dm):
             logging.warning(
                 f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions."
             )
             return
 
-        # --- Send Initial "Processing" Message ---
         _use_plain_for_initial_status = self.config.get("use_plain_responses", False)
         processing_msg = await send_initial_processing_message(
             new_msg, _use_plain_for_initial_status
         )
 
-        # --- Clean Content and Check for Google Lens ---
         cleaned_content = original_content_for_processing
         if not is_dm and mentions_bot:
             cleaned_content = cleaned_content.replace(self.user.mention, "").strip()
@@ -240,12 +221,10 @@ class LLMCordClient(discord.Client):
                 cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
                 logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
 
-        # --- LLM Provider/Model Selection ---
         user_id = new_msg.author.id
         default_model_str = self.config.get("model", "google/gemini-2.0-flash")
         provider_slash_model = get_user_model_preference(user_id, default_model_str)
 
-        # --- Override Model based on Keywords ---
         final_provider_slash_model = provider_slash_model
         if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
             target_model_str = DEEP_SEARCH_MODEL
@@ -287,7 +266,6 @@ class LLMCordClient(discord.Client):
                     f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason})."
                 )
 
-        # --- Validate Final Model Selection ---
         try:
             provider, model_name = final_provider_slash_model.split("/", 1)
             if (
@@ -310,7 +288,6 @@ class LLMCordClient(discord.Client):
             f"Final model selected for user {user_id}: '{final_provider_slash_model}'"
         )
 
-        # --- Get Config for the FINAL Provider ---
         provider_config = self.config.get("providers", {}).get(provider, {})
         if not isinstance(provider_config, dict):
             logging.error(
@@ -337,7 +314,6 @@ class LLMCordClient(discord.Client):
             # ... (error handling for missing API keys)
             return
 
-        # --- Configuration Values ---
         accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
         if provider == "openai" and provider_config.get("disable_vision", False):
             accept_files = False
@@ -646,7 +622,6 @@ class LLMCordClient(discord.Client):
         )
 
         if not history_for_llm:
-            # ... (handle empty history)
             return
 
         logging.info(
@@ -696,7 +671,7 @@ class LLMCordClient(discord.Client):
         )
 
         try:
-            pass  # Placeholder
+            pass
         finally:
             if llm_call_successful and final_text:
                 await resend_imgur_urls(new_msg, response_msgs, final_text)
@@ -743,11 +718,6 @@ class LLMCordClient(discord.Client):
                 f"Finished processing message {new_msg.id}. Success: {llm_call_successful}. Total time: {end_time - start_time:.2f} seconds."
             )
 
-    # All internal methods that were moved out are now removed from the class definition.
-    # _is_allowed, _fetch_external_content, _format_external_content,
-    # _build_message_history, _find_parent_message, _prepare_system_prompt,
-    # _get_web_search_queries_from_gemini, _fetch_and_format_searxng_results
-    # are no longer defined here.
 
     async def close(self):
         """Clean up resources when the bot is shutting down."""

@@ -1,4 +1,3 @@
-# llmcord_app/grounding.py
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
@@ -6,7 +5,7 @@ from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
 import discord  # For discord.utils.escape_markdown
 import httpx
 
-from . import models  # Use relative import
+from . import models
 from .constants import (
     GROUNDING_MODEL_PROVIDER,
     GROUNDING_MODEL_NAME,
@@ -22,14 +21,12 @@ from .content_fetchers import (
     fetch_general_url_content,
 )
 from .utils import is_youtube_url, is_reddit_url, extract_reddit_submission_id
-# The generate_response_stream function will be passed as an argument
 
 
 async def get_web_search_queries_from_gemini(
     history_for_gemini_grounding: List[Dict[str, Any]],
     system_prompt_text_for_grounding: Optional[str],
     config: Dict[str, Any],
-    # Pass the generate_response_stream function as a callable
     generate_response_stream_func: Callable[
         [str, str, List[Dict[str, Any]], Optional[str], Dict[str, Any], Dict[str, Any]],
         AsyncGenerator[
@@ -57,7 +54,7 @@ async def get_web_search_queries_from_gemini(
         grounding_extra_params = {
             "temperature": 1,
             "thinking_budget": 0,
-        }  # Could be configurable
+        }
 
         stream_generator = generate_response_stream_func(
             provider=GROUNDING_MODEL_PROVIDER,

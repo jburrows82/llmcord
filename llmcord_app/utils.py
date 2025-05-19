@@ -3,7 +3,7 @@ import json
 from typing import List, Tuple, Optional, Any
 import discord
 from google.genai import types as google_types  # Use google.genai.types
-import pymupdf  # Changed from pypdfium2
+import pymupdf
 import asyncio
 
 from .constants import (
@@ -138,11 +138,11 @@ def add_field_safely(
 
         new_embed = discord.Embed(title="Grounding Sources (cont.)", color=embed_color)
         new_embed.add_field(name=name, value=value, inline=inline)
-        return new_embed  # Return the new embed
+        return new_embed
     else:
         # Add to current embed
         current_embed.add_field(name=name, value=value, inline=inline)
-        return current_embed  # Return the same embed
+        return current_embed
 
 
 # --- Payload Utilities ---

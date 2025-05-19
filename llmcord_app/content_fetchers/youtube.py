@@ -11,7 +11,6 @@ from youtube_transcript_api import (
     NoTranscriptFound,
 )
 
-# Import proxy types conditionally or handle import error
 try:
     from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
 except ImportError:
@@ -22,7 +21,6 @@ except ImportError:
 from ..models import UrlFetchResult
 from ..utils import extract_video_id
 
-# Module-level globals
 _initial_proxy_config_data: Optional[Dict] = None
 ytt_api: Optional[YouTubeTranscriptApi] = None  # Default, no-proxy instance
 youtube_service_client = None  # Global client for YouTube Data API

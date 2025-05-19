@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 import discord
-import yaml  # Added import
+import yaml
 
 # Import necessary components using absolute paths from the package root
 from llmcord_app.config import get_config
@@ -16,7 +16,7 @@ from llmcord_app.output_server import (
 # Configure logging early
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",  # Added logger name
+    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     stream=sys.stdout,
 )

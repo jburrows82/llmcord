@@ -1,16 +1,14 @@
-# llmcord_app/output_server.py
 import logging
 import os
 
-# import shutil  # Replaced by aio_os operations
-import aiofiles.os as aio_os  # Added
+import aiofiles.os as aio_os
 import time
 import uuid
 from typing import Optional, Dict, Any
 import http.server  # Remains synchronous
 import socketserver  # Remains synchronous
 import threading  # Remains synchronous
-import httpx  # Added for URL shortener
+import httpx
 
 from pyngrok import ngrok, conf as ngrok_conf  # Remains synchronous
 from pyngrok.exception import PyngrokError
@@ -24,14 +22,11 @@ from .constants import (
     DEFAULT_GRIP_PORT,  # Default port for our Python HTTP server
     NGROK_STATIC_DOMAIN_CONFIG_KEY,
     URL_SHORTENER_ENABLED_CONFIG_KEY,  # Added
-    URL_SHORTENER_SERVICE_CONFIG_KEY,  # Added
-    # OUTPUT_FILENAME, # No longer a single output file
+    URL_SHORTENER_SERVICE_CONFIG_KEY,
 )
 
-# New constant for the directory to store HTML files
 SHARED_HTML_DIR = "shared_html_outputs"
 
-# Module-level variables
 _http_server_thread: Optional[threading.Thread] = None
 _http_server_instance: Optional[socketserver.TCPServer] = None
 _ngrok_tunnel: Optional[ngrok.NgrokTunnel] = None
@@ -423,4 +418,3 @@ async def cleanup_shared_html_dir():
         )
 
 
-# No atexit here, cleanup should be managed by main.py

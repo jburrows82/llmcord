@@ -1,6 +1,3 @@
-# This file makes the content_fetchers directory a Python package.
-# It can be left empty or used to expose functions/classes from submodules.
-
 from .google_lens import process_google_lens_image
 from .reddit import fetch_reddit_data
 from .web import fetch_general_url_content

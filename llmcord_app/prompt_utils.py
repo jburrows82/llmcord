@@ -1,4 +1,3 @@
-# llmcord_app/prompt_utils.py
 from datetime import datetime as dt, timezone
 from typing import Optional
 

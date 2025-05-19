@@ -1,4 +1,3 @@
-# llmcord_app/response_sender.py
 import asyncio
 import logging
 from datetime import datetime as dt
@@ -23,18 +22,17 @@ from .constants import (
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
     FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL,
-    FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,  # <-- ADDED
+    FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,
 )
 from .ui import ResponseActionView
 from .llm_handler import generate_response_stream
-from .prompt_utils import prepare_system_prompt  # <-- ADDED
+from .prompt_utils import prepare_system_prompt
 from .commands import (
     get_user_gemini_thinking_budget_preference,
-)  # Added for retry logic
+)
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
-# class LLMCordClient(discord.Client): ...
 
 
 async def send_initial_processing_message(
@@ -82,7 +80,6 @@ async def handle_llm_response_stream(
     response_msgs: List[discord.Message] = []
     final_text_to_return = ""
     llm_call_successful_final = False
-    # grounding_metadata_final = None # This variable was assigned but never used
     edit_task = None  # Keep edit_task for embed streaming
 
     should_retry_with_gemini_signal = False
@@ -108,7 +105,7 @@ async def handle_llm_response_stream(
                 or should_retry_due_to_unprocessable_entity
                 or should_retry_due_to_all_keys_failed  # Check new flag
             ):
-                break  # No signal to retry, so exit the loop
+                break
 
             if should_retry_with_gemini_signal:
                 logging.info(
@@ -744,7 +741,7 @@ async def handle_llm_response_stream(
                             and finish_reason
                             == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
                         )
-                        break  # Break from stream_generator loop
+                        break
 
                 if (
                     should_retry_with_gemini_signal
@@ -756,7 +753,6 @@ async def handle_llm_response_stream(
 
                 llm_call_successful_final = current_attempt_llm_successful
                 final_text_to_return = final_text_for_this_attempt
-                # grounding_metadata_final = grounding_metadata_for_this_attempt # This variable was assigned but never used
 
                 if use_plain_responses_config and llm_call_successful_final:
                     final_messages_content = [
@@ -859,35 +855,7 @@ async def handle_llm_response_stream(
             llm_call_successful_final = False
             break
 
-    # After the loop, if successful, try to start the output server
-    # THIS BLOCK IS REMOVED as the functionality is moved to a button
-    # if llm_call_successful_final and final_text_to_return:
-    #     try:
-    #         # Run synchronous start_output_server in a thread
-    #         public_url = await asyncio.to_thread(
-    #             start_output_server, final_text_to_return, client.config
-    #         )
-    #         if public_url:
-    #             # Determine the target to reply to for the ngrok URL message
-    #             reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
-    #             try:
-    #                 await reply_target_for_url.reply(
-    #                     f"🔗 View rendered output: {public_url}",
-    #                     mention_author=False,
-    #                     suppress_embeds=True,  # Keep it clean
-    #                 )
-    #                 logging.info(f"Sent ngrok public URL: {public_url}")
-    #             except discord.HTTPException as e:
-    #                 logging.error(f"Failed to send ngrok public URL message: {e}")
-    #             except Exception as e:
-    #                 logging.error(
-    #                     f"Unexpected error sending ngrok public URL message: {e}",
-    #                     exc_info=True,
-    #                 )
-    #     except Exception as e:
-    #         logging.error(
-    #             f"Error starting or managing output server: {e}", exc_info=True
-    #         )
+    # Output server functionality moved to a button
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 

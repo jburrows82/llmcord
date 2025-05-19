@@ -53,8 +53,6 @@ reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
 # Provide a list of keys for rotation and retries
 serpapi_api_keys:
   - YOUR_SERPAPI_KEY_1
-  # - YOUR_SERPAPI_KEY_2
-  # - ...
 
 # LLM settings:
 
@@ -64,8 +62,6 @@ providers:
     # Provide a list of keys for rotation and retries
     api_keys:
       - YOUR_OPENAI_KEY_1
-      # - YOUR_OPENAI_KEY_2
-      # - ...
     disable_vision: false
   x-ai:
     base_url: https://api.x.ai/v1
@@ -77,23 +73,18 @@ providers:
     # Provide a list of Google API Keys here for rotation and retries.
     api_keys:
       - YOUR_GEMINI_KEY_1
-      # - YOUR_GEMINI_KEY_2
-      # - ...
   mistral:
     base_url: https://api.mistral.ai/v1
     api_keys:
       - YOUR_MISTRAL_KEY_1
-      # - ...
   groq:
     base_url: https://api.groq.com/openai/v1
     api_keys:
       - YOUR_GROQ_KEY_1
-      # - ...
   openrouter:
     base_url: https://openrouter.ai/api/v1
     api_keys:
       - YOUR_OPENROUTER_KEY_1
-      # - ...
   # --- Local / Keyless Providers ---
   ollama:
     base_url: http://localhost:11434/v1
@@ -142,9 +133,6 @@ extra_api_parameters:
   # Common OpenAI-compatible parameters:
   max_tokens: 4096
   temperature: 1.0
-  # top_p: 1.0
-  # frequency_penalty: 0.0
-  # presence_penalty: 0.0
 
   # Example Gemini parameters (these would be used if model starts with 'google/'):
   # max_output_tokens: 4096

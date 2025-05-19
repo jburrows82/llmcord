@@ -1,13 +1,11 @@
-# llmcord_app/ui.py
-
 import discord
 from discord import ui
 import logging
 import io
 import re
 import json
-from typing import Optional, Any, Dict  # Added Dict
-import asyncio  # Added asyncio
+from typing import Optional, Any, Dict
+import asyncio
 
 from .constants import (
     EMBED_COLOR_COMPLETE,
@@ -16,11 +14,11 @@ from .constants import (
     NGROK_ENABLED_CONFIG_KEY,
 )
 from .utils import add_field_safely
-from .output_server import start_output_server  # Added for output sharing
+from .output_server import start_output_server
 
 
 class ResponseActionView(ui.View):
-    """A view combining 'Show Sources' and 'Get response as text file' buttons."""
+    """A view combining 'Show sources' and 'Get response as text file' buttons."""
 
     def __init__(
         self,
@@ -28,15 +26,14 @@ class ResponseActionView(ui.View):
         grounding_metadata: Optional[Any] = None,
         full_response_text: Optional[str] = None,
         model_name: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,  # Added app_config
-        # timeout=300): # Default timeout 5 minutes - OLD VALUE
+        app_config: Optional[Dict[str, Any]] = None,
         timeout=None,
-    ):  # Set timeout to None for persistent view - NEW VALUE
+    ):
         super().__init__(timeout=timeout)
         self.grounding_metadata = grounding_metadata
         self.full_response_text = full_response_text
         self.model_name = model_name or "llm"  # Default filename model name
-        self.app_config = app_config  # Store app_config
+        self.app_config = app_config
         self.message: Optional[discord.Message] = (
             None  # Will be set after sending the message
         )
@@ -120,11 +117,10 @@ class ResponseActionView(ui.View):
                 )
         self.stop()  # Stop the view regardless of whether the message was edited
 
-    # Inner class for the Show Sources button - MODIFIED FOR SPLITTING
     class ShowSourcesButton(ui.Button):
         def __init__(self):
             super().__init__(
-                label="Show Sources", style=discord.ButtonStyle.grey, row=0
+                label="Show sources", style=discord.ButtonStyle.grey, row=0
             )
 
         async def callback(self, interaction: discord.Interaction):
@@ -264,19 +260,19 @@ class ResponseActionView(ui.View):
                     logging.error(f"Error sending raw metadata: {e}")
                     await interaction.response.send_message(
                         "No grounding source information could be extracted.",
-                        ephemeral=False,  # Changed to False
+                        ephemeral=False
                     )
                 return
 
             try:
                 await interaction.response.send_message(
                     embed=embeds_to_send[0],
-                    ephemeral=False,  # Changed to False
+                    ephemeral=False,
                 )
                 for embed in embeds_to_send[1:]:
                     await interaction.followup.send(
                         embed=embed, ephemeral=False
-                    )  # Changed to False
+                    )
 
             except discord.HTTPException as e:
                 logging.error(
@@ -285,7 +281,7 @@ class ResponseActionView(ui.View):
                 # Use followup because initial response was already sent
                 await interaction.followup.send(
                     "Failed to send sources as embeds (likely too large).",
-                    ephemeral=False,  # Changed to False
+                    ephemeral=False,
                 )
             except Exception as e:
                 logging.error(f"Unexpected error sending source embeds: {e}")
@@ -293,7 +289,7 @@ class ResponseActionView(ui.View):
                     # Use followup because initial response was already sent
                     await interaction.followup.send(
                         "An unexpected error occurred while sending sources.",
-                        ephemeral=False,  # Changed to False
+                        ephemeral=False,
                     )
                 except discord.HTTPException:
                     logging.error("Failed to send followup error message for sources.")
@@ -312,7 +308,7 @@ class ResponseActionView(ui.View):
             if not view.full_response_text:
                 await interaction.response.send_message(
                     "No response text available to send.",
-                    ephemeral=False,  # Changed to False
+                    ephemeral=False,
                 )
                 return
 
@@ -329,20 +325,20 @@ class ResponseActionView(ui.View):
 
                 await interaction.response.send_message(
                     file=discord_file,
-                    ephemeral=False,  # Changed to False
+                    ephemeral=False,
                 )
             except Exception as e:
                 logging.error(f"Error creating or sending text file: {e}")
                 await interaction.response.send_message(
                     "Sorry, I couldn't create the text file.",
-                    ephemeral=False,  # Changed to False
+                    ephemeral=False
                 )
 
     class ViewRenderedOutputButton(ui.Button):
         def __init__(self, row: int):
             super().__init__(
                 label="View output properly (especially tables)",
-                style=discord.ButtonStyle.grey,  # Changed to grey
+                style=discord.ButtonStyle.grey,
                 row=row,
             )
 

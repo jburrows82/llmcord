@@ -2,7 +2,7 @@ import asyncio
 import logging
 import random
 from typing import List, Dict, Any
-import discord  # <-- Added import
+import discord
 
 from serpapi import GoogleSearch
 from serpapi.serp_api_client_exception import SerpApiClientException
@@ -126,7 +126,6 @@ async def fetch_google_lens_serpapi(
                     original_index=index,
                 )
 
-            # --- Success Case ---
             visual_matches = results.get("visual_matches", [])
             if not visual_matches:
                 logging.info(
@@ -145,13 +144,12 @@ async def fetch_google_lens_serpapi(
                 title = match.get("title", "N/A")
                 link = match.get("link", "#")
                 source = match.get("source", "")
-                # Escape markdown in title
                 escaped_title = discord.utils.escape_markdown(
                     title
-                )  # Use discord.utils here
+                )
                 result_line = f"- [{escaped_title}]({link})"
                 if source:
-                    result_line += f" (Source: {discord.utils.escape_markdown(source)})"  # Escape source too
+                    result_line += f" (Source: {discord.utils.escape_markdown(source)})"
                 formatted_results.append(result_line)
             content_str = "\n".join(formatted_results)
 
@@ -222,7 +220,6 @@ async def process_google_lens_image(
 ) -> UrlFetchResult:
     """
     Processes a Google Lens request for an image URL using SerpAPI.
-    The custom Playwright fallback has been removed.
 
     Args:
         image_url: The URL of the image to process.

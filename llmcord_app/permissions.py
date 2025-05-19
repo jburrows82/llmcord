@@ -1,4 +1,3 @@
-# llmcord_app/permissions.py
 import discord
 from typing import Dict
 

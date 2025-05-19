@@ -1,21 +1,17 @@
-# llmcord_app/history_utils.py
 import logging
-from typing import Optional, List, Dict, Any  # Added List, Dict, Any
-import asyncio  # Added asyncio
-import base64  # Added base64
-import httpx  # Added httpx
-import re  # Added re
-import tiktoken  # Added tiktoken
+from typing import Optional, List, Dict, Any
+import asyncio
+import base64
+import httpx
+import re
+import tiktoken
 
 import discord
 
-from .constants import AT_AI_PATTERN, STREAMING_INDICATOR  # Added more constants
-from . import models  # Added models import
-# Assuming google.genai.types will be passed as google_types_module
-# Assuming extract_text_from_pdf_bytes will be passed as a function
+from .constants import AT_AI_PATTERN, STREAMING_INDICATOR
+from . import models
 
 
-# --- ADDED: Tiktoken helper ---
 def _get_tokenizer_for_model(model_name: str):
     """Gets the appropriate tiktoken encoder for a given model name."""
     try:
@@ -52,8 +48,6 @@ def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str
         return truncated_text, actual_token_count  # Return original token count
     return text, actual_token_count
 
-
-# --- END ADDED ---
 
 
 async def find_parent_message(
@@ -167,7 +161,7 @@ async def build_message_history(
     extract_text_from_pdf_bytes_func: callable,
     at_ai_pattern_re: Any,
     providers_supporting_usernames_const: tuple,
-    system_prompt_text_for_budgeting: Optional[str] = None,  # Moved to the end
+    system_prompt_text_for_budgeting: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     raw_history_entries_reversed = []  # Oldest last initially, will be reversed
 
@@ -207,7 +201,7 @@ async def build_message_history(
                 user_warnings.add(
                     f"⚠️ Couldn't fetch full history (message {current_msg_id} missing)."
                 )
-                break  # Stop if a message in the chain can't be fetched
+                break
             msg_nodes_cache[current_msg_id] = models_module.MsgNode()
 
         curr_node = msg_nodes_cache[current_msg_id]
@@ -401,7 +395,6 @@ async def build_message_history(
                     should_process_files_for_api and not is_lens_trigger_message
                 ):  # Lens images are handled by external_content
                     for att, resp in zip(attachments_to_fetch, attachment_responses):
-                        # ... (existing logic to create api_file_parts from attachments) ...
                         is_api_relevant_type = False
                         mime_type_for_api = att.content_type
                         file_bytes_for_api = None
@@ -928,4 +921,3 @@ async def build_message_history(
     return api_formatted_history
 
 
-# STREAMING_INDICATOR is now imported from .constants

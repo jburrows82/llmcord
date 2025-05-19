@@ -1,4 +1,3 @@
-# llmcord_app/external_content.py
 import asyncio
 import logging
 from typing import List, Set, Dict, Any
@@ -6,7 +5,7 @@ from typing import List, Set, Dict, Any
 import discord
 import httpx
 
-from . import models  # Use relative import within the package
+from . import models
 from .utils import (
     extract_urls_with_indices,
     is_youtube_url,
@@ -64,14 +63,13 @@ async def fetch_external_content(
                 user_warnings.add(
                     f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}..."
                 )
-        elif is_image_url(url):  # Check for image URLs
+        elif is_image_url(url):
             # Define an async function to download the image and return a UrlFetchResult
             async def fetch_image_url_content(
                 img_url: str, img_idx: int
             ) -> models.UrlFetchResult:
                 try:
                     logging.info(f"Attempting to download image URL: {img_url}")
-                    # Use the passed httpx_client
                     async with httpx_client.stream(
                         "GET", img_url, timeout=15.0
                     ) as response:
@@ -154,7 +152,6 @@ async def fetch_external_content(
                     exc_info=True,
                 )
                 user_warnings.add("⚠️ Unhandled error fetching URL content")
-            # Use the correct UrlFetchResult class
             elif isinstance(result, models.UrlFetchResult):
                 url_fetch_results.append(result)
                 if result.error:
@@ -187,7 +184,6 @@ async def fetch_external_content(
                 f"Starting Google Lens processing for image {i + 1}/{len(lens_images_to_process)}..."
             )
             try:
-                # Pass config to process_google_lens_image
                 lens_result = await process_google_lens_image(
                     attachment.url, i, config
                 )  # Pass config here
@@ -206,7 +202,6 @@ async def fetch_external_content(
                     f"Unexpected error during sequential Google Lens processing for image {i + 1}"
                 )
                 user_warnings.add(f"⚠️ Unexpected error processing Lens image {i + 1}")
-                # Use the correct UrlFetchResult class
                 url_fetch_results.append(
                     models.UrlFetchResult(
                         url=attachment.url,
@@ -237,7 +232,6 @@ def format_external_content(url_fetch_results: List[models.UrlFetchResult]) -> s
             if result.type == "google_lens_serpapi":
                 header = f"SerpAPI Google Lens results for image {result.original_index + 1}:\n"
                 google_lens_parts.append(header + str(result.content))
-            # Removed "google_lens_custom" case
             elif result.type == "youtube":
                 content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
                 if isinstance(result.content, dict):
