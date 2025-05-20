@@ -39,7 +39,7 @@ MAX_EMBED_TOTAL_SIZE = 5900  # Safety margin below Discord's 6000 limit
 MAX_PLAIN_TEXT_LENGTH = 2000  # Discord message character limit
 
 # --- URL Regex Patterns ---
-GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
+GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"`]+|www\.[^\s<>"`]+')  # Added ` to negated set
 YOUTUBE_URL_PATTERN = re.compile(
     r"(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))"
 )

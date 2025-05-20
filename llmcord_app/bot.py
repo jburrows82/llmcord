@@ -489,7 +489,20 @@ class LLMCordClient(discord.Client):
 
         combined_context = ""
         url_fetch_results = []
-        user_has_provided_urls = bool(extract_urls_with_indices(cleaned_content))
+        all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
+        user_has_provided_urls = bool(all_urls_in_cleaned_content)
+        has_only_backticked_urls = False
+
+        if user_has_provided_urls:
+            all_backticked = True
+            for url, index_pos in all_urls_in_cleaned_content:
+                char_before_is_backtick = (index_pos > 0 and cleaned_content[index_pos - 1] == '`')
+                char_after_is_backtick = ((index_pos + len(url)) < len(cleaned_content) and cleaned_content[index_pos + len(url)] == '`')
+                if not (char_before_is_backtick and char_after_is_backtick):
+                    all_backticked = False
+                    break
+            if all_backticked:
+                has_only_backticked_urls = True
 
         if use_google_lens:
             url_fetch_results = await fetch_external_content(
@@ -506,10 +519,15 @@ class LLMCordClient(discord.Client):
             logging.info(
                 "Skipping Gemini grounding/SearxNG step because Google Lens is active."
             )
-        elif not user_has_provided_urls and not is_gemini and not is_grok_model:
-            logging.info(
-                f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG."
-            )
+        elif (not user_has_provided_urls or has_only_backticked_urls) and not is_gemini and not is_grok_model:
+            if has_only_backticked_urls:
+                logging.info(
+                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and all user URLs are backticked. Attempting grounding pre-step for SearxNG."
+                )
+            else: # No user URLs at all
+                logging.info(
+                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG."
+                )
             history_for_gemini_grounding = await build_message_history(
                 new_msg=new_msg,
                 initial_cleaned_content=cleaned_content,

@@ -48,6 +48,22 @@ async def fetch_external_content(
 
     # Separate general URLs for batching, other types for individual tasks
     for url, index in all_urls_with_indices:
+        # Check if the URL is wrapped in backticks
+        is_wrapped_in_backticks = False
+        # Check character before the URL
+        char_before_is_backtick = (index > 0 and cleaned_content[index - 1] == '`')
+        # Check character after the URL
+        char_after_is_backtick = ((index + len(url)) < len(cleaned_content) and cleaned_content[index + len(url)] == '`')
+
+        if char_before_is_backtick and char_after_is_backtick:
+            is_wrapped_in_backticks = True
+
+        if is_wrapped_in_backticks:
+            logging.info(f"Skipping content extraction for URL wrapped in backticks: {url}")
+            # DO NOT add to processed_urls_for_batching here.
+            # A non-backticked version of the same URL elsewhere should still be processed.
+            continue  # Skip fetching and further processing for this URL
+
         if (
             url in processed_urls_for_batching
         ):  # Check if already added to general batch or other tasks
