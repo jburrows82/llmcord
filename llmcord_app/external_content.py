@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Set, Dict, Any
+from typing import List, Set, Dict, Any, Tuple
 
 import discord
 import httpx
@@ -13,12 +13,18 @@ from .utils import (
     is_image_url,
     extract_reddit_submission_id,
 )
+from crawl4ai import (
+    AsyncWebCrawler,
+    CrawlerRunConfig,
+    CacheMode,
+)  # Added Crawl4AI imports
 from .content_fetchers import (
     fetch_youtube_data,
     fetch_reddit_data,
-    fetch_general_url_content,
+    # fetch_general_url_content, # No longer directly used here for batching
     process_google_lens_image,
 )
+from .content_fetchers.web import fetch_with_beautifulsoup  # Import fallback
 
 
 async def fetch_external_content(
@@ -30,26 +36,32 @@ async def fetch_external_content(
     config: Dict[str, Any],
     httpx_client: httpx.AsyncClient,
 ) -> List[models.UrlFetchResult]:
-    """Fetches content from URLs and Google Lens."""
+    """Fetches content from URLs and Google Lens. General URLs are batched with Crawl4AI."""
     all_urls_with_indices = extract_urls_with_indices(cleaned_content)
-    fetch_tasks = []
-    processed_urls = set()
+    other_fetch_tasks = []  # For YouTube, Reddit, image URLs
+    general_urls_to_batch: List[Tuple[str, int]] = []  # For Crawl4AI batching
+    processed_urls_for_batching = set()  # To avoid duplicate general URLs in the batch
     url_fetch_results = []
+    max_text_length = config.get(
+        "searxng_url_content_max_length"
+    )  # Get max_text_length from config
 
-    # Create tasks for non-Google Lens URLs
+    # Separate general URLs for batching, other types for individual tasks
     for url, index in all_urls_with_indices:
-        if url in processed_urls:
+        if (
+            url in processed_urls_for_batching
+        ):  # Check if already added to general batch or other tasks
             continue
-        processed_urls.add(url)
 
         if is_youtube_url(url):
-            fetch_tasks.append(
+            other_fetch_tasks.append(
                 fetch_youtube_data(url, index, config.get("youtube_api_key"))
             )
+            processed_urls_for_batching.add(url)
         elif is_reddit_url(url):
             sub_id = extract_reddit_submission_id(url)
             if sub_id:
-                fetch_tasks.append(
+                other_fetch_tasks.append(
                     fetch_reddit_data(
                         url,
                         sub_id,
@@ -63,14 +75,15 @@ async def fetch_external_content(
                 user_warnings.add(
                     f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}..."
                 )
-        elif is_image_url(url):  # Check for image URLs
-            # Define an async function to download the image and return a UrlFetchResult
-            async def fetch_image_url_content(
+            processed_urls_for_batching.add(url)
+        elif is_image_url(url):
+
+            async def fetch_image_url_content_wrapper(
                 img_url: str, img_idx: int
             ) -> models.UrlFetchResult:
+                # This is the same inner function as before, just defined here for clarity
                 try:
                     logging.info(f"Attempting to download image URL: {img_url}")
-                    # Use the passed httpx_client
                     async with httpx_client.stream(
                         "GET", img_url, timeout=15.0
                     ) as response:
@@ -79,9 +92,9 @@ async def fetch_external_content(
                                 "content-type", ""
                             ).lower()
                             if content_type.startswith("image/"):
-                                img_bytes_list = []
-                                async for chunk in response.aiter_bytes():
-                                    img_bytes_list.append(chunk)
+                                img_bytes_list = [
+                                    chunk async for chunk in response.aiter_bytes()
+                                ]
                                 img_bytes = b"".join(img_bytes_list)
                                 logging.info(
                                     f"Successfully downloaded image from URL: {img_url} ({len(img_bytes)} bytes)"
@@ -93,9 +106,6 @@ async def fetch_external_content(
                                     original_index=img_idx,
                                 )
                             else:
-                                logging.warning(
-                                    f"URL {img_url} is an image URL but content type is '{content_type}'. Skipping."
-                                )
                                 return models.UrlFetchResult(
                                     url=img_url,
                                     content=None,
@@ -104,9 +114,6 @@ async def fetch_external_content(
                                     original_index=img_idx,
                                 )
                         else:
-                            logging.warning(
-                                f"Failed to download image URL {img_url}. Status: {response.status_code}"
-                            )
                             return models.UrlFetchResult(
                                 url=img_url,
                                 content=None,
@@ -115,9 +122,6 @@ async def fetch_external_content(
                                 original_index=img_idx,
                             )
                 except httpx.RequestError as e:
-                    logging.warning(
-                        f"RequestError downloading image URL {img_url}: {e}"
-                    )
                     return models.UrlFetchResult(
                         url=img_url,
                         content=None,
@@ -126,9 +130,6 @@ async def fetch_external_content(
                         original_index=img_idx,
                     )
                 except Exception as e:
-                    logging.exception(
-                        f"Unexpected error downloading image URL {img_url}"
-                    )
                     return models.UrlFetchResult(
                         url=img_url,
                         content=None,
@@ -137,38 +138,119 @@ async def fetch_external_content(
                         original_index=img_idx,
                     )
 
-            fetch_tasks.append(fetch_image_url_content(url, index))
-        else:  # General web page
-            fetch_tasks.append(
-                fetch_general_url_content(url, index, httpx_client)  # Pass the client
-            )
+            other_fetch_tasks.append(fetch_image_url_content_wrapper(url, index))
+            processed_urls_for_batching.add(url)
+        else:  # General web page, add to batch list
+            if url not in processed_urls_for_batching:
+                general_urls_to_batch.append((url, index))
+                processed_urls_for_batching.add(url)
 
-    # Fetch non-Lens content concurrently
-    if fetch_tasks:
-        results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
+    # Batch process general URLs with Crawl4AI
+    if general_urls_to_batch:
+        logging.info(
+            f"Batch processing {len(general_urls_to_batch)} general URLs with Crawl4AI."
+        )
+        url_strings_for_crawl4ai = [item[0] for item in general_urls_to_batch]
+        url_to_original_index_map = {url: idx for url, idx in general_urls_to_batch}
+
+        try:
+            run_config = CrawlerRunConfig(
+                cache_mode=CacheMode.BYPASS,  # Consider making this configurable
+                # Add other relevant Crawl4AI configs here if needed
+            )
+            async with AsyncWebCrawler() as crawler:  # Single crawler instance
+                crawl4ai_batch_results = await crawler.arun_many(
+                    url_strings_for_crawl4ai, config=run_config
+                )
+
+            for crawl_result in crawl4ai_batch_results:
+                original_idx = url_to_original_index_map.get(crawl_result.url, -1)
+                if (
+                    crawl_result.success
+                    and crawl_result.markdown
+                    and crawl_result.markdown.raw_markdown
+                ):
+                    content = crawl_result.markdown.raw_markdown
+                    if (
+                        max_text_length is not None
+                        and content
+                        and len(content) > max_text_length
+                    ):
+                        content = content[: max_text_length - 3] + "..."
+                    url_fetch_results.append(
+                        models.UrlFetchResult(
+                            url=crawl_result.url,
+                            content=content,
+                            type="general_crawl4ai",
+                            original_index=original_idx,
+                        )
+                    )
+                else:
+                    error_msg_crawl4ai = (
+                        crawl_result.error_message
+                        or "Crawl4AI: Unknown error or no markdown."
+                    )
+                    logging.warning(
+                        f"Crawl4AI failed for {crawl_result.url} (Error: {error_msg_crawl4ai}). Falling back to BeautifulSoup."
+                    )
+                    bs_fallback_result = await fetch_with_beautifulsoup(
+                        crawl_result.url, original_idx, httpx_client, max_text_length
+                    )
+                    url_fetch_results.append(bs_fallback_result)
+                    if bs_fallback_result.error:
+                        user_warnings.add(
+                            f"⚠️ Fallback fetch failed for {crawl_result.url[:40]}...: {bs_fallback_result.error}"
+                        )
+
+        except Exception as e_crawl4ai_batch:
+            logging.error(
+                f"Crawl4AI arun_many batch processing failed: {e_crawl4ai_batch}",
+                exc_info=True,
+            )
+            user_warnings.add("⚠️ Error during batch web page processing with Crawl4AI.")
+            # Fallback for all URLs in this batch if arun_many itself fails
+            for url_str, original_idx_val in general_urls_to_batch:
+                logging.info(
+                    f"Falling back to BeautifulSoup for {url_str} due to arun_many failure."
+                )
+                bs_fallback_result = await fetch_with_beautifulsoup(
+                    url_str, original_idx_val, httpx_client, max_text_length
+                )
+                url_fetch_results.append(bs_fallback_result)
+                if bs_fallback_result.error:
+                    user_warnings.add(
+                        f"⚠️ Fallback fetch failed for {url_str[:40]}...: {bs_fallback_result.error}"
+                    )
+
+    # Fetch other non-general URLs concurrently
+    if other_fetch_tasks:
+        results_others = await asyncio.gather(
+            *other_fetch_tasks, return_exceptions=True
+        )
+        for result_other in results_others:
+            if isinstance(result_other, Exception):
                 logging.error(
-                    f"Unhandled exception during non-Lens URL fetch: {result}",
+                    f"Unhandled exception during other URL fetch: {result_other}",
                     exc_info=True,
                 )
-                user_warnings.add("⚠️ Unhandled error fetching URL content")
-            # Use the correct UrlFetchResult class
-            elif isinstance(result, models.UrlFetchResult):
-                url_fetch_results.append(result)
-                if result.error:
-                    short_url = (
-                        result.url[:40] + "..." if len(result.url) > 40 else result.url
+                user_warnings.add("⚠️ Unhandled error fetching some URL content")
+            elif isinstance(result_other, models.UrlFetchResult):
+                url_fetch_results.append(result_other)
+                if result_other.error:
+                    short_url_other = (
+                        result_other.url[:40] + "..."
+                        if len(result_other.url) > 40
+                        else result_other.url
                     )
                     user_warnings.add(
-                        f"⚠️ Error fetching {result.type} URL ({short_url}): {result.error}"
+                        f"⚠️ Error fetching {result_other.type} URL ({short_url_other}): {result_other.error}"
                     )
             else:
                 logging.error(
-                    f"Unexpected result type from non-Lens URL fetch: {type(result)}"
+                    f"Unexpected result type from other URL fetch: {type(result_other)}"
                 )
 
-    # Process Google Lens Images Sequentially
+    # Process Google Lens Images Sequentially (remains the same)
     if use_google_lens:
         lens_images_to_process = image_attachments[
             :max_files_per_message
@@ -273,8 +355,8 @@ def format_external_content(url_fetch_results: List[models.UrlFetchResult]) -> s
                         )
                 other_url_parts.append(content_str)
                 other_url_counter += 1
-            elif result.type == "general":
-                content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
+            elif result.type == "general" or result.type == "general_crawl4ai":
+                content_str = f"\nurl {other_url_counter}: {result.url} (source type: {result.type})\nurl {other_url_counter} content:\n"
                 if isinstance(result.content, str):
                     content_str += f"  {result.content}\n"
                 other_url_parts.append(content_str)

@@ -14,7 +14,9 @@ from llmcord_app.output_server import (
 )
 
 # Configure logging early
-log_formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+log_formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s [%(name)s]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -25,7 +27,7 @@ logger.addHandler(console_handler)
 
 # File Handler for errors and warnings
 file_handler = logging.FileHandler("llmcord_errors.log", encoding="utf-8")
-file_handler.setLevel(logging.WARNING) # Log WARNING and ERROR levels to file
+file_handler.setLevel(logging.WARNING)  # Log WARNING and ERROR levels to file
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 

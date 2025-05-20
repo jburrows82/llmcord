@@ -16,3 +16,4 @@ pyngrok
 markdown2
 aiofiles
 Pillow
+crawl4ai

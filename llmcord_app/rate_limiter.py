@@ -22,7 +22,7 @@ class RateLimitDBManager:
     def _create_table_if_not_exists(self, conn: sqlite3.Connection):
         """Creates the rate_limited_keys table if it doesn't exist using the provided connection."""
         try:
-            with conn: # Use the passed connection for a transaction
+            with conn:  # Use the passed connection for a transaction
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS rate_limited_keys (
                         api_key TEXT PRIMARY KEY,
@@ -31,7 +31,7 @@ class RateLimitDBManager:
                 """)
         except sqlite3.Error as e:
             logging.error(f"Error creating table in {self.db_path}: {e}")
-            raise # Re-raise to be caught by the calling sync method
+            raise  # Re-raise to be caught by the calling sync method
 
     def _get_connection_and_ensure_table(self) -> sqlite3.Connection:
         """Establishes a new SQLite connection and ensures the table exists."""
@@ -49,7 +49,7 @@ class RateLimitDBManager:
                 f"Attempted to add empty API key to rate limit DB {self.db_path}"
             )
             return
-        
+
         timestamp = time.time()
 
         def _sync_add_key():
@@ -69,7 +69,9 @@ class RateLimitDBManager:
                     f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}."
                 )
             except sqlite3.Error as e:
-                logging.error(f"Error adding key ...{api_key[-4:]} to {self.db_path}: {e}")
+                logging.error(
+                    f"Error adding key ...{api_key[-4:]} to {self.db_path}: {e}"
+                )
             finally:
                 if conn:
                     conn.close()
@@ -79,7 +81,7 @@ class RateLimitDBManager:
     async def get_limited_keys(self, cooldown_seconds: int) -> Set[str]:
         """Returns the set of API keys currently within the cooldown period."""
         cutoff_time = time.time() - cooldown_seconds
-        
+
         def _sync_get_limited_keys() -> Set[str]:
             conn = None
             limited_keys_set = set()
@@ -104,6 +106,7 @@ class RateLimitDBManager:
 
     async def reset_db(self):
         """Removes all entries from the rate limit table."""
+
         def _sync_reset_db():
             conn = None
             try:
@@ -111,13 +114,15 @@ class RateLimitDBManager:
                 with conn:
                     conn.execute("DELETE FROM rate_limited_keys")
                 # conn.commit() is handled by `with conn:`
-                logging.info(f"Rate limit database {os.path.basename(self.db_path)} reset.")
+                logging.info(
+                    f"Rate limit database {os.path.basename(self.db_path)} reset."
+                )
             except sqlite3.Error as e:
                 logging.error(f"Error resetting database {self.db_path}: {e}")
             finally:
                 if conn:
                     conn.close()
-        
+
         await asyncio.to_thread(_sync_reset_db)
 
     # close() method is removed as connections are now managed per operation.
@@ -141,7 +146,7 @@ async def get_db_manager(service_name: str) -> RateLimitDBManager:
         )
         # RateLimitDBManager __init__ is synchronous.
         db_managers[service_name] = RateLimitDBManager(db_path)
-    
+
     # No need to explicitly check/re-establish connection here,
     # as each operation in RateLimitDBManager now handles its own connection.
     return db_managers[service_name]
