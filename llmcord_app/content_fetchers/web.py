@@ -7,6 +7,11 @@ from bs4 import BeautifulSoup
 
 from ..models import UrlFetchResult
 
+# Define httpx_client here or pass it in
+# For simplicity, let's define it here for this module's use
+# In a larger app, dependency injection might be better
+# httpx_client = httpx.AsyncClient(timeout=20.0, follow_redirects=True) # Removed module-level client
+
 
 async def fetch_general_url_content(
     url: str,
@@ -21,7 +26,7 @@ async def fetch_general_url_content(
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         logging.debug(f"Fetching general URL: {url}")
-        async with client.stream(
+        async with client.stream(  # Use passed-in client
             "GET", url, headers=headers, timeout=15.0
         ) as response:
             # Check status code early
@@ -77,7 +82,7 @@ async def fetch_general_url_content(
                         logging.warning(
                             f"Unicode decode error reading chunk from {url}: {decode_err}. Skipping chunk."
                         )
-                        continue  # Skip this chunk
+                        continue
 
                     if len(html_content) > html_limit:
                         logging.warning(
@@ -136,6 +141,7 @@ async def fetch_general_url_content(
             # Clean up whitespace: replace multiple spaces/newlines with a single space
             text = re.sub(r"\s+", " ", text).strip()
 
+            # --- NEW: Truncate extracted text if limit is provided ---
             if max_text_length is not None and text and len(text) > max_text_length:
                 logging.info(
                     f"Truncating extracted text content for URL {url} from {len(text)} to {max_text_length} characters."

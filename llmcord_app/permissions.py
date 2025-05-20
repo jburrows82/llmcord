@@ -69,4 +69,4 @@ def is_message_allowed(message: discord.Message, config: Dict, is_dm: bool) -> b
         ):  # If blocked OR (not allow_all_channels AND not channel_is_explicitly_allowed)
             return False
 
-    return True  # Allowed if checks pass
+    return True

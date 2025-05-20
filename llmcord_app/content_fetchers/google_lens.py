@@ -83,7 +83,7 @@ async def fetch_google_lens_serpapi(
                     logging.info(
                         f"SerpAPI key {key_display} rate limited. Trying next key."
                     )
-                    continue  # Try next key
+                    continue
                 elif "invalid api key" in error_msg.lower():
                     logging.error(
                         f"SerpAPI key {key_display} is invalid. Aborting SerpAPI attempts."
@@ -126,6 +126,7 @@ async def fetch_google_lens_serpapi(
                     original_index=index,
                 )
 
+            # --- Success Case ---
             visual_matches = results.get("visual_matches", [])
             if not visual_matches:
                 logging.info(
@@ -144,12 +145,13 @@ async def fetch_google_lens_serpapi(
                 title = match.get("title", "N/A")
                 link = match.get("link", "#")
                 source = match.get("source", "")
+                # Escape markdown in title
                 escaped_title = discord.utils.escape_markdown(
                     title
-                )
+                )  # Use discord.utils here
                 result_line = f"- [{escaped_title}]({link})"
                 if source:
-                    result_line += f" (Source: {discord.utils.escape_markdown(source)})"
+                    result_line += f" (Source: {discord.utils.escape_markdown(source)})"  # Escape source too
                 formatted_results.append(result_line)
             content_str = "\n".join(formatted_results)
 
@@ -184,7 +186,6 @@ async def fetch_google_lens_serpapi(
                 logging.warning(
                     f"SerpAPI key {key_display} encountered client error (Status: {status_code}): {e}. Trying next key."
                 )
-            # Retry with the next key for client exceptions
             continue
         except Exception as e:
             logging.exception(
@@ -196,7 +197,6 @@ async def fetch_google_lens_serpapi(
             logging.warning(
                 f"SerpAPI key {key_display} encountered unexpected error: {e}. Trying next key."
             )
-            # Retry with the next key for unexpected errors
             continue
 
     # If loop finishes, all keys failed
@@ -220,6 +220,7 @@ async def process_google_lens_image(
 ) -> UrlFetchResult:
     """
     Processes a Google Lens request for an image URL using SerpAPI.
+    The custom Playwright fallback has been removed.
 
     Args:
         image_url: The URL of the image to process.

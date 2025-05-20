@@ -7,11 +7,11 @@ import yaml
 # Import necessary components using absolute paths from the package root
 from llmcord_app.config import get_config
 from llmcord_app.bot import LLMCordClient
-from llmcord_app.rate_limiter import close_all_db_managers  # Import cleanup function
+from llmcord_app.rate_limiter import close_all_db_managers
 from llmcord_app.output_server import (
     stop_output_server,
     cleanup_shared_html_dir,
-)  # Import output server cleanup
+)
 
 # Configure logging early
 logging.basicConfig(
@@ -110,7 +110,7 @@ async def main():
                 "Attempting to cleanup shared HTML directory as cleanup_on_shutdown is true..."
             )
             try:
-                await cleanup_shared_html_dir()  # Changed from asyncio.to_thread
+                await cleanup_shared_html_dir()
             except Exception as e:
                 logging.error(
                     f"Error during shared HTML directory cleanup: {e}", exc_info=True

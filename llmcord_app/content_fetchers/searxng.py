@@ -3,6 +3,8 @@ from typing import List
 import httpx
 import urllib.parse
 
+# httpx_client will be passed in from the bot instance
+
 
 async def fetch_searxng_results(
     query: str,
@@ -27,7 +29,7 @@ async def fetch_searxng_results(
             urllib.parse.urljoin(parsed_base_url.path, "search"),  # Join path carefully
             "",
             "",
-        )
+        )  # Query and fragment are empty here, will be added by params
     )
 
     params = {
@@ -53,6 +55,9 @@ async def fetch_searxng_results(
                 break
             if "url" in result and isinstance(result["url"], str):
                 urls.append(result["url"])
+            # Optional: could extract title/snippet here if needed for future enhancements
+            # title = result.get("title")
+            # content_snippet = result.get("content")
 
         logging.info(
             f"SearxNG returned {len(urls)} URLs for query '{query}'. Requested up to {num_results}."

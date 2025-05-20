@@ -4,6 +4,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import discord
 
 
+# --- Data Classes ---
 @dataclass
 class MsgNode:
     """Represents a node in the conversation history cache."""
@@ -29,6 +30,7 @@ class MsgNode:
     full_response_text: Optional[str] = (
         None  # Stores the complete text from the LLM for this node (if it's an assistant response)
     )
+    # --- ADDED FIELD ---
     external_content: Optional[str] = (
         None  # Stores formatted fetched content (URLs, Lens) for this node
     )

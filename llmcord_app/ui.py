@@ -18,7 +18,7 @@ from .output_server import start_output_server
 
 
 class ResponseActionView(ui.View):
-    """A view combining 'Show sources' and 'Get response as text file' buttons."""
+    """A view combining 'Show Sources' and 'Get response as text file' buttons."""
 
     def __init__(
         self,
@@ -26,14 +26,15 @@ class ResponseActionView(ui.View):
         grounding_metadata: Optional[Any] = None,
         full_response_text: Optional[str] = None,
         model_name: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,  # Added app_config
+        # timeout=300): # Default timeout 5 minutes - OLD VALUE
         timeout=None,
-    ):
+    ):  # Set timeout to None for persistent view - NEW VALUE
         super().__init__(timeout=timeout)
         self.grounding_metadata = grounding_metadata
         self.full_response_text = full_response_text
         self.model_name = model_name or "llm"  # Default filename model name
-        self.app_config = app_config
+        self.app_config = app_config  # Store app_config
         self.message: Optional[discord.Message] = (
             None  # Will be set after sending the message
         )
@@ -117,10 +118,11 @@ class ResponseActionView(ui.View):
                 )
         self.stop()  # Stop the view regardless of whether the message was edited
 
+    # Inner class for the Show Sources button - MODIFIED FOR SPLITTING
     class ShowSourcesButton(ui.Button):
         def __init__(self):
             super().__init__(
-                label="Show sources", style=discord.ButtonStyle.grey, row=0
+                label="Show Sources", style=discord.ButtonStyle.grey, row=0
             )
 
         async def callback(self, interaction: discord.Interaction):
@@ -204,7 +206,7 @@ class ResponseActionView(ui.View):
                                     current_embed,
                                     EMBED_COLOR_COMPLETE,
                                 )
-                                current_field_name = "Sources Consulted (cont.)"
+                                current_field_name = "Sources Consulted (cont.)"  # type: ignore
                                 current_field_value = ""
 
                             if len(source_line) > MAX_EMBED_FIELD_VALUE_LENGTH:
@@ -214,7 +216,7 @@ class ResponseActionView(ui.View):
                                 )
                                 logging.warning(f"Single source line truncated: {uri}")
 
-                            current_field_value = source_line
+                            current_field_value = source_line  # type: ignore
                         else:
                             current_field_value += source_line
 
@@ -260,7 +262,7 @@ class ResponseActionView(ui.View):
                     logging.error(f"Error sending raw metadata: {e}")
                     await interaction.response.send_message(
                         "No grounding source information could be extracted.",
-                        ephemeral=False
+                        ephemeral=False,
                     )
                 return
 
@@ -270,9 +272,7 @@ class ResponseActionView(ui.View):
                     ephemeral=False,
                 )
                 for embed in embeds_to_send[1:]:
-                    await interaction.followup.send(
-                        embed=embed, ephemeral=False
-                    )
+                    await interaction.followup.send(embed=embed, ephemeral=False)
 
             except discord.HTTPException as e:
                 logging.error(
@@ -331,7 +331,7 @@ class ResponseActionView(ui.View):
                 logging.error(f"Error creating or sending text file: {e}")
                 await interaction.response.send_message(
                     "Sorry, I couldn't create the text file.",
-                    ephemeral=False
+                    ephemeral=False,
                 )
 
     class ViewRenderedOutputButton(ui.Button):

@@ -113,7 +113,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 ### Interactive Response & Sources
 - **Gemini Grounding**: When using a compatible Gemini model (e.g., `gemini-2.5-flash-preview-04-17`), the bot can automatically use Google Search to ground its responses with up-to-date information.
 - **Persistent Action Buttons**: If a response was enhanced by grounding or if there's a response text, action buttons will appear below the message. These buttons are persistent and do not time out.
-    - **"Show sources" Button**: If grounding was used, this button reveals the search queries the model used and the web sources it consulted. The sources are displayed in embeds, split into multiple messages if necessary.
+    - **"Show Sources" Button**: If grounding was used, this button reveals the search queries the model used and the web sources it consulted. The sources are displayed in embeds, split into multiple messages if necessary.
     - **"Get response as text file" Button**: Allows you to download the bot's full response as a `.txt` file.
     - **"View output properly (especially tables)" Button**: If enabled in `config.yaml`, this button shares the LLM's full Markdown response via a temporary public ngrok URL. The content is rendered as an HTML page using a local Grip server, making complex Markdown (like tables) easier to read.
 
@@ -153,7 +153,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 | **max_text** | The maximum total number of **tokens** (counted using `tiktoken`) for the entire chat history sent to the LLM. This includes text from all messages in the context, attached text files, and extracted text from PDFs (for non-Gemini models). If this limit is exceeded, the oldest messages (preferring user/model pairs) are removed from the history until the total token count is within the limit. If removing all prior history is still not enough, the latest user query itself will be truncated.<br />(Default: `2000`) |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br />**Only applicable when using a vision model or Google Lens.**<br />(Default: `5`) |
 | **max_messages** | The maximum number of messages allowed in a reply chain. This acts as an initial cap before token-based truncation with `max_text` occurs.<br />(Default: `25`) |
-| **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show sources' button.**<br />(Default: `false`) |
+| **use_plain_responses** | When set to `true` the bot will use plaintext responses instead of embeds. Plaintext responses have a shorter character limit so the bot's messages may split more often.<br />**Also disables streamed responses, warning messages, and the 'Show Sources' button.**<br />(Default: `false`) |
 | **allow_dms** | Set to `false` to disable direct message access.<br />(Default: `true`) |
 | **permissions** | Configure permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br />**Leave `allowed_ids` empty to allow ALL.**<br />**Role and channel permissions do not affect DMs.**<br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups (including for threads within those categories/channels).** |
 

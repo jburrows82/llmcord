@@ -15,10 +15,10 @@ from .constants import (
     USER_MODEL_PREFS_FILENAME,
 )
 
-# Get a logger for this module
 logger = logging.getLogger(__name__)
 
 
+# --- ADDED: Helper functions for loading and saving user preferences ---
 async def _load_user_preferences(filename: str) -> Dict[int, Any]:
     """Loads user preferences from a JSON file asynchronously."""
     if not await aio_os.path.exists(filename):
@@ -75,6 +75,7 @@ user_system_prompt_preferences: Dict[int, Optional[str]] = {}
 user_gemini_thinking_budget_preferences: Dict[int, bool] = {}
 
 
+# --- ADDED: Function to load all preferences ---
 async def load_all_preferences():
     """Loads all user preferences from their respective files."""
     global \
@@ -99,6 +100,7 @@ async def load_all_preferences():
     logger.info("User preferences loaded.")
 
 
+# --- Slash Command Autocomplete Functions ---
 async def model_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> List[Choice[str]]:
@@ -111,6 +113,10 @@ async def model_autocomplete(
                 choices.append(Choice(name=full_model_name, value=full_model_name))
     return choices[:25]  # Limit to 25 choices
 
+
+# --- Slash Command Definition ---
+# Note: The command registration (@discord_client.tree.command) happens in bot.py
+# This file just defines the command function and its logic.
 
 
 @app_commands.autocomplete(model_full_name=model_autocomplete)
@@ -148,14 +154,13 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
         )
         return
 
-    # Store the preference
     user_id = interaction.user.id
     user_model_preferences[user_id] = model_full_name
-    # Use the logger obtained earlier
     logger.info(
         f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}"
     )
 
+    # --- ADDED: Save model preferences ---
     await _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
 
     await interaction.response.send_message(
@@ -168,6 +173,7 @@ def get_user_model_preference(user_id: int, default_model: str) -> str:
     return user_model_preferences.get(user_id, default_model)
 
 
+# --- ADDED: Slash Command for Setting System Prompt ---
 @app_commands.describe(
     prompt="Your custom system prompt. Use 'reset' to use the default prompt from config.yaml."
 )
@@ -201,6 +207,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
                 ephemeral=False,
             )
 
+        # --- ADDED: Save preferences after modification ---
         await _save_user_preferences(
             USER_SYSTEM_PROMPTS_FILENAME, user_system_prompt_preferences
         )
@@ -227,6 +234,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
             logger.error(
                 f"Failed to send error message followup for set_system_prompt_command (Interaction ID: {interaction.id}): {http_err}"
             )
+        # The command will now complete from Discord's perspective, showing the error message.
 
 
 def get_user_system_prompt_preference(
@@ -249,6 +257,7 @@ def get_user_system_prompt_preference(
         return default_prompt
 
 
+# --- ADDED: Slash Command for Setting Gemini Thinking Budget Usage ---
 @app_commands.describe(
     enabled="Set to 'True' to use the thinking budget for Gemini, 'False' to disable it for your interactions."
 )
@@ -308,6 +317,7 @@ def get_user_gemini_thinking_budget_preference(
     return user_gemini_thinking_budget_preferences.get(user_id, default_enabled)
 
 
+# --- ADDED: Slash Command for Help ---
 async def help_command(interaction: discord.Interaction):
     """Displays all available commands and how to use them."""
     embed = discord.Embed(

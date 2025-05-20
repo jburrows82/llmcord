@@ -72,10 +72,12 @@ async def fetch_reddit_data(
             original_index=index,
         )
 
+    # reddit = None # No longer initializing locally
     try:
         # Use the global reddit_client_instance
         submission = await reddit_client_instance.submission(id=submission_id)
-        await submission.load()
+        # Use fetch=True to ensure data is loaded, replaces await submission.load()
+        await submission.load()  # Keep load() as it fetches comments too
 
         logging.debug(
             f"Fetched Reddit submission: {submission.title} using global client."
@@ -159,3 +161,6 @@ async def fetch_reddit_data(
             type="reddit",
             original_index=index,
         )
+    finally:
+        # The global client is not closed here; it's closed when the bot shuts down.
+        pass

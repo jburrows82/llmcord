@@ -5,7 +5,7 @@ from typing import List, Set, Dict, Any
 import discord
 import httpx
 
-from . import models
+from . import models  # Use relative import within the package
 from .utils import (
     extract_urls_with_indices,
     is_youtube_url,
@@ -27,8 +27,8 @@ async def fetch_external_content(
     use_google_lens: bool,
     max_files_per_message: int,
     user_warnings: Set[str],
-    config: Dict[str, Any],  # Added config parameter
-    httpx_client: httpx.AsyncClient,  # Added httpx_client parameter
+    config: Dict[str, Any],
+    httpx_client: httpx.AsyncClient,
 ) -> List[models.UrlFetchResult]:
     """Fetches content from URLs and Google Lens."""
     all_urls_with_indices = extract_urls_with_indices(cleaned_content)
@@ -63,13 +63,14 @@ async def fetch_external_content(
                 user_warnings.add(
                     f"⚠️ Could not extract submission ID from Reddit URL: {url[:50]}..."
                 )
-        elif is_image_url(url):
+        elif is_image_url(url):  # Check for image URLs
             # Define an async function to download the image and return a UrlFetchResult
             async def fetch_image_url_content(
                 img_url: str, img_idx: int
             ) -> models.UrlFetchResult:
                 try:
                     logging.info(f"Attempting to download image URL: {img_url}")
+                    # Use the passed httpx_client
                     async with httpx_client.stream(
                         "GET", img_url, timeout=15.0
                     ) as response:
@@ -152,6 +153,7 @@ async def fetch_external_content(
                     exc_info=True,
                 )
                 user_warnings.add("⚠️ Unhandled error fetching URL content")
+            # Use the correct UrlFetchResult class
             elif isinstance(result, models.UrlFetchResult):
                 url_fetch_results.append(result)
                 if result.error:
@@ -184,6 +186,7 @@ async def fetch_external_content(
                 f"Starting Google Lens processing for image {i + 1}/{len(lens_images_to_process)}..."
             )
             try:
+                # Pass config to process_google_lens_image
                 lens_result = await process_google_lens_image(
                     attachment.url, i, config
                 )  # Pass config here
@@ -202,6 +205,7 @@ async def fetch_external_content(
                     f"Unexpected error during sequential Google Lens processing for image {i + 1}"
                 )
                 user_warnings.add(f"⚠️ Unexpected error processing Lens image {i + 1}")
+                # Use the correct UrlFetchResult class
                 url_fetch_results.append(
                     models.UrlFetchResult(
                         url=attachment.url,

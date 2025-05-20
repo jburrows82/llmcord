@@ -6,6 +6,7 @@ from typing import Dict
 import discord
 from discord import app_commands
 
+# Use google.genai.types
 from google.genai import types as google_types
 
 import httpx
@@ -61,10 +62,12 @@ from .prompt_utils import prepare_system_prompt
 from .response_sender import (
     send_initial_processing_message,
     handle_llm_response_stream,
-    resend_imgur_urls,
+    resend_imgur_urls,  # Also import this helper if direct calls are made from bot.py for exceptions outside stream
 )
 from .history_utils import build_message_history
 
+
+# --- Discord Client Setup ---
 class LLMCordClient(discord.Client):
     def __init__(
         self,
@@ -100,9 +103,10 @@ class LLMCordClient(discord.Client):
 
     async def setup_hook(self):
         """Sync slash commands and load preferences when the bot is ready."""
+        # --- ADDED: Load user preferences ---
         await load_all_preferences()
+        # --- END ADDED ---
 
-        # Register the command function with the tree
         self.tree.add_command(
             app_commands.Command(
                 name="model",
@@ -110,6 +114,7 @@ class LLMCordClient(discord.Client):
                 callback=set_model_command,
             )
         )
+        # --- ADDED: Register /systemprompt command ---
         self.tree.add_command(
             app_commands.Command(
                 name="systemprompt",
@@ -117,6 +122,7 @@ class LLMCordClient(discord.Client):
                 callback=set_system_prompt_command,
             )
         )
+        # --- ADDED: Register /setgeminithinking command ---
         self.tree.add_command(
             app_commands.Command(
                 name="setgeminithinking",
@@ -124,6 +130,7 @@ class LLMCordClient(discord.Client):
                 callback=setgeminithinking,
             )
         )
+        # --- ADDED: Register /help command ---
         self.tree.add_command(
             app_commands.Command(
                 name="help",
@@ -143,6 +150,7 @@ class LLMCordClient(discord.Client):
 
     async def on_message(self, new_msg: discord.Message):
         """Handles incoming messages."""
+        # --- Basic Checks and Trigger ---
         if new_msg.author.bot or new_msg.author == self.user:
             return
         start_time = time.time()
@@ -177,19 +185,25 @@ class LLMCordClient(discord.Client):
         if not should_process:
             return
 
+        # --- Reload config & Check Global Reset ---
+        # Config is now an instance variable, consider if reloading is needed per message
+        # self.config = await get_config() # Uncomment if hot-reloading is desired, get_config is now async
         await check_and_perform_global_reset(self.config)
 
+        # --- Permissions Check ---
         if not is_message_allowed(new_msg, self.config, is_dm):
             logging.warning(
                 f"Blocked message from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions."
             )
             return
 
+        # --- Send Initial "Processing" Message ---
         _use_plain_for_initial_status = self.config.get("use_plain_responses", False)
         processing_msg = await send_initial_processing_message(
             new_msg, _use_plain_for_initial_status
         )
 
+        # --- Clean Content and Check for Google Lens ---
         cleaned_content = original_content_for_processing
         if not is_dm and mentions_bot:
             cleaned_content = cleaned_content.replace(self.user.mention, "").strip()
@@ -206,7 +220,6 @@ class LLMCordClient(discord.Client):
         user_warnings = set()
 
         if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
-            # Removed custom_lens_ok check
             serpapi_keys_ok = bool(self.config.get("serpapi_api_keys"))
             if not serpapi_keys_ok:
                 # Updated log and warning messages
@@ -221,10 +234,12 @@ class LLMCordClient(discord.Client):
                 cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
                 logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
 
+        # --- LLM Provider/Model Selection ---
         user_id = new_msg.author.id
         default_model_str = self.config.get("model", "google/gemini-2.0-flash")
         provider_slash_model = get_user_model_preference(user_id, default_model_str)
 
+        # --- Override Model based on Keywords ---
         final_provider_slash_model = provider_slash_model
         if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
             target_model_str = DEEP_SEARCH_MODEL
@@ -266,6 +281,7 @@ class LLMCordClient(discord.Client):
                     f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason})."
                 )
 
+        # --- Validate Final Model Selection ---
         try:
             provider, model_name = final_provider_slash_model.split("/", 1)
             if (
@@ -288,12 +304,12 @@ class LLMCordClient(discord.Client):
             f"Final model selected for user {user_id}: '{final_provider_slash_model}'"
         )
 
+        # --- Get Config for the FINAL Provider ---
         provider_config = self.config.get("providers", {}).get(provider, {})
         if not isinstance(provider_config, dict):
             logging.error(
                 f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed."
             )
-            # ... (error handling for missing provider config)
             return
         all_api_keys = provider_config.get("api_keys", [])
 
@@ -311,9 +327,9 @@ class LLMCordClient(discord.Client):
             logging.error(
                 f"No API keys configured for the selected provider '{provider}' in config.yaml."
             )
-            # ... (error handling for missing API keys)
             return
 
+        # --- Configuration Values ---
         accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
         if provider == "openai" and provider_config.get("disable_vision", False):
             accept_files = False
@@ -347,7 +363,6 @@ class LLMCordClient(discord.Client):
                     logging.error(
                         f"Fallback provider '{provider}' for model '{final_provider_slash_model}' not configured. This is a critical error."
                     )
-                    # ... (handle this critical error, maybe revert or send specific message)
                     return
                 all_api_keys = provider_config.get("api_keys", [])
                 is_gemini = provider == "google"
@@ -622,6 +637,7 @@ class LLMCordClient(discord.Client):
         )
 
         if not history_for_llm:
+            # ... (handle empty history)
             return
 
         logging.info(
@@ -718,6 +734,11 @@ class LLMCordClient(discord.Client):
                 f"Finished processing message {new_msg.id}. Success: {llm_call_successful}. Total time: {end_time - start_time:.2f} seconds."
             )
 
+    # All internal methods that were moved out are now removed from the class definition.
+    # _is_allowed, _fetch_external_content, _format_external_content,
+    # _build_message_history, _find_parent_message, _prepare_system_prompt,
+    # _get_web_search_queries_from_gemini, _fetch_and_format_searxng_results
+    # are no longer defined here.
 
     async def close(self):
         """Clean up resources when the bot is shutting down."""

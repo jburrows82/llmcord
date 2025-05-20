@@ -2,8 +2,8 @@ import urllib.parse
 import json
 from typing import List, Tuple, Optional, Any
 import discord
-from google.genai import types as google_types  # Use google.genai.types
-import pymupdf
+from google.genai import types as google_types
+import pymupdf  # Changed from pypdfium2
 import asyncio
 
 from .constants import (
@@ -161,7 +161,7 @@ async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
             for page_num in range(len(doc)):  # Iterate through pages
                 page = doc.load_page(page_num)  # Load the current page
                 all_text_parts.append(page.get_text("text"))  # Extract text from page
-            doc.close()  # Close the document
+            doc.close()
             # Join parts with double newline for better separation, return None if no text
             return "\n\n".join(all_text_parts).strip() if all_text_parts else None
         except Exception as e:
@@ -253,7 +253,6 @@ def _truncate_base64_in_payload(
             _truncate_base64_in_payload(item, max_len, prefix_len) for item in payload
         ]
     else:
-        # Return non-dict/list types as is
         return payload
 
 
@@ -275,7 +274,7 @@ def default_serializer(obj):
         if hasattr(obj, "inline_data") and obj.inline_data:
             part_dict["inline_data"] = {
                 "mime_type": obj.inline_data.mime_type,
-                "data": "<base64_data_handled_by_truncation>",  # Placeholder
+                "data": "<base64_data_handled_by_truncation>",
             }
         # Handle function calls if present
         if hasattr(obj, "function_call") and obj.function_call:

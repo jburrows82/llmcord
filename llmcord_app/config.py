@@ -13,6 +13,7 @@ from .constants import (
     GEMINI_MAX_THINKING_BUDGET_VALUE,
     SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY,
     SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH,
+    # Output Sharing Constants
     OUTPUT_SHARING_CONFIG_KEY,
     NGROK_ENABLED_CONFIG_KEY,
     NGROK_AUTHTOKEN_CONFIG_KEY,
@@ -26,6 +27,7 @@ from .constants import (
     DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT,
 )
 
+# --- ADDED DEFAULT GROUNDING PROMPT ---
 DEFAULT_GROUNDING_SYSTEM_PROMPT = """
 You are an expert at analyzing user queries and conversation history to determine the most effective web search queries that will help answer the user's latest request or continue the conversation meaningfully.
 Based on the provided conversation history (especially the last user message), output a list of concise and targeted search queries.
@@ -49,6 +51,7 @@ async def get_config(filename="config.yaml"):
                 logging.error(f"CRITICAL: {filename} is not a valid YAML dictionary.")
                 exit()
 
+            # --- Config Validation & Key Normalization ---
             # Ensure providers have api_keys (plural) as a list
             providers = config_data.get("providers", {})
             if not isinstance(providers, dict):
@@ -87,6 +90,7 @@ async def get_config(filename="config.yaml"):
                         )
                         provider_cfg["api_keys"] = []
 
+                    # --- ADDED: Validate disable_vision for OpenAI ---
                     if name == "openai":
                         if "disable_vision" not in provider_cfg:
                             provider_cfg["disable_vision"] = False  # Default to False
@@ -164,6 +168,7 @@ async def get_config(filename="config.yaml"):
                 )
                 config_data[SEARXNG_BASE_URL_CONFIG_KEY] = SEARXNG_DEFAULT_URL
 
+            # --- ADDED: Load Grounding System Prompt ---
             if (
                 GROUNDING_SYSTEM_PROMPT_CONFIG_KEY not in config_data
                 or not config_data.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY)
@@ -175,6 +180,7 @@ async def get_config(filename="config.yaml"):
                     DEFAULT_GROUNDING_SYSTEM_PROMPT
                 )
 
+            # --- ADDED: Load SearxNG URL content max length ---
             if SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY not in config_data:
                 config_data[SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY] = (
                     SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
@@ -204,6 +210,7 @@ async def get_config(filename="config.yaml"):
                         SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
                     )
 
+            # --- Load Gemini Thinking Budget Settings ---
             if GEMINI_USE_THINKING_BUDGET_CONFIG_KEY not in config_data:
                 config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = (
                     GEMINI_DEFAULT_USE_THINKING_BUDGET
@@ -255,6 +262,7 @@ async def get_config(filename="config.yaml"):
                         GEMINI_DEFAULT_THINKING_BUDGET_VALUE
                     )
 
+            # --- Load Output Sharing Settings ---
             if OUTPUT_SHARING_CONFIG_KEY not in config_data:
                 config_data[OUTPUT_SHARING_CONFIG_KEY] = {}
                 logging.info(
@@ -379,6 +387,7 @@ async def get_config(filename="config.yaml"):
                 )
                 output_sharing_cfg[URL_SHORTENER_SERVICE_CONFIG_KEY] = "tinyurl"
 
+            # --- Load Fallback Model System Prompt ---
             if (
                 FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY not in config_data
                 or not config_data.get(FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY)

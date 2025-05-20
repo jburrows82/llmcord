@@ -1,6 +1,7 @@
 import logging
 import os
 
+# import shutil  # Replaced by aio_os operations
 import aiofiles.os as aio_os
 import time
 import uuid
@@ -21,12 +22,15 @@ from .constants import (
     GRIP_PORT_CONFIG_KEY,  # This will now be the port for our Python HTTP server
     DEFAULT_GRIP_PORT,  # Default port for our Python HTTP server
     NGROK_STATIC_DOMAIN_CONFIG_KEY,
-    URL_SHORTENER_ENABLED_CONFIG_KEY,  # Added
+    URL_SHORTENER_ENABLED_CONFIG_KEY,
     URL_SHORTENER_SERVICE_CONFIG_KEY,
+    # OUTPUT_FILENAME, # No longer a single output file
 )
 
+# New constant for the directory to store HTML files
 SHARED_HTML_DIR = "shared_html_outputs"
 
+# Module-level variables
 _http_server_thread: Optional[threading.Thread] = None
 _http_server_instance: Optional[socketserver.TCPServer] = None
 _ngrok_tunnel: Optional[ngrok.NgrokTunnel] = None
@@ -418,3 +422,4 @@ async def cleanup_shared_html_dir():
         )
 
 
+# No atexit here, cleanup should be managed by main.py

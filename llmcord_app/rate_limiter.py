@@ -231,5 +231,5 @@ def close_all_db_managers():  # This remains synchronous
     logging.info("Closing database connections...")
     for manager in db_managers.values():
         manager.close()
-    db_managers = {}  # Clear the dictionary
+    db_managers = {}
     logging.info("Database connections closed.")

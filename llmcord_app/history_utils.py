@@ -4,14 +4,17 @@ import asyncio
 import base64
 import httpx
 import re
-import tiktoken
+import tiktoken  # Added tiktoken
 
 import discord
 
 from .constants import AT_AI_PATTERN, STREAMING_INDICATOR
 from . import models
+# Assuming google.genai.types will be passed as google_types_module
+# Assuming extract_text_from_pdf_bytes will be passed as a function
 
 
+# --- ADDED: Tiktoken helper ---
 def _get_tokenizer_for_model(model_name: str):
     """Gets the appropriate tiktoken encoder for a given model name."""
     try:
@@ -47,7 +50,6 @@ def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str
             truncated_text += "..."
         return truncated_text, actual_token_count  # Return original token count
     return text, actual_token_count
-
 
 
 async def find_parent_message(
@@ -201,7 +203,7 @@ async def build_message_history(
                 user_warnings.add(
                     f"⚠️ Couldn't fetch full history (message {current_msg_id} missing)."
                 )
-                break
+                break  # Stop if a message in the chain can't be fetched
             msg_nodes_cache[current_msg_id] = models_module.MsgNode()
 
         curr_node = msg_nodes_cache[current_msg_id]
@@ -598,7 +600,7 @@ async def build_message_history(
         image_token_cost_for_entry = 0
 
         # Add fixed token cost for images if files exist
-        if entry_data["files"]:  # Removed target_provider_name == "openai"
+        if entry_data["files"]:
             num_images_in_entry = 0
             for file_part_struct in entry_data["files"]:
                 if (
@@ -656,9 +658,7 @@ async def build_message_history(
                         )
                     )
 
-                if latest_query_data[
-                    "files"
-                ]:  # Removed target_provider_name == "openai"
+                if latest_query_data["files"]:
                     num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
                         if (
@@ -766,9 +766,7 @@ async def build_message_history(
                         )
                     )
 
-                if latest_query_data[
-                    "files"
-                ]:  # Removed target_provider_name == "openai"
+                if latest_query_data["files"]:
                     num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
                         if (
@@ -921,3 +919,4 @@ async def build_message_history(
     return api_formatted_history
 
 
+# STREAMING_INDICATOR is now imported from .constants

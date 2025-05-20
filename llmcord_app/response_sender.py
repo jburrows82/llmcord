@@ -26,13 +26,14 @@ from .constants import (
 )
 from .ui import ResponseActionView
 from .llm_handler import generate_response_stream
-from .prompt_utils import prepare_system_prompt
+from .prompt_utils import prepare_system_prompt  # <-- ADDED
 from .commands import (
     get_user_gemini_thinking_budget_preference,
 )
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
+# class LLMCordClient(discord.Client): ...
 
 
 async def send_initial_processing_message(
@@ -73,13 +74,14 @@ async def handle_llm_response_stream(
     provider_config: Dict[str, Any],
     extra_api_params: Dict[str, Any],
     initial_user_warnings: Set[str],
-    use_plain_responses_config: bool,  # Renamed to avoid conflict
-    split_limit_config: int,  # Renamed
+    use_plain_responses_config: bool,
+    split_limit_config: int,
 ):
     """Handles the streaming, editing, and sending of LLM responses."""
     response_msgs: List[discord.Message] = []
     final_text_to_return = ""
     llm_call_successful_final = False
+    # grounding_metadata_final = None # This variable was assigned but never used
     edit_task = None  # Keep edit_task for embed streaming
 
     should_retry_with_gemini_signal = False
@@ -105,7 +107,7 @@ async def handle_llm_response_stream(
                 or should_retry_due_to_unprocessable_entity
                 or should_retry_due_to_all_keys_failed  # Check new flag
             ):
-                break
+                break  # No signal to retry, so exit the loop
 
             if should_retry_with_gemini_signal:
                 logging.info(
@@ -620,7 +622,7 @@ async def handle_llm_response_stream(
                                             grounding_metadata=grounding_metadata_for_this_attempt,
                                             full_response_text=final_text_for_this_attempt,
                                             model_name=current_model_name,
-                                            app_config=client.config,  # Pass app_config
+                                            app_config=client.config,
                                         )
                                         if (
                                             not view_to_attach
@@ -753,6 +755,7 @@ async def handle_llm_response_stream(
 
                 llm_call_successful_final = current_attempt_llm_successful
                 final_text_to_return = final_text_for_this_attempt
+                # grounding_metadata_final = grounding_metadata_for_this_attempt # This variable was assigned but never used
 
                 if use_plain_responses_config and llm_call_successful_final:
                     final_messages_content = [
@@ -760,7 +763,7 @@ async def handle_llm_response_stream(
                         for i in range(0, len(final_text_to_return), split_limit_config)
                     ]
                     if not final_messages_content:
-                        final_messages_content.append("...")
+                        final_messages_content.append("...")  # type: ignore
 
                     temp_response_msgs_plain = []
                     start_index_plain = 0
@@ -812,7 +815,7 @@ async def handle_llm_response_stream(
                         reply_target_plain = response_msg_plain
 
                     response_msgs = temp_response_msgs_plain
-                break
+                break  # type: ignore
         except AllKeysFailedError as e:
             logging.error(
                 f"LLM generation failed for message {new_msg.id} (Attempt {attempt_num + 1}, Model {current_model_name}): {e}"
@@ -837,7 +840,7 @@ async def handle_llm_response_stream(
                     client.config.get("use_plain_responses", False),
                 )
                 llm_call_successful_final = False
-                break  # Break from the attempt loop
+                break
 
         except Exception as outer_e:
             logging.exception(
@@ -852,10 +855,38 @@ async def handle_llm_response_stream(
                 use_plain_responses_config,
                 client.config.get("use_plain_responses", False),
             )
-            llm_call_successful_final = False
-            break
+            llm_call_successful_final = False  # type: ignore
+            break  # type: ignore
 
-    # Output server functionality moved to a button
+    # After the loop, if successful, try to start the output server
+    # THIS BLOCK IS REMOVED as the functionality is moved to a button
+    # if llm_call_successful_final and final_text_to_return:
+    #     try:
+    #         # Run synchronous start_output_server in a thread
+    #         public_url = await asyncio.to_thread(
+    #             start_output_server, final_text_to_return, client.config
+    #         )
+    #         if public_url:
+    #             # Determine the target to reply to for the ngrok URL message
+    #             reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
+    #             try:
+    #                 await reply_target_for_url.reply(
+    #                     f"🔗 View rendered output: {public_url}",
+    #                     mention_author=False,
+    #                     suppress_embeds=True,  # Keep it clean
+    #                 )
+    #                 logging.info(f"Sent ngrok public URL: {public_url}")
+    #             except discord.HTTPException as e:
+    #                 logging.error(f"Failed to send ngrok public URL message: {e}")
+    #             except Exception as e:
+    #                 logging.error(
+    #                     f"Unexpected error sending ngrok public URL message: {e}",
+    #                     exc_info=True,
+    #                 )
+    #     except Exception as e:
+    #         logging.error(
+    #             f"Error starting or managing output server: {e}", exc_info=True
+    #         )
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 
@@ -942,7 +973,6 @@ async def _handle_llm_exception(
         not use_plain_responses_stream and response_msgs and response_msgs[-1].embeds
     ):  # No processing_msg, but stream had embeds
         target_edit_msg = response_msgs[-1]
-        # ... (similar logic as above to edit the last stream message)
         embed_to_edit = discord.Embed.from_dict(target_edit_msg.embeds[0].to_dict())
         current_desc = embed_to_edit.description or ""
         embed_to_edit.description = current_desc.replace(

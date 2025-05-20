@@ -616,7 +616,7 @@ async def generate_response_stream(
                         stream_grounding_metadata,
                         f"Response {'blocked by safety' if is_blocked_by_safety else 'stopped by recitation'}.",
                     )
-                    return
+                    return  # Stop generation entirely if safety/recitation block from any key.
 
                 if (
                     stream_finish_reason and content_received
@@ -656,7 +656,7 @@ async def generate_response_stream(
                             f"Key {key_display}: Finished Reason '{stream_finish_reason}' with content"
                         )
                         last_error_type = stream_finish_reason
-                        break  # Break compression loop, try next API key
+                        break
 
                 if (
                     not content_received and stream_finish_reason
@@ -710,7 +710,7 @@ async def generate_response_stream(
                             stream_grounding_metadata,
                             "RETRY_WITH_GEMINI_NO_FINISH_REASON",
                         )
-                        return
+                        return  # Stop this attempt, let outer logic handle retry signal
                     else:  # Gemini stream ended with content but no explicit finish reason (should be rare)
                         logging.warning(
                             f"Gemini stream for key {key_display} ended with content but no explicit finish reason. Treating as complete."
@@ -720,7 +720,7 @@ async def generate_response_stream(
                             "stop",
                             stream_grounding_metadata,
                             None,
-                        )
+                        )  # Assume stop
                         return
 
                 # If no content, no finish reason, and stream didn't break unexpectedly (e.g. empty response)
@@ -754,7 +754,7 @@ async def generate_response_stream(
                         llm_errors.append(
                             f"Key {key_display}: Max compression retries for 413 failed."
                         )
-                        break
+                        break  # Break compression loop, try next API key
 
                     logging.info(
                         f"Attempting image compression (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
