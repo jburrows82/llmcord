@@ -14,12 +14,21 @@ from llmcord_app.output_server import (
 )
 
 # Configure logging early
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    stream=sys.stdout,
-)
+log_formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Console Handler
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(log_formatter)
+logger.addHandler(console_handler)
+
+# File Handler for errors and warnings
+file_handler = logging.FileHandler("llmcord_errors.log", encoding="utf-8")
+file_handler.setLevel(logging.WARNING) # Log WARNING and ERROR levels to file
+file_handler.setFormatter(log_formatter)
+logger.addHandler(file_handler)
+
 logging.getLogger("discord.http").setLevel(logging.WARNING)  # Reduce discord http noise
 logging.getLogger("websockets.client").setLevel(
     logging.WARNING
