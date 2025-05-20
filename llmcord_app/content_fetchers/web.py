@@ -247,43 +247,86 @@ async def fetch_with_beautifulsoup(
 async def fetch_general_url_content(
     url: str,
     index: int,
-    client: httpx.AsyncClient,  # httpx client for BeautifulSoup fallback
+    client: httpx.AsyncClient,
+    main_extractor: str,
+    fallback_extractor: str,
     max_text_length: Optional[int] = None,
 ) -> UrlFetchResult:
     """
-    Fetches content from a general URL.
-    Tries Crawl4AI first, then falls back to BeautifulSoup.
+    Fetches content from a general URL using the specified main and fallback extractors.
     """
-    crawl4ai_result = await fetch_with_crawl4ai(url, index, max_text_length)
+    chosen_main_fetcher = None
+    chosen_fallback_fetcher = None
+    main_fetcher_name = ""
+    fallback_fetcher_name = ""
 
-    if crawl4ai_result.content and not crawl4ai_result.error:
-        return crawl4ai_result
+    # Define helper functions to capture the 'client' variable from the outer scope
+    async def _bs_fetcher_wrapper(u_param: str, i_param: int, mtl_param: Optional[int]):
+        return await fetch_with_beautifulsoup(u_param, i_param, client, mtl_param)
+
+    if main_extractor == "crawl4ai":
+        chosen_main_fetcher = fetch_with_crawl4ai
+        main_fetcher_name = "Crawl4AI"
+    elif main_extractor == "beautifulsoup":
+        chosen_main_fetcher = _bs_fetcher_wrapper
+        main_fetcher_name = "BeautifulSoup"
+    else:  # Should not happen due to config validation
+        logging.error(
+            f"Invalid main_extractor specified: {main_extractor}. Defaulting to crawl4ai."
+        )
+        chosen_main_fetcher = fetch_with_crawl4ai
+        main_fetcher_name = "Crawl4AI (defaulted)"
+
+    if fallback_extractor == "crawl4ai":
+        chosen_fallback_fetcher = fetch_with_crawl4ai
+        fallback_fetcher_name = "Crawl4AI"
+    elif fallback_extractor == "beautifulsoup":
+        chosen_fallback_fetcher = _bs_fetcher_wrapper
+        fallback_fetcher_name = "BeautifulSoup"
+    else:  # Should not happen
+        logging.error(
+            f"Invalid fallback_extractor specified: {fallback_extractor}. Defaulting to beautifulsoup."
+        )
+        chosen_fallback_fetcher = _bs_fetcher_wrapper
+        fallback_fetcher_name = "BeautifulSoup (defaulted)"
+
+    logging.info(
+        f"Attempting general URL fetch for {url} with main extractor: {main_fetcher_name}"
+    )
+    main_result = await chosen_main_fetcher(url, index, max_text_length)
+
+    if main_result.content and not main_result.error:
+        return main_result
     else:
         logging.warning(
-            f"Crawl4AI failed for {url} (Error: {crawl4ai_result.error}). Falling back to BeautifulSoup."
+            f"{main_fetcher_name} failed for {url} (Error: {main_result.error}). Falling back to {fallback_fetcher_name}."
         )
-        # Pass the httpx client to the BeautifulSoup fetcher
-        bs_result = await fetch_with_beautifulsoup(url, index, client, max_text_length)
-        if bs_result.content and not bs_result.error:
-            return bs_result
-        else:
-            # Both failed, return Crawl4AI's error if it exists, else BS's, or a generic one
-            final_error = (
-                "Failed to fetch content with both Crawl4AI and BeautifulSoup."
-            )
-            if crawl4ai_result.error and bs_result.error:
-                final_error = f"Crawl4AI Error: {crawl4ai_result.error}. BeautifulSoup Error: {bs_result.error}"
-            elif crawl4ai_result.error:
-                final_error = f"Crawl4AI Error: {crawl4ai_result.error} (BS fallback also failed)."
-            elif bs_result.error:
-                final_error = (
-                    f"BeautifulSoup Error: {bs_result.error} (Crawl4AI also failed)."
-                )
 
+        # Ensure main and fallback are not the same to avoid re-running the same failed fetcher
+        if main_extractor == fallback_extractor:
+            logging.warning(
+                f"Main and fallback extractors are the same ({main_extractor}). Not re-running failed fetcher."
+            )
+            # Return the error from the first attempt
             return UrlFetchResult(
                 url=url,
                 content=None,
-                error=final_error,
-                type="general",  # Fallback type if both fail
+                error=f"{main_fetcher_name} Error: {main_result.error} (Fallback was same method).",
+                type="general",
+                original_index=index,
+            )
+
+        fallback_result = await chosen_fallback_fetcher(url, index, max_text_length)
+        if fallback_result.content and not fallback_result.error:
+            return fallback_result
+        else:
+            # Both failed
+            final_error_message = f"Failed with {main_fetcher_name} (Error: {main_result.error}) and {fallback_fetcher_name} (Error: {fallback_result.error})."
+            logging.error(f"Both extractors failed for {url}: {final_error_message}")
+            return UrlFetchResult(
+                url=url,
+                content=None,
+                error=final_error_message,
+                type="general",
                 original_index=index,
             )

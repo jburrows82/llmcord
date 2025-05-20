@@ -13,18 +13,21 @@ from .utils import (
     is_image_url,
     extract_reddit_submission_id,
 )
-from crawl4ai import (
-    AsyncWebCrawler,
-    CrawlerRunConfig,
-    CacheMode,
-)  # Added Crawl4AI imports
 from .content_fetchers import (
     fetch_youtube_data,
     fetch_reddit_data,
     # fetch_general_url_content, # No longer directly used here for batching
     process_google_lens_image,
 )
-from .content_fetchers.web import fetch_with_beautifulsoup  # Import fallback
+from .content_fetchers.web import (
+    fetch_general_url_content as fetch_general_url_content_dynamic,
+)  # Renamed for clarity
+from .constants import (
+    MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
+    DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+)
 
 
 async def fetch_external_content(
@@ -51,15 +54,19 @@ async def fetch_external_content(
         # Check if the URL is wrapped in backticks
         is_wrapped_in_backticks = False
         # Check character before the URL
-        char_before_is_backtick = (index > 0 and cleaned_content[index - 1] == '`')
+        char_before_is_backtick = index > 0 and cleaned_content[index - 1] == "`"
         # Check character after the URL
-        char_after_is_backtick = ((index + len(url)) < len(cleaned_content) and cleaned_content[index + len(url)] == '`')
+        char_after_is_backtick = (index + len(url)) < len(
+            cleaned_content
+        ) and cleaned_content[index + len(url)] == "`"
 
         if char_before_is_backtick and char_after_is_backtick:
             is_wrapped_in_backticks = True
 
         if is_wrapped_in_backticks:
-            logging.info(f"Skipping content extraction for URL wrapped in backticks: {url}")
+            logging.info(
+                f"Skipping content extraction for URL wrapped in backticks: {url}"
+            )
             # DO NOT add to processed_urls_for_batching here.
             # A non-backticked version of the same URL elsewhere should still be processed.
             continue  # Skip fetching and further processing for this URL
@@ -163,80 +170,56 @@ async def fetch_external_content(
 
     # Batch process general URLs with Crawl4AI
     if general_urls_to_batch:
-        logging.info(
-            f"Batch processing {len(general_urls_to_batch)} general URLs with Crawl4AI."
+        main_extractor_method = config.get(
+            MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+            DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
         )
-        url_strings_for_crawl4ai = [item[0] for item in general_urls_to_batch]
-        url_to_original_index_map = {url: idx for url, idx in general_urls_to_batch}
+        fallback_extractor_method = config.get(
+            FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+            DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+        )
+        logging.info(
+            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}'."
+        )
+
+        general_url_processing_tasks = []
+        for url_str, original_idx_val in general_urls_to_batch:
+            general_url_processing_tasks.append(
+                fetch_general_url_content_dynamic(
+                    url=url_str,
+                    index=original_idx_val,
+                    client=httpx_client,
+                    main_extractor=main_extractor_method,
+                    fallback_extractor=fallback_extractor_method,
+                    max_text_length=max_text_length,
+                )
+            )
 
         try:
-            run_config = CrawlerRunConfig(
-                cache_mode=CacheMode.BYPASS,  # Consider making this configurable
-                # Add other relevant Crawl4AI configs here if needed
+            batch_general_results = await asyncio.gather(
+                *general_url_processing_tasks, return_exceptions=True
             )
-            async with AsyncWebCrawler() as crawler:  # Single crawler instance
-                crawl4ai_batch_results = await crawler.arun_many(
-                    url_strings_for_crawl4ai, config=run_config
-                )
-
-            for crawl_result in crawl4ai_batch_results:
-                original_idx = url_to_original_index_map.get(crawl_result.url, -1)
-                if (
-                    crawl_result.success
-                    and crawl_result.markdown
-                    and crawl_result.markdown.raw_markdown
-                ):
-                    content = crawl_result.markdown.raw_markdown
-                    if (
-                        max_text_length is not None
-                        and content
-                        and len(content) > max_text_length
-                    ):
-                        content = content[: max_text_length - 3] + "..."
-                    url_fetch_results.append(
-                        models.UrlFetchResult(
-                            url=crawl_result.url,
-                            content=content,
-                            type="general_crawl4ai",
-                            original_index=original_idx,
-                        )
-                    )
-                else:
-                    error_msg_crawl4ai = (
-                        crawl_result.error_message
-                        or "Crawl4AI: Unknown error or no markdown."
-                    )
-                    logging.warning(
-                        f"Crawl4AI failed for {crawl_result.url} (Error: {error_msg_crawl4ai}). Falling back to BeautifulSoup."
-                    )
-                    bs_fallback_result = await fetch_with_beautifulsoup(
-                        crawl_result.url, original_idx, httpx_client, max_text_length
-                    )
-                    url_fetch_results.append(bs_fallback_result)
-                    if bs_fallback_result.error:
+            for result_item in batch_general_results:
+                if isinstance(result_item, models.UrlFetchResult):
+                    url_fetch_results.append(result_item)
+                    if result_item.error:
                         user_warnings.add(
-                            f"⚠️ Fallback fetch failed for {crawl_result.url[:40]}...: {bs_fallback_result.error}"
+                            f"⚠️ Fetch failed for general URL {result_item.url[:40]}...: {result_item.error}"
                         )
-
-        except Exception as e_crawl4ai_batch:
+                elif isinstance(result_item, Exception):
+                    logging.error(
+                        f"Unhandled exception during general URL batch processing: {result_item}",
+                        exc_info=True,
+                    )
+                    # Find which URL this exception corresponds to if possible, or add a generic warning
+                    # This part is tricky as gather doesn't directly map exceptions back to input tasks easily without more complex tracking
+                    user_warnings.add("⚠️ Error during batch web page processing.")
+        except Exception as e_general_batch:
             logging.error(
-                f"Crawl4AI arun_many batch processing failed: {e_crawl4ai_batch}",
+                f"General URL batch processing gather failed: {e_general_batch}",
                 exc_info=True,
             )
-            user_warnings.add("⚠️ Error during batch web page processing with Crawl4AI.")
-            # Fallback for all URLs in this batch if arun_many itself fails
-            for url_str, original_idx_val in general_urls_to_batch:
-                logging.info(
-                    f"Falling back to BeautifulSoup for {url_str} due to arun_many failure."
-                )
-                bs_fallback_result = await fetch_with_beautifulsoup(
-                    url_str, original_idx_val, httpx_client, max_text_length
-                )
-                url_fetch_results.append(bs_fallback_result)
-                if bs_fallback_result.error:
-                    user_warnings.add(
-                        f"⚠️ Fallback fetch failed for {url_str[:40]}...: {bs_fallback_result.error}"
-                    )
+            user_warnings.add("⚠️ Critical error during batch web page processing.")
 
     # Fetch other non-general URLs concurrently
     if other_fetch_tasks:

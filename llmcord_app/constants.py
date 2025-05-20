@@ -39,7 +39,9 @@ MAX_EMBED_TOTAL_SIZE = 5900  # Safety margin below Discord's 6000 limit
 MAX_PLAIN_TEXT_LENGTH = 2000  # Discord message character limit
 
 # --- URL Regex Patterns ---
-GENERAL_URL_PATTERN = re.compile(r'https?://[^\s<>"`]+|www\.[^\s<>"`]+')  # Added ` to negated set
+GENERAL_URL_PATTERN = re.compile(
+    r'https?://[^\s<>"`]+|www\.[^\s<>"`]+'
+)  # Added ` to negated set
 YOUTUBE_URL_PATTERN = re.compile(
     r"(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11}))"
 )
@@ -78,6 +80,15 @@ GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- ADDED CONSTANTS FOR SEARXNG URL CONTENT LENGTH ---
 SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY = "searxng_url_content_max_length"
 SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH = 20000
+
+# --- General URL Content Extraction ---
+MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = "main_general_url_content_extractor"
+FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = (
+    "fallback_general_url_content_extractor"
+)
+DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR = "crawl4ai"
+DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR = "beautifulsoup"
+VALID_URL_EXTRACTORS = ["crawl4ai", "beautifulsoup"]
 
 # --- Gemini Thinking Budget ---
 GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"

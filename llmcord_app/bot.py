@@ -496,8 +496,12 @@ class LLMCordClient(discord.Client):
         if user_has_provided_urls:
             all_backticked = True
             for url, index_pos in all_urls_in_cleaned_content:
-                char_before_is_backtick = (index_pos > 0 and cleaned_content[index_pos - 1] == '`')
-                char_after_is_backtick = ((index_pos + len(url)) < len(cleaned_content) and cleaned_content[index_pos + len(url)] == '`')
+                char_before_is_backtick = (
+                    index_pos > 0 and cleaned_content[index_pos - 1] == "`"
+                )
+                char_after_is_backtick = (index_pos + len(url)) < len(
+                    cleaned_content
+                ) and cleaned_content[index_pos + len(url)] == "`"
                 if not (char_before_is_backtick and char_after_is_backtick):
                     all_backticked = False
                     break
@@ -519,12 +523,16 @@ class LLMCordClient(discord.Client):
             logging.info(
                 "Skipping Gemini grounding/SearxNG step because Google Lens is active."
             )
-        elif (not user_has_provided_urls or has_only_backticked_urls) and not is_gemini and not is_grok_model:
+        elif (
+            (not user_has_provided_urls or has_only_backticked_urls)
+            and not is_gemini
+            and not is_grok_model
+        ):
             if has_only_backticked_urls:
                 logging.info(
                     f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and all user URLs are backticked. Attempting grounding pre-step for SearxNG."
                 )
-            else: # No user URLs at all
+            else:  # No user URLs at all
                 logging.info(
                     f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG."
                 )

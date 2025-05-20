@@ -119,6 +119,14 @@ searxng_base_url: http://localhost:18088 # Your SearxNG instance with /search en
 # This helps keep the context provided to non-Gemini/non-Grok models concise.
 searxng_url_content_max_length: 20000
 
+# --- General URL Content Extraction Settings ---
+# Configure the primary and fallback methods for extracting content from general web URLs.
+# Supported values: "crawl4ai", "beautifulsoup"
+# "crawl4ai" uses a more advanced crawler designed for AI, good for modern/JS-heavy sites.
+# "beautifulsoup" is a simpler HTML parser, good as a fallback or for basic sites.
+main_general_url_content_extractor: "crawl4ai"
+fallback_general_url_content_extractor: "beautifulsoup"
+
 # System prompt for the Gemini model (gemini-2.0-flash) when it's used to determine
 # web search queries for grounding non-Gemini/non-Grok models.
 # This prompt guides Gemini on how to generate relevant search terms.

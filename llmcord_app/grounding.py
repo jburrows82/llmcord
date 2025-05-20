@@ -13,12 +13,17 @@ from .constants import (
     SEARXNG_NUM_RESULTS,
     SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY,
     AllKeysFailedError,
+    # General URL Extractors
+    MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
+    DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
 )
 from .content_fetchers import (
     fetch_searxng_results,
     fetch_youtube_data,
     fetch_reddit_data,
-    fetch_general_url_content,
+    fetch_general_url_content,  # This is the dynamic one from content_fetchers.web
 )
 from .utils import is_youtube_url, is_reddit_url, extract_reddit_submission_id
 # The generate_response_stream function will be passed as an argument
@@ -221,7 +226,15 @@ async def fetch_and_format_searxng_results(
                     url_str,
                     idx,
                     httpx_client,
-                    max_text_length=searxng_content_limit,  # Pass httpx_client
+                    main_extractor=config.get(
+                        MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+                        DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
+                    ),
+                    fallback_extractor=config.get(
+                        FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+                        DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+                    ),
+                    max_text_length=searxng_content_limit,
                 )
             )
 

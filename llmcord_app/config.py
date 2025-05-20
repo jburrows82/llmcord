@@ -25,6 +25,12 @@ from .constants import (
     URL_SHORTENER_SERVICE_CONFIG_KEY,
     FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,
     DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT,
+    # General URL Extractors
+    MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+    DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
+    DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+    VALID_URL_EXTRACTORS,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -397,6 +403,43 @@ async def get_config(filename="config.yaml"):
                 )
                 config_data[FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY] = (
                     DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT
+                )
+
+            # --- Load General URL Content Extractor Settings ---
+            if MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY not in config_data:
+                config_data[MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY] = (
+                    DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR
+                )
+                logging.info(
+                    f"'{MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY}' not found. Using default: {DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR}"
+                )
+            elif (
+                config_data[MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY]
+                not in VALID_URL_EXTRACTORS
+            ):
+                logging.warning(
+                    f"Invalid value for '{MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY}': {config_data[MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY]}. Using default: {DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR}"
+                )
+                config_data[MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY] = (
+                    DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR
+                )
+
+            if FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY not in config_data:
+                config_data[FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY] = (
+                    DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR
+                )
+                logging.info(
+                    f"'{FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY}' not found. Using default: {DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR}"
+                )
+            elif (
+                config_data[FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY]
+                not in VALID_URL_EXTRACTORS
+            ):
+                logging.warning(
+                    f"Invalid value for '{FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY}': {config_data[FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY]}. Using default: {DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR}"
+                )
+                config_data[FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY] = (
+                    DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR
                 )
 
             return config_data
