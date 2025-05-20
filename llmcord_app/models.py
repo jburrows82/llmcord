@@ -52,5 +52,6 @@ class UrlFetchResult:
         "google_lens_serpapi",
         "image_url_content",
         "general_crawl4ai",
+        "general_jina",
     ] = "general"
     original_index: int = -1  # Original start index of the URL in the user's message or attachment index for Lens

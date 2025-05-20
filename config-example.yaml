@@ -121,11 +121,19 @@ searxng_url_content_max_length: 20000
 
 # --- General URL Content Extraction Settings ---
 # Configure the primary and fallback methods for extracting content from general web URLs.
-# Supported values: "crawl4ai", "beautifulsoup"
+# Supported values: "crawl4ai", "beautifulsoup", "jina"
 # "crawl4ai" uses a more advanced crawler designed for AI, good for modern/JS-heavy sites.
 # "beautifulsoup" is a simpler HTML parser, good as a fallback or for basic sites.
+# "jina" uses Jina Reader (r.jina.ai) to fetch and process content, good for general articles.
 main_general_url_content_extractor: "crawl4ai"
 fallback_general_url_content_extractor: "beautifulsoup"
+
+# --- Jina Reader Settings (Optional) ---
+# Configure the engine mode for Jina Reader.
+# Supported values: "direct", "browser"
+# "direct": (Speed First) Fastest engine, optimized for speed but unable to handle JavaScript-generated dynamic content.
+# "browser": (Best Quality) High-quality engine designed to resolve rendering issues and deliver the best content output. Potentially better for JS-heavy sites but might be slower.
+jina_engine_mode: "direct"
 
 # System prompt for the Gemini model (gemini-2.0-flash) when it's used to determine
 # web search queries for grounding non-Gemini/non-Grok models.

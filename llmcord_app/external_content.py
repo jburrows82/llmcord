@@ -27,6 +27,8 @@ from .constants import (
     FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
     DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
     DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+    JINA_ENGINE_MODE_CONFIG_KEY,  # Added for Jina
+    DEFAULT_JINA_ENGINE_MODE,  # Added for Jina
 )
 
 
@@ -178,8 +180,11 @@ async def fetch_external_content(
             FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
             DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
         )
+        jina_mode = config.get(
+            JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE
+        )  # Get Jina mode
         logging.info(
-            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}'."
+            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}', Jina mode: '{jina_mode}'."
         )
 
         general_url_processing_tasks = []
@@ -192,6 +197,7 @@ async def fetch_external_content(
                     main_extractor=main_extractor_method,
                     fallback_extractor=fallback_extractor_method,
                     max_text_length=max_text_length,
+                    jina_engine_mode=jina_mode,  # Pass Jina mode
                 )
             )
 
@@ -354,7 +360,11 @@ def format_external_content(url_fetch_results: List[models.UrlFetchResult]) -> s
                         )
                 other_url_parts.append(content_str)
                 other_url_counter += 1
-            elif result.type == "general" or result.type == "general_crawl4ai":
+            elif (
+                result.type == "general"
+                or result.type == "general_crawl4ai"
+                or result.type == "general_jina"
+            ):
                 content_str = f"\nurl {other_url_counter}: {result.url} (source type: {result.type})\nurl {other_url_counter} content:\n"
                 if isinstance(result.content, str):
                     content_str += f"  {result.content}\n"

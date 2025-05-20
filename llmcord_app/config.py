@@ -31,6 +31,10 @@ from .constants import (
     DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
     DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
     VALID_URL_EXTRACTORS,
+    # Jina settings
+    JINA_ENGINE_MODE_CONFIG_KEY,
+    DEFAULT_JINA_ENGINE_MODE,
+    VALID_JINA_ENGINE_MODES,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -441,6 +445,20 @@ async def get_config(filename="config.yaml"):
                 config_data[FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY] = (
                     DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR
                 )
+
+            # --- Load Jina Engine Mode ---
+            if JINA_ENGINE_MODE_CONFIG_KEY not in config_data:
+                config_data[JINA_ENGINE_MODE_CONFIG_KEY] = DEFAULT_JINA_ENGINE_MODE
+                logging.info(
+                    f"'{JINA_ENGINE_MODE_CONFIG_KEY}' not found. Using default: {DEFAULT_JINA_ENGINE_MODE}"
+                )
+            elif (
+                config_data[JINA_ENGINE_MODE_CONFIG_KEY] not in VALID_JINA_ENGINE_MODES
+            ):
+                logging.warning(
+                    f"Invalid value for '{JINA_ENGINE_MODE_CONFIG_KEY}': {config_data[JINA_ENGINE_MODE_CONFIG_KEY]}. Using default: {DEFAULT_JINA_ENGINE_MODE}"
+                )
+                config_data[JINA_ENGINE_MODE_CONFIG_KEY] = DEFAULT_JINA_ENGINE_MODE
 
             return config_data
 

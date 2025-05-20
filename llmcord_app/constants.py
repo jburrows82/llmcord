@@ -88,7 +88,12 @@ FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = (
 )
 DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR = "crawl4ai"
 DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR = "beautifulsoup"
-VALID_URL_EXTRACTORS = ["crawl4ai", "beautifulsoup"]
+VALID_URL_EXTRACTORS = ["crawl4ai", "beautifulsoup", "jina"]
+
+# --- Jina Reader Settings ---
+JINA_ENGINE_MODE_CONFIG_KEY = "jina_engine_mode"
+DEFAULT_JINA_ENGINE_MODE = "direct"
+VALID_JINA_ENGINE_MODES = ["direct", "browser"]
 
 # --- Gemini Thinking Budget ---
 GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"

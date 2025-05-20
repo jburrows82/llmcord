@@ -1,6 +1,8 @@
 import logging
 import re
 from typing import Optional
+import urllib.request  # Added for Jina
+import asyncio  # Added for Jina
 
 import httpx
 from bs4 import BeautifulSoup
@@ -11,6 +13,85 @@ from crawl4ai import (
 )  # Added Crawl4AI imports
 
 from ..models import UrlFetchResult
+
+
+from ..constants import DEFAULT_JINA_ENGINE_MODE  # Added for Jina engine mode
+
+
+async def fetch_with_jina(
+    url: str,
+    index: int,
+    max_text_length: Optional[int] = None,
+    jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,
+) -> UrlFetchResult:
+    """Fetches content using Jina Reader."""
+    logging.info(
+        f"Attempting to fetch URL with Jina Reader: {url} (Engine: {jina_engine_mode})"
+    )
+    jina_reader_url = f"https://r.jina.ai/{url}"
+    headers = {"X-Engine": jina_engine_mode}
+    try:
+        # urllib.request is synchronous, so run it in a thread
+        def sync_jina_fetch():
+            req = urllib.request.Request(jina_reader_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=20) as response:
+                content_bytes = response.read()
+                # Jina reader usually returns markdown, try decoding as UTF-8
+                return content_bytes.decode("utf-8", errors="replace")
+
+        content = await asyncio.to_thread(sync_jina_fetch)
+
+        if content:
+            if max_text_length is not None and len(content) > max_text_length:
+                logging.info(
+                    f"Jina: Truncating content for {url} from {len(content)} to {max_text_length} chars."
+                )
+                content = content[: max_text_length - 3] + "..."
+            logging.info(f"Jina: Successfully fetched and processed {url}")
+            return UrlFetchResult(
+                url=url, content=content, type="general_jina", original_index=index
+            )
+        else:
+            logging.warning(f"Jina: No content extracted from {url}")
+            return UrlFetchResult(
+                url=url,
+                content=None,
+                error="Jina: No content extracted.",
+                type="general_jina",
+                original_index=index,
+            )
+    except urllib.error.HTTPError as e:
+        logging.warning(
+            f"Jina: HTTPError for {url} ({jina_reader_url}): {e.code} {e.reason}"
+        )
+        return UrlFetchResult(
+            url=url,
+            content=None,
+            error=f"Jina HTTPError: {e.code} {e.reason}",
+            type="general_jina",
+            original_index=index,
+        )
+    except urllib.error.URLError as e:
+        logging.warning(f"Jina: URLError for {url} ({jina_reader_url}): {e.reason}")
+        return UrlFetchResult(
+            url=url,
+            content=None,
+            error=f"Jina URLError: {e.reason}",
+            type="general_jina",
+            original_index=index,
+        )
+    except Exception as e:
+        logging.error(
+            f"Jina: Exception during fetch for {url} ({jina_reader_url}): {e}",
+            exc_info=True,
+        )
+        return UrlFetchResult(
+            url=url,
+            content=None,
+            error=f"Jina Exception: {type(e).__name__}",
+            type="general_jina",
+            original_index=index,
+        )
 
 
 async def fetch_with_crawl4ai(
@@ -251,6 +332,7 @@ async def fetch_general_url_content(
     main_extractor: str,
     fallback_extractor: str,
     max_text_length: Optional[int] = None,
+    jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,  # Added jina_engine_mode
 ) -> UrlFetchResult:
     """
     Fetches content from a general URL using the specified main and fallback extractors.
@@ -264,12 +346,20 @@ async def fetch_general_url_content(
     async def _bs_fetcher_wrapper(u_param: str, i_param: int, mtl_param: Optional[int]):
         return await fetch_with_beautifulsoup(u_param, i_param, client, mtl_param)
 
+    async def _jina_fetcher_wrapper(
+        u_param: str, i_param: int, mtl_param: Optional[int]
+    ):
+        return await fetch_with_jina(u_param, i_param, mtl_param, jina_engine_mode)
+
     if main_extractor == "crawl4ai":
         chosen_main_fetcher = fetch_with_crawl4ai
         main_fetcher_name = "Crawl4AI"
     elif main_extractor == "beautifulsoup":
         chosen_main_fetcher = _bs_fetcher_wrapper
         main_fetcher_name = "BeautifulSoup"
+    elif main_extractor == "jina":
+        chosen_main_fetcher = _jina_fetcher_wrapper  # Use wrapper
+        main_fetcher_name = "Jina"
     else:  # Should not happen due to config validation
         logging.error(
             f"Invalid main_extractor specified: {main_extractor}. Defaulting to crawl4ai."
@@ -283,6 +373,9 @@ async def fetch_general_url_content(
     elif fallback_extractor == "beautifulsoup":
         chosen_fallback_fetcher = _bs_fetcher_wrapper
         fallback_fetcher_name = "BeautifulSoup"
+    elif fallback_extractor == "jina":
+        chosen_fallback_fetcher = _jina_fetcher_wrapper  # Use wrapper
+        fallback_fetcher_name = "Jina"
     else:  # Should not happen
         logging.error(
             f"Invalid fallback_extractor specified: {fallback_extractor}. Defaulting to beautifulsoup."
