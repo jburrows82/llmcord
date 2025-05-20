@@ -2,6 +2,7 @@ import logging
 import os
 
 # import shutil  # Replaced by aio_os operations
+import aiofiles  # Added import
 import aiofiles.os as aio_os
 import time
 import uuid
@@ -116,7 +117,9 @@ def _shorten_url_tinyurl(long_url: str) -> Optional[str]:
         return None
 
 
-def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[str]:
+async def start_output_server(
+    text_content: str, config: Dict[str, Any]
+) -> Optional[str]:
     """
     Converts markdown text_content to HTML, saves it to a unique file,
     ensures a local HTTP server is running to serve these files,
@@ -149,7 +152,7 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
     _server_port = server_port_from_config
 
     try:
-        os.makedirs(SHARED_HTML_DIR, exist_ok=True)
+        await aio_os.makedirs(SHARED_HTML_DIR, exist_ok=True)
 
         # Generate unique filename
         unique_filename = f"{uuid.uuid4().hex}.html"
@@ -181,8 +184,8 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
 </body>
 </html>"""
 
-        with open(html_filepath, "w", encoding="utf-8") as f:
-            f.write(full_html)
+        async with aiofiles.open(html_filepath, "w", encoding="utf-8") as f:
+            await f.write(full_html)
         logging.info(f"LLM output converted to HTML and saved to {html_filepath}")
 
         # Start HTTP server if not already running
@@ -200,8 +203,8 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
                 logging.error(
                     f"Python HTTP server thread failed to start on port {_server_port}."
                 )
-                if os.path.exists(html_filepath):
-                    os.remove(html_filepath)  # Clean up generated file
+                if await aio_os.path.exists(html_filepath):
+                    await aio_os.remove(html_filepath)  # Clean up generated file
                 return None
 
         # Configure ngrok authtoken if provided (should only be needed once)
@@ -265,21 +268,21 @@ def start_output_server(text_content: str, config: Dict[str, Any]) -> Optional[s
             except PyngrokError as e:
                 logging.error(f"Failed to start ngrok tunnel: {e}")
                 # Don't stop the HTTP server here, it might be needed for other files.
-                if os.path.exists(html_filepath):
-                    os.remove(html_filepath)
+                if await aio_os.path.exists(html_filepath):
+                    await aio_os.remove(html_filepath)
                 return None
             except Exception as e:
                 logging.error(
                     f"Unexpected error starting ngrok tunnel: {e}", exc_info=True
                 )
-                if os.path.exists(html_filepath):
-                    os.remove(html_filepath)
+                if await aio_os.path.exists(html_filepath):
+                    await aio_os.remove(html_filepath)
                 return None
 
         if not _ngrok_tunnel or not _ngrok_tunnel.public_url:
             logging.error("Ngrok tunnel could not be established or has no public URL.")
-            if os.path.exists(html_filepath):
-                os.remove(html_filepath)
+            if await aio_os.path.exists(html_filepath):
+                await aio_os.remove(html_filepath)
             return None
 
         public_file_url = f"{_ngrok_tunnel.public_url}/{unique_filename}"

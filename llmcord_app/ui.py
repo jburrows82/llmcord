@@ -5,7 +5,6 @@ import io
 import re
 import json
 from typing import Optional, Any, Dict
-import asyncio
 
 from .constants import (
     EMBED_COLOR_COMPLETE,
@@ -371,8 +370,8 @@ class ResponseActionView(ui.View):
             )  # Defer while processing
 
             try:
-                public_url = await asyncio.to_thread(
-                    start_output_server, view.full_response_text, view.app_config
+                public_url = await start_output_server(
+                    view.full_response_text, view.app_config
                 )
                 if public_url:
                     await interaction.followup.send(

@@ -88,7 +88,7 @@ async def generate_response_stream(
         )
 
     available_llm_keys = await get_available_keys(provider, all_api_keys)
-    llm_db_manager = get_db_manager(provider)
+    llm_db_manager = await get_db_manager(provider)
 
     if keys_required and not available_llm_keys:
         raise AllKeysFailedError(
@@ -564,7 +564,7 @@ async def generate_response_stream(
                             stream_err, google_api_exceptions.ResourceExhausted
                         ):
                             if current_api_key != "dummy_key":
-                                llm_db_manager.add_key(current_api_key)
+                                await llm_db_manager.add_key(current_api_key)
                             last_error_type = "rate_limit"
                         break
                     except APIConnectionError as stream_err:
@@ -580,7 +580,7 @@ async def generate_response_stream(
                         last_error_type = "api"
                         if isinstance(stream_err, RateLimitError):
                             if current_api_key != "dummy_key":
-                                llm_db_manager.add_key(current_api_key)
+                                await llm_db_manager.add_key(current_api_key)
                             last_error_type = "rate_limit"
                         # Check for 413 within stream error for OpenAI
                         if (
@@ -925,7 +925,7 @@ async def generate_response_stream(
                     last_error_type = "api"
                     if isinstance(e, RateLimitError):
                         if current_api_key != "dummy_key":
-                            llm_db_manager.add_key(current_api_key)
+                            await llm_db_manager.add_key(current_api_key)
                         last_error_type = "rate_limit"
                     break
 
@@ -934,7 +934,7 @@ async def generate_response_stream(
                     f"Initial Request Rate limit hit for provider '{provider}' with key {key_display}. Error: {e}. Trying next key."
                 )
                 if current_api_key != "dummy_key":
-                    llm_db_manager.add_key(current_api_key)
+                    await llm_db_manager.add_key(current_api_key)
                 llm_errors.append(f"Key {key_display}: Initial Rate Limited")
                 last_error_type = "rate_limit"
                 break

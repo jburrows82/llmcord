@@ -39,7 +39,7 @@ async def fetch_google_lens_serpapi(
         )
 
     random.shuffle(available_keys)
-    db_manager = get_db_manager(service_name)
+    db_manager = await get_db_manager(service_name)
     encountered_errors = []
 
     for key_index, api_key in enumerate(available_keys):
@@ -79,7 +79,7 @@ async def fetch_google_lens_serpapi(
                     or "plan limit" in error_msg.lower()
                     or "ran out of searches" in error_msg.lower()
                 ):
-                    db_manager.add_key(api_key)
+                    await db_manager.add_key(api_key)
                     logging.info(
                         f"SerpAPI key {key_display} rate limited. Trying next key."
                     )
@@ -178,7 +178,7 @@ async def fetch_google_lens_serpapi(
                 status_code = e.response.status_code
 
             if status_code == 429 or "rate limit" in str(e).lower():
-                db_manager.add_key(api_key)
+                await db_manager.add_key(api_key)
                 logging.info(
                     f"SerpAPI key {key_display} hit client-side rate limit (Status: {status_code}). Trying next key."
                 )
