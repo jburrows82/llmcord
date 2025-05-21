@@ -12,7 +12,7 @@ from .constants import (
     EMBED_COLOR_INCOMPLETE,
     EMBED_COLOR_ERROR,
     STREAMING_INDICATOR,
-    EDIT_DELAY_SECONDS,
+    EDIT_DELAY_SECONDS_CONFIG_KEY,  # New
     MAX_EMBED_DESCRIPTION_LENGTH,
     MAX_PLAIN_TEXT_LENGTH,
     IMGUR_HEADER,
@@ -21,7 +21,7 @@ from .constants import (
     AllKeysFailedError,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
-    FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL,
+    FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,  # New
     FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,
 )
 from .ui import ResponseActionView
@@ -171,8 +171,9 @@ async def handle_llm_response_stream(
                             processing_msg = None
             # --- End Deletion Logic ---
 
-            fallback_model_str = (
-                FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL
+            fallback_model_str = client.config.get(
+                FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
+                "google/gemini-2.5-flash-preview-05-20",
             )
             if should_retry_with_gemini_signal:
                 warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
@@ -190,9 +191,9 @@ async def handle_llm_response_stream(
                 current_provider, current_model_name = fallback_model_str.split("/", 1)
             except ValueError:
                 logging.error(
-                    f"Invalid format for FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL: '{fallback_model_str}'. Cannot retry."
+                    f"Invalid format for '{FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY}': '{fallback_model_str}'. Cannot retry."
                 )
-                error_text = f"⚠️ Internal configuration error: Invalid fallback model format ('{fallback_model_str}'). Cannot retry."
+                error_text = f"⚠️ Internal configuration error: Invalid fallback model format ('{fallback_model_str}' for key '{FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY}'). Cannot retry."
                 await _handle_llm_exception(
                     new_msg,
                     processing_msg,
@@ -347,6 +348,7 @@ async def handle_llm_response_stream(
                     system_prompt_text=current_system_prompt_text,  # Use current_system_prompt_text
                     provider_config=current_provider_config,
                     extra_params=current_extra_params,
+                    app_config=client.config,  # Pass app_config
                 )
 
                 async for (
@@ -464,7 +466,7 @@ async def handle_llm_response_stream(
 
                         ready_to_edit = (edit_task is None or edit_task.done()) and (
                             dt.now().timestamp() - client.last_task_time
-                            >= EDIT_DELAY_SECONDS
+                            >= client.config.get(EDIT_DELAY_SECONDS_CONFIG_KEY, 1.0)
                         )
 
                         if (

@@ -7,11 +7,10 @@ import httpx
 
 from . import models  # Use relative import
 from .constants import (
-    GROUNDING_MODEL_PROVIDER,
-    GROUNDING_MODEL_NAME,
     SEARXNG_BASE_URL_CONFIG_KEY,
-    SEARXNG_NUM_RESULTS,
     SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY,
+    GROUNDING_MODEL_CONFIG_KEY,  # New
+    SEARXNG_NUM_RESULTS_CONFIG_KEY,  # New
     AllKeysFailedError,
     # General URL Extractors
     MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
@@ -51,12 +50,21 @@ async def get_web_search_queries_from_gemini(
     Calls Gemini to get web search queries from its grounding metadata.
     """
     logging.info("Attempting to get web search queries from Gemini for grounding...")
-    gemini_provider_config = config.get("providers", {}).get(
-        GROUNDING_MODEL_PROVIDER, {}
+    grounding_model_str = config.get(
+        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
     )
+    try:
+        grounding_provider, grounding_model_name = grounding_model_str.split("/", 1)
+    except ValueError:
+        logging.error(
+            f"Invalid format for '{GROUNDING_MODEL_CONFIG_KEY}': {grounding_model_str}. Expected 'provider/model_name'."
+        )
+        return None
+
+    gemini_provider_config = config.get("providers", {}).get(grounding_provider, {})
     if not gemini_provider_config or not gemini_provider_config.get("api_keys"):
         logging.warning(
-            f"Cannot perform Gemini grounding step: Provider '{GROUNDING_MODEL_PROVIDER}' not configured with API keys."
+            f"Cannot perform Gemini grounding step: Provider '{grounding_provider}' (from '{GROUNDING_MODEL_CONFIG_KEY}') not configured with API keys."
         )
         return None
 
@@ -70,12 +78,13 @@ async def get_web_search_queries_from_gemini(
         }  # Could be configurable
 
         stream_generator = generate_response_stream_func(
-            provider=GROUNDING_MODEL_PROVIDER,
-            model_name=GROUNDING_MODEL_NAME,
+            provider=grounding_provider,
+            model_name=grounding_model_name,
             history_for_llm=history_for_gemini_grounding,
             system_prompt_text=system_prompt_text_for_grounding,
             provider_config=gemini_provider_config,
             extra_params=grounding_extra_params,
+            app_config=config,  # Pass app_config
         )
 
         async for _, _, chunk_grounding_metadata, error_message in stream_generator:
@@ -110,7 +119,7 @@ async def get_web_search_queries_from_gemini(
         AllKeysFailedError
     ) as e:  # Make sure AllKeysFailedError is accessible or handled
         logging.error(
-            f"All API keys failed for Gemini grounding model ({GROUNDING_MODEL_PROVIDER}/{GROUNDING_MODEL_NAME}): {e}"
+            f"All API keys failed for Gemini grounding model ({grounding_provider}/{grounding_model_name}): {e}"
         )
         return None
     except Exception:
@@ -155,9 +164,10 @@ async def fetch_and_format_searxng_results(
     # Fetch SearxNG URLs for all queries concurrently
     searxng_tasks = []
     for query in queries:
+        num_results_to_fetch = config.get(SEARXNG_NUM_RESULTS_CONFIG_KEY, 5)
         searxng_tasks.append(
             fetch_searxng_results(
-                query, httpx_client, searxng_base_url, SEARXNG_NUM_RESULTS
+                query, httpx_client, searxng_base_url, num_results_to_fetch
             )
         )
 

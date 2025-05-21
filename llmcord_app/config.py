@@ -39,6 +39,16 @@ from .constants import (
     DEFAULT_JINA_WAIT_FOR_SELECTOR,  # Added
     JINA_TIMEOUT_CONFIG_KEY,  # Added
     DEFAULT_JINA_TIMEOUT,  # Added
+    # New config keys
+    MAX_MESSAGE_NODES_CONFIG_KEY,
+    EDIT_DELAY_SECONDS_CONFIG_KEY,
+    RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY,
+    SEARXNG_NUM_RESULTS_CONFIG_KEY,
+    GROUNDING_MODEL_CONFIG_KEY,
+    FALLBACK_VISION_MODEL_CONFIG_KEY,
+    FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
+    DEEP_SEARCH_MODEL_CONFIG_KEY,
+    GEMINI_SAFETY_SETTINGS_CONFIG_KEY,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -156,6 +166,50 @@ async def get_config(filename="config.yaml"):
                     f"client_id not found in {filename}. Cannot generate invite URL."
                 )
 
+            # Load max_message_node_cache
+            if MAX_MESSAGE_NODES_CONFIG_KEY not in config_data:
+                config_data[MAX_MESSAGE_NODES_CONFIG_KEY] = 500  # Default value
+                logging.info(
+                    f"'{MAX_MESSAGE_NODES_CONFIG_KEY}' not found. Using default: 500"
+                )
+            else:
+                try:
+                    val = int(config_data[MAX_MESSAGE_NODES_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{MAX_MESSAGE_NODES_CONFIG_KEY}' ({val}) must be positive. Using default: 500"
+                        )
+                        config_data[MAX_MESSAGE_NODES_CONFIG_KEY] = 500
+                    else:
+                        config_data[MAX_MESSAGE_NODES_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{MAX_MESSAGE_NODES_CONFIG_KEY}' is not a valid integer. Using default: 500"
+                    )
+                    config_data[MAX_MESSAGE_NODES_CONFIG_KEY] = 500
+
+            # Load edit_delay_seconds
+            if EDIT_DELAY_SECONDS_CONFIG_KEY not in config_data:
+                config_data[EDIT_DELAY_SECONDS_CONFIG_KEY] = 1.0  # Default value
+                logging.info(
+                    f"'{EDIT_DELAY_SECONDS_CONFIG_KEY}' not found. Using default: 1.0"
+                )
+            else:
+                try:
+                    val = float(config_data[EDIT_DELAY_SECONDS_CONFIG_KEY])
+                    if val < 0:  # Can be 0 for no delay
+                        logging.warning(
+                            f"'{EDIT_DELAY_SECONDS_CONFIG_KEY}' ({val}) cannot be negative. Using default: 1.0"
+                        )
+                        config_data[EDIT_DELAY_SECONDS_CONFIG_KEY] = 1.0
+                    else:
+                        config_data[EDIT_DELAY_SECONDS_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{EDIT_DELAY_SECONDS_CONFIG_KEY}' is not a valid float. Using default: 1.0"
+                    )
+                    config_data[EDIT_DELAY_SECONDS_CONFIG_KEY] = 1.0
+
             # Ensure permissions structure exists
             if "permissions" not in config_data:
                 config_data["permissions"] = {}
@@ -224,6 +278,28 @@ async def get_config(filename="config.yaml"):
                         SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH
                     )
 
+            # --- Load SearxNG Number of Results ---
+            if SEARXNG_NUM_RESULTS_CONFIG_KEY not in config_data:
+                config_data[SEARXNG_NUM_RESULTS_CONFIG_KEY] = 5  # Default value
+                logging.info(
+                    f"'{SEARXNG_NUM_RESULTS_CONFIG_KEY}' not found. Using default: 5"
+                )
+            else:
+                try:
+                    val = int(config_data[SEARXNG_NUM_RESULTS_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{SEARXNG_NUM_RESULTS_CONFIG_KEY}' ({val}) must be positive. Using default: 5"
+                        )
+                        config_data[SEARXNG_NUM_RESULTS_CONFIG_KEY] = 5
+                    else:
+                        config_data[SEARXNG_NUM_RESULTS_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{SEARXNG_NUM_RESULTS_CONFIG_KEY}' is not a valid integer. Using default: 5"
+                    )
+                    config_data[SEARXNG_NUM_RESULTS_CONFIG_KEY] = 5
+
             # --- Load Gemini Thinking Budget Settings ---
             if GEMINI_USE_THINKING_BUDGET_CONFIG_KEY not in config_data:
                 config_data[GEMINI_USE_THINKING_BUDGET_CONFIG_KEY] = (
@@ -275,6 +351,98 @@ async def get_config(filename="config.yaml"):
                     config_data[GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
                         GEMINI_DEFAULT_THINKING_BUDGET_VALUE
                     )
+
+            # --- Load Gemini Safety Settings ---
+            if GEMINI_SAFETY_SETTINGS_CONFIG_KEY not in config_data:
+                config_data[GEMINI_SAFETY_SETTINGS_CONFIG_KEY] = {
+                    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+                }  # Default value
+                logging.info(
+                    f"'{GEMINI_SAFETY_SETTINGS_CONFIG_KEY}' not found. Using default safety settings."
+                )
+            elif not isinstance(config_data[GEMINI_SAFETY_SETTINGS_CONFIG_KEY], dict):
+                logging.warning(
+                    f"'{GEMINI_SAFETY_SETTINGS_CONFIG_KEY}' is not a dictionary. Using default safety settings."
+                )
+                config_data[GEMINI_SAFETY_SETTINGS_CONFIG_KEY] = {
+                    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+                }
+            # Further validation for specific keys and values within the dict could be added here
+            # For example, checking if the harm categories and thresholds are valid.
+            # For now, we assume the user provides them correctly as strings.
+
+            # --- Load Model Selections ---
+            if "model" not in config_data or not config_data.get("model"):
+                logging.error(
+                    f"'model' not found or empty in {filename}. This is a required field."
+                )
+                # Potentially exit or raise error, but for now, let main script handle it if bot_token is also missing.
+                # Setting a hardcoded default to prevent crashes if other parts of the code expect it.
+                config_data["model"] = (
+                    "google/gemini-2.5-flash-preview-05-20"  # A sensible default
+                )
+                logging.warning(
+                    f"Using hardcoded default model: {config_data['model']}"
+                )
+            else:
+                # Basic validation for provider/model format
+                try:
+                    provider, model_name = str(config_data["model"]).split("/", 1)
+                    # Further validation against AVAILABLE_MODELS could be done here if AVAILABLE_MODELS is imported
+                except ValueError:
+                    logging.error(
+                        f"Invalid 'model' format: {config_data['model']}. Should be 'provider/model_name'."
+                    )
+                    config_data["model"] = "google/gemini-2.5-flash-preview-05-20"
+                    logging.warning(
+                        f"Using hardcoded default model: {config_data['model']}"
+                    )
+
+            if GROUNDING_MODEL_CONFIG_KEY not in config_data or not config_data.get(
+                GROUNDING_MODEL_CONFIG_KEY
+            ):
+                config_data[GROUNDING_MODEL_CONFIG_KEY] = (
+                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[GROUNDING_MODEL_CONFIG_KEY]}"
+                )
+
+            if (
+                FALLBACK_VISION_MODEL_CONFIG_KEY not in config_data
+                or not config_data.get(FALLBACK_VISION_MODEL_CONFIG_KEY)
+            ):
+                config_data[FALLBACK_VISION_MODEL_CONFIG_KEY] = (
+                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                )
+                logging.info(
+                    f"'{FALLBACK_VISION_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[FALLBACK_VISION_MODEL_CONFIG_KEY]}"
+                )
+
+            if (
+                FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY not in config_data
+                or not config_data.get(FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY)
+            ):
+                config_data[FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY] = (
+                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                )
+                logging.info(
+                    f"'{FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY}' not found or empty. Using default: {config_data[FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY]}"
+                )
+
+            if DEEP_SEARCH_MODEL_CONFIG_KEY not in config_data or not config_data.get(
+                DEEP_SEARCH_MODEL_CONFIG_KEY
+            ):
+                config_data[DEEP_SEARCH_MODEL_CONFIG_KEY] = "x-ai/grok-3"  # Default
+                logging.info(
+                    f"'{DEEP_SEARCH_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[DEEP_SEARCH_MODEL_CONFIG_KEY]}"
+                )
 
             # --- Load Output Sharing Settings ---
             if OUTPUT_SHARING_CONFIG_KEY not in config_data:
@@ -400,6 +568,28 @@ async def get_config(filename="config.yaml"):
                     f"'{URL_SHORTENER_SERVICE_CONFIG_KEY}' is not a non-empty string. Defaulting to 'tinyurl'."
                 )
                 output_sharing_cfg[URL_SHORTENER_SERVICE_CONFIG_KEY] = "tinyurl"
+
+            # --- Load Rate Limit Cooldown Hours ---
+            if RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY not in config_data:
+                config_data[RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY] = 24  # Default value
+                logging.info(
+                    f"'{RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY}' not found. Using default: 24 hours"
+                )
+            else:
+                try:
+                    val = int(config_data[RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY}' ({val}) must be positive. Using default: 24"
+                        )
+                        config_data[RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY] = 24
+                    else:
+                        config_data[RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY}' is not a valid integer. Using default: 24"
+                    )
+                    config_data[RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY] = 24
 
             # --- Load Fallback Model System Prompt ---
             if (

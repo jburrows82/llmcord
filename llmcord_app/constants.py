@@ -1,6 +1,5 @@
 import re
 import discord
-from google.genai import types as google_types  # Use google.genai.types
 
 # --- LLM & Vision ---
 VISION_MODEL_TAGS = (
@@ -28,10 +27,10 @@ EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 EMBED_COLOR_ERROR = discord.Color.red()
 STREAMING_INDICATOR = " ⚪"
-EDIT_DELAY_SECONDS = 1.0  # Use float for time delays
+EDIT_DELAY_SECONDS_CONFIG_KEY = "edit_delay_seconds"
 
+MAX_MESSAGE_NODES_CONFIG_KEY = "max_message_node_cache"
 # --- Limits ---
-MAX_MESSAGE_NODES = 500  # Max messages stored in cache
 MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
 MAX_EMBED_DESCRIPTION_LENGTH = 4096 - len(STREAMING_INDICATOR)  # Adjusted for indicator
@@ -70,11 +69,10 @@ IMGUR_URL_PATTERN = re.compile(
 )
 
 # --- SearxNG and Grounding ---
+SEARXNG_NUM_RESULTS_CONFIG_KEY = "searxng_num_results_fetch"
+GROUNDING_MODEL_CONFIG_KEY = "grounding_model"
 SEARXNG_BASE_URL_CONFIG_KEY = "searxng_base_url"
 SEARXNG_DEFAULT_URL = "http://localhost:18088"  # Default if not in config
-SEARXNG_NUM_RESULTS = 5
-GROUNDING_MODEL_PROVIDER = "google"
-GROUNDING_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
 # --- ADDED CONSTANT ---
 GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- ADDED CONSTANTS FOR SEARXNG URL CONTENT LENGTH ---
@@ -121,25 +119,23 @@ DEFAULT_GRIP_PORT = 6419
 # OUTPUT_FILENAME = "llm_output.md" # No longer a single output file, individual HTML files now
 NGROK_STATIC_DOMAIN_CONFIG_KEY = "ngrok_static_domain"
 CLEANUP_ON_SHUTDOWN_CONFIG_KEY = "cleanup_on_shutdown"
+RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY = "rate_limit_cooldown_hours"
 URL_SHORTENER_ENABLED_CONFIG_KEY = "url_shortener_enabled"
 URL_SHORTENER_SERVICE_CONFIG_KEY = "url_shortener_service"
 
 # --- Rate Limiting ---
-RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60  # 24 hours
 GLOBAL_RESET_FILE = "last_reset_timestamp.txt"
 DB_FOLDER = "ratelimit_dbs"
 
+FALLBACK_VISION_MODEL_CONFIG_KEY = "fallback_vision_model"
 # --- Model Selection ---
+FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY = "fallback_model_incomplete_stream"
 # This defines which models are *known* to the bot for autocomplete/validation
 # The actual availability depends on the user's config.yaml
 
 # --- ADDED: Fallback vision model if selected model cannot handle images ---
-FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-05-20"
 
 # --- ADDED: Fallback model for incomplete non-Gemini streams ---
-FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = (
-    "mistral/mistral-medium-latest"
-)
 # --- System prompt for the fallback model ---
 FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY = "fallback_model_system_prompt"
 DEFAULT_FALLBACK_MODEL_SYSTEM_PROMPT = """
@@ -172,17 +168,11 @@ AVAILABLE_MODELS = {
 }
 # Keywords for Model Override
 DEEP_SEARCH_KEYWORDS = ["deepsearch", "deepersearch"]
-DEEP_SEARCH_MODEL = "x-ai/grok-3"  # The model to use when keywords are detected
+DEEP_SEARCH_MODEL_CONFIG_KEY = "deep_search_model"
 
 # --- Gemini Safety Settings ---
+GEMINI_SAFETY_SETTINGS_CONFIG_KEY = "gemini_safety_settings"
 # Use google.genai.types (imported as google_types)
-GEMINI_SAFETY_SETTINGS_DICT = {
-    google_types.HarmCategory.HARM_CATEGORY_HARASSMENT: google_types.HarmBlockThreshold.BLOCK_NONE,
-    google_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: google_types.HarmBlockThreshold.BLOCK_NONE,
-    google_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: google_types.HarmBlockThreshold.BLOCK_NONE,
-    google_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: google_types.HarmBlockThreshold.BLOCK_NONE,
-    google_types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY: google_types.HarmBlockThreshold.BLOCK_NONE,
-}
 
 
 # --- Custom Exceptions ---

@@ -23,9 +23,9 @@ from google.genai import types as google_types
 from google.api_core import exceptions as google_api_exceptions
 
 from .constants import (
-    GEMINI_SAFETY_SETTINGS_DICT,
     AllKeysFailedError,
     PROVIDERS_SUPPORTING_USERNAMES,
+    GEMINI_SAFETY_SETTINGS_CONFIG_KEY,  # New
 )
 from .rate_limiter import get_db_manager, get_available_keys
 from .utils import _truncate_base64_in_payload, default_serializer
@@ -38,6 +38,8 @@ async def generate_response_stream(
     system_prompt_text: Optional[str],
     provider_config: Dict[str, Any],
     extra_params: Dict[str, Any],
+    # Add app_config to access Gemini safety settings
+    app_config: Dict[str, Any],
 ) -> AsyncGenerator[
     Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
 ]:
@@ -57,6 +59,7 @@ async def generate_response_stream(
         system_prompt_text: The system prompt string, if any.
         provider_config: Configuration dictionary for the provider (base_url, api_keys).
         extra_params: Dictionary of extra API parameters for the model.
+        app_config: The main application configuration dictionary.
 
     Yields:
         Tuple containing:
@@ -87,7 +90,7 @@ async def generate_response_stream(
             f"No API keys configured for the selected provider '{provider}' which requires keys."
         )
 
-    available_llm_keys = await get_available_keys(provider, all_api_keys)
+    available_llm_keys = await get_available_keys(provider, all_api_keys, app_config)
     llm_db_manager = await get_db_manager(provider)
 
     if keys_required and not available_llm_keys:
@@ -300,10 +303,58 @@ async def generate_response_stream(
                     gemini_thinking_budget_val = gemini_extra_params.pop(
                         "thinking_budget", None
                     )
-                    gemini_safety_settings_list = [
-                        google_types.SafetySetting(category=c, threshold=t)
-                        for c, t in GEMINI_SAFETY_SETTINGS_DICT.items()
-                    ]
+
+                    # Load safety settings from app_config
+                    gemini_safety_settings_from_config = app_config.get(
+                        GEMINI_SAFETY_SETTINGS_CONFIG_KEY, {}
+                    )
+                    gemini_safety_settings_list = []
+                    for (
+                        category_str,
+                        threshold_str,
+                    ) in gemini_safety_settings_from_config.items():
+                        try:
+                            category_enum = getattr(
+                                google_types.HarmCategory, category_str.upper(), None
+                            )
+                            threshold_enum = getattr(
+                                google_types.HarmBlockThreshold,
+                                threshold_str.upper(),
+                                None,
+                            )
+                            if category_enum and threshold_enum:
+                                gemini_safety_settings_list.append(
+                                    google_types.SafetySetting(
+                                        category=category_enum, threshold=threshold_enum
+                                    )
+                                )
+                            else:
+                                logging.warning(
+                                    f"Invalid Gemini safety category ('{category_str}') or threshold ('{threshold_str}') in config. Skipping."
+                                )
+                        except Exception as e_safety:
+                            logging.warning(
+                                f"Error processing Gemini safety setting {category_str}={threshold_str}: {e_safety}"
+                            )
+
+                    # Use default if no valid settings were parsed from config
+                    if not gemini_safety_settings_list:
+                        logging.warning(
+                            "No valid Gemini safety settings found in config, using BLOCK_NONE for all."
+                        )
+                        gemini_safety_settings_list = [
+                            google_types.SafetySetting(
+                                category=c,
+                                threshold=google_types.HarmBlockThreshold.BLOCK_NONE,
+                            )
+                            for c in [
+                                google_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                google_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                google_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                google_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                            ]
+                        ]
+
                     api_config = google_types.GenerateContentConfig(
                         **gemini_extra_params,
                         safety_settings=gemini_safety_settings_list,

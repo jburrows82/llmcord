@@ -12,23 +12,23 @@ from google.genai import types as google_types
 import httpx
 
 from .constants import (
-    MAX_MESSAGE_NODES,
     MAX_EMBED_DESCRIPTION_LENGTH,
     AT_AI_PATTERN,
     GOOGLE_LENS_PATTERN,
     VISION_MODEL_TAGS,
     AVAILABLE_MODELS,
     DEEP_SEARCH_KEYWORDS,
-    DEEP_SEARCH_MODEL,
     PROVIDERS_SUPPORTING_USERNAMES,
     MAX_PLAIN_TEXT_LENGTH,
-    GROUNDING_MODEL_PROVIDER,
-    GROUNDING_MODEL_NAME,
     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
-    FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL,
     EMBED_COLOR_ERROR,
+    # New config keys
+    MAX_MESSAGE_NODES_CONFIG_KEY,
+    GROUNDING_MODEL_CONFIG_KEY,
+    FALLBACK_VISION_MODEL_CONFIG_KEY,
+    DEEP_SEARCH_MODEL_CONFIG_KEY,
 )
 
 from . import models
@@ -242,7 +242,9 @@ class LLMCordClient(discord.Client):
         # --- Override Model based on Keywords ---
         final_provider_slash_model = provider_slash_model
         if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
-            target_model_str = DEEP_SEARCH_MODEL
+            target_model_str = self.config.get(
+                DEEP_SEARCH_MODEL_CONFIG_KEY, "x-ai/grok-3"
+            )
             target_provider, target_model_name = target_model_str.split("/", 1)
             if use_google_lens:
                 logging.warning(
@@ -345,7 +347,10 @@ class LLMCordClient(discord.Client):
 
         if (image_attachments or has_potential_image_urls_in_text) and not accept_files:
             original_model_for_warning = final_provider_slash_model
-            fallback_model_str = FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL
+            fallback_model_str = self.config.get(
+                FALLBACK_VISION_MODEL_CONFIG_KEY,
+                "google/gemini-2.5-flash-preview-05-20",
+            )
             logging.info(
                 f"Query has images, but current model '{final_provider_slash_model}' does not support vision. Switching to '{fallback_model_str}'."
             )
@@ -545,9 +550,13 @@ class LLMCordClient(discord.Client):
                 max_files_per_message=max_files_per_message,
                 accept_files=True,
                 use_google_lens=False,
-                is_target_provider_gemini=True,
-                target_provider_name=GROUNDING_MODEL_PROVIDER,
-                target_model_name=GROUNDING_MODEL_NAME,  # Uses GROUNDING_MODEL_NAME for tokenizer
+                is_target_provider_gemini=True,  # Grounding model is assumed to be Gemini-like for now
+                target_provider_name=self.config.get(
+                    GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+                ).split("/", 1)[0],
+                target_model_name=self.config.get(
+                    GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+                ).split("/", 1)[1],
                 user_warnings=user_warnings,
                 current_message_url_fetch_results=None,
                 msg_nodes_cache=self.msg_nodes,
@@ -560,8 +569,11 @@ class LLMCordClient(discord.Client):
                 at_ai_pattern_re=AT_AI_PATTERN,
                 providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
                 system_prompt_text_for_budgeting=prepare_system_prompt(
-                    True,
-                    GROUNDING_MODEL_PROVIDER,
+                    True,  # Grounding model is assumed to be Gemini-like
+                    self.config.get(
+                        GROUNDING_MODEL_CONFIG_KEY,
+                        "google/gemini-2.5-flash-preview-05-20",
+                    ).split("/", 1)[0],
                     self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY),
                 ),
             )
@@ -571,7 +583,12 @@ class LLMCordClient(discord.Client):
                 )
                 # This system_prompt_for_grounding is what's actually sent to the API
                 system_prompt_for_grounding = prepare_system_prompt(
-                    True, GROUNDING_MODEL_PROVIDER, grounding_sp_text_from_config
+                    True,  # Grounding model is assumed to be Gemini-like
+                    self.config.get(
+                        GROUNDING_MODEL_CONFIG_KEY,
+                        "google/gemini-2.5-flash-preview-05-20",
+                    ).split("/", 1)[0],
+                    grounding_sp_text_from_config,
                 )
                 web_search_queries = await get_web_search_queries_from_gemini(
                     history_for_gemini_grounding,
@@ -706,7 +723,8 @@ class LLMCordClient(discord.Client):
             history_for_llm=history_for_llm,
             system_prompt_text=system_prompt_text,
             provider_config=provider_config,
-            extra_api_params=extra_api_params,
+            extra_params=extra_api_params,
+            app_config=self.config,  # Pass app_config
             initial_user_warnings=user_warnings,
             use_plain_responses_config=use_plain_responses,
             split_limit_config=split_limit,
@@ -738,9 +756,10 @@ class LLMCordClient(discord.Client):
                         f"Response message {response_msg.id} not found in msg_nodes during cleanup."
                     )
 
-            if (num_nodes := len(self.msg_nodes)) > MAX_MESSAGE_NODES:
+            max_nodes_from_config = self.config.get(MAX_MESSAGE_NODES_CONFIG_KEY, 500)
+            if (num_nodes := len(self.msg_nodes)) > max_nodes_from_config:
                 nodes_to_delete = sorted(self.msg_nodes.keys())[
-                    : num_nodes - MAX_MESSAGE_NODES
+                    : num_nodes - max_nodes_from_config
                 ]
                 for msg_id in nodes_to_delete:
                     node_to_delete = self.msg_nodes.get(msg_id)

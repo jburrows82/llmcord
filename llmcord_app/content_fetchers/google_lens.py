@@ -12,7 +12,7 @@ from ..rate_limiter import get_db_manager, get_available_keys
 
 
 async def fetch_google_lens_serpapi(
-    image_url: str, index: int, all_keys: List[str]
+    image_url: str, index: int, all_keys: List[str], app_config: Dict[str, Any]
 ) -> UrlFetchResult:
     """Fetches Google Lens results using SerpAPI with key rotation and retry (PRIMARY)."""
     service_name = "serpapi"
@@ -25,7 +25,7 @@ async def fetch_google_lens_serpapi(
             original_index=index,
         )
 
-    available_keys = await get_available_keys(service_name, all_keys)
+    available_keys = await get_available_keys(service_name, all_keys, app_config)
     if not available_keys:  # Check if keys are available *after* filtering
         logging.warning(
             f"All SerpAPI keys are currently rate-limited for Google Lens request for image {index + 1}."
@@ -238,7 +238,9 @@ async def process_google_lens_image(
         logging.info(
             f"Attempting Google Lens request for image {index + 1} using SerpAPI."
         )
-        serpapi_result = await fetch_google_lens_serpapi(image_url, index, serpapi_keys)
+        serpapi_result = await fetch_google_lens_serpapi(
+            image_url, index, serpapi_keys, cfg
+        )
 
         if not serpapi_result.error:
             logging.info(

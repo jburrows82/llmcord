@@ -4,11 +4,15 @@ import time
 import logging
 import asyncio  # Added asyncio
 from datetime import timedelta
-from typing import Set, Dict, List
+from typing import Set, Dict, List, Any  # Added Any
 import aiofiles
 import aiofiles.os as aio_os
 
-from .constants import DB_FOLDER, RATE_LIMIT_COOLDOWN_SECONDS, GLOBAL_RESET_FILE
+from .constants import (
+    DB_FOLDER,
+    RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY,
+    GLOBAL_RESET_FILE,
+)
 
 
 # --- Rate Limit Database Manager ---
@@ -172,8 +176,12 @@ async def check_and_perform_global_reset(cfg: Dict):
         )
         last_reset_time = 0.0  # Force reset if file is invalid or missing
 
-    if now - last_reset_time >= RATE_LIMIT_COOLDOWN_SECONDS:
-        logging.info("Performing global 24-hour rate limit database reset.")
+    cooldown_hours = cfg.get(RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY, 24)
+    cooldown_seconds = cooldown_hours * 60 * 60
+    if now - last_reset_time >= cooldown_seconds:
+        logging.info(
+            f"Performing global {cooldown_hours}-hour rate limit database reset."
+        )
 
         if not await aio_os.path.exists(DB_FOLDER):
             await aio_os.makedirs(DB_FOLDER)
@@ -205,15 +213,15 @@ async def check_and_perform_global_reset(cfg: Dict):
             )
     else:
         time_since_reset = timedelta(seconds=now - last_reset_time)
-        next_reset_in = timedelta(
-            seconds=RATE_LIMIT_COOLDOWN_SECONDS - (now - last_reset_time)
-        )
+        next_reset_in = timedelta(seconds=cooldown_seconds - (now - last_reset_time))
         logging.info(
             f"Time since last global reset: {time_since_reset}. Next reset in approx {next_reset_in}."
         )
 
 
-async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str]:
+async def get_available_keys(
+    service_name: str, all_keys: List[str], app_config: Dict[str, Any]
+) -> List[str]:
     """Gets available (non-rate-limited) keys for a service."""
     if not all_keys:
         return []
@@ -222,8 +230,10 @@ async def get_available_keys(service_name: str, all_keys: List[str]) -> List[str
         await aio_os.makedirs(DB_FOLDER)
 
     db_manager = await get_db_manager(service_name)  # await here
+    cooldown_hours = app_config.get(RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY, 24)
+    cooldown_seconds = cooldown_hours * 60 * 60
     limited_keys = await db_manager.get_limited_keys(  # await here
-        RATE_LIMIT_COOLDOWN_SECONDS
+        cooldown_seconds
     )
     available_keys = [key for key in all_keys if key not in limited_keys]
 

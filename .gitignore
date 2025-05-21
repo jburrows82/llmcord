@@ -13,3 +13,4 @@
 !requirements.txt
 !llmcord_app
 !llmcord_app/content_fetchers
+*_docs_(use_for_reference).md
