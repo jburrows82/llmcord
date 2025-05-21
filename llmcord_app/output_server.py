@@ -171,12 +171,56 @@ async def start_output_server(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Output</title>
     <style>
-        body {{ font-family: sans-serif; margin: 20px; line-height: 1.6; }}
-        pre {{ background-color: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-        code {{ font-family: monospace; }}
-        table {{ border-collapse: collapse; width: auto; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
+        body {{
+            font-family: sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+            background-color: #1e1e1e; /* Dark background */
+            color: #d4d4d4; /* Light text */
+        }}
+        a {{
+            color: #5c99d6; /* Light blue for links */
+        }}
+        pre {{
+            background-color: #2a2a2a; /* Slightly lighter dark for code blocks */
+            color: #d4d4d4; /* Text color for pre */
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            border: 1px solid #444; /* Border for code blocks */
+        }}
+        code {{
+            font-family: monospace;
+            /* color will be inherited */
+        }}
+        table {{
+            border-collapse: collapse;
+            width: auto;
+            border: 1px solid #555; /* Darker border for table */
+        }}
+        th, td {{
+            border: 1px solid #555; /* Darker border for table cells */
+            padding: 8px;
+            text-align: left;
+        }}
+        th {{
+            background-color: #333; /* Darker header for table */
+            color: #f0f0f0; /* Light text for table header */
+        }}
+        hr {{
+            border: none;
+            border-top: 1px solid #555; /* Darker horizontal rule */
+        }}
+        ul, ol {{
+            padding-left: 25px; /* Indentation for lists */
+        }}
+        li {{
+            margin-bottom: 0.6em; /* Space between list items */
+        }}
+        ul ul, ol ol, ul ol, ol ul {{ /* Styling for nested lists */
+            margin-top: 0.4em;
+            margin-bottom: 0.4em;
+        }}
     </style>
 </head>
 <body>
