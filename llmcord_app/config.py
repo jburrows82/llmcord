@@ -35,6 +35,10 @@ from .constants import (
     JINA_ENGINE_MODE_CONFIG_KEY,
     DEFAULT_JINA_ENGINE_MODE,
     VALID_JINA_ENGINE_MODES,
+    JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,  # Added
+    DEFAULT_JINA_WAIT_FOR_SELECTOR,  # Added
+    JINA_TIMEOUT_CONFIG_KEY,  # Added
+    DEFAULT_JINA_TIMEOUT,  # Added
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -459,6 +463,55 @@ async def get_config(filename="config.yaml"):
                     f"Invalid value for '{JINA_ENGINE_MODE_CONFIG_KEY}': {config_data[JINA_ENGINE_MODE_CONFIG_KEY]}. Using default: {DEFAULT_JINA_ENGINE_MODE}"
                 )
                 config_data[JINA_ENGINE_MODE_CONFIG_KEY] = DEFAULT_JINA_ENGINE_MODE
+
+            # --- Load Jina Wait For Selector ---
+            if JINA_WAIT_FOR_SELECTOR_CONFIG_KEY not in config_data:
+                config_data[JINA_WAIT_FOR_SELECTOR_CONFIG_KEY] = (
+                    DEFAULT_JINA_WAIT_FOR_SELECTOR
+                )
+                logging.info(
+                    f"'{JINA_WAIT_FOR_SELECTOR_CONFIG_KEY}' not found. Using default: {DEFAULT_JINA_WAIT_FOR_SELECTOR}"
+                )
+            elif config_data[
+                JINA_WAIT_FOR_SELECTOR_CONFIG_KEY
+            ] is not None and not isinstance(
+                config_data[JINA_WAIT_FOR_SELECTOR_CONFIG_KEY], str
+            ):
+                logging.warning(
+                    f"'{JINA_WAIT_FOR_SELECTOR_CONFIG_KEY}' is not a string or null. Using default: {DEFAULT_JINA_WAIT_FOR_SELECTOR}"
+                )
+                config_data[JINA_WAIT_FOR_SELECTOR_CONFIG_KEY] = (
+                    DEFAULT_JINA_WAIT_FOR_SELECTOR
+                )
+            elif (
+                config_data[JINA_WAIT_FOR_SELECTOR_CONFIG_KEY] == ""
+            ):  # Treat empty string as None (no selector)
+                config_data[JINA_WAIT_FOR_SELECTOR_CONFIG_KEY] = None
+
+            # --- Load Jina Timeout ---
+            if JINA_TIMEOUT_CONFIG_KEY not in config_data:
+                config_data[JINA_TIMEOUT_CONFIG_KEY] = DEFAULT_JINA_TIMEOUT
+                logging.info(
+                    f"'{JINA_TIMEOUT_CONFIG_KEY}' not found. Using default: {DEFAULT_JINA_TIMEOUT}"
+                )
+            elif config_data[JINA_TIMEOUT_CONFIG_KEY] is not None:
+                try:
+                    val = int(config_data[JINA_TIMEOUT_CONFIG_KEY])
+                    if (
+                        val < 0
+                    ):  # Timeout cannot be negative, 0 might be valid for some APIs to mean "no explicit timeout" or "immediate"
+                        logging.warning(
+                            f"'{JINA_TIMEOUT_CONFIG_KEY}' ({val}) cannot be negative. Using default: {DEFAULT_JINA_TIMEOUT}"
+                        )
+                        config_data[JINA_TIMEOUT_CONFIG_KEY] = DEFAULT_JINA_TIMEOUT
+                    else:
+                        config_data[JINA_TIMEOUT_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{JINA_TIMEOUT_CONFIG_KEY}' is not a valid integer. Using default: {DEFAULT_JINA_TIMEOUT}"
+                    )
+                    config_data[JINA_TIMEOUT_CONFIG_KEY] = DEFAULT_JINA_TIMEOUT
+            # If it's None, it remains None (DEFAULT_JINA_TIMEOUT)
 
             return config_data
 

@@ -27,8 +27,12 @@ from .constants import (
     FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
     DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
     DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
-    JINA_ENGINE_MODE_CONFIG_KEY,  # Added for Jina
-    DEFAULT_JINA_ENGINE_MODE,  # Added for Jina
+    JINA_ENGINE_MODE_CONFIG_KEY,
+    DEFAULT_JINA_ENGINE_MODE,
+    JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,  # Added
+    JINA_TIMEOUT_CONFIG_KEY,  # Added
+    DEFAULT_JINA_WAIT_FOR_SELECTOR,  # Added
+    DEFAULT_JINA_TIMEOUT,  # Added
 )
 
 
@@ -180,11 +184,15 @@ async def fetch_external_content(
             FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
             DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
         )
-        jina_mode = config.get(
-            JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE
-        )  # Get Jina mode
+        jina_mode = config.get(JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE)
+        jina_selector = config.get(  # Added
+            JINA_WAIT_FOR_SELECTOR_CONFIG_KEY, DEFAULT_JINA_WAIT_FOR_SELECTOR
+        )
+        jina_timeout_val = config.get(  # Added
+            JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
+        )
         logging.info(
-            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}', Jina mode: '{jina_mode}'."
+            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}', Jina mode: '{jina_mode}', Selector: '{jina_selector}', Timeout: {jina_timeout_val}."
         )
 
         general_url_processing_tasks = []
@@ -197,7 +205,9 @@ async def fetch_external_content(
                     main_extractor=main_extractor_method,
                     fallback_extractor=fallback_extractor_method,
                     max_text_length=max_text_length,
-                    jina_engine_mode=jina_mode,  # Pass Jina mode
+                    jina_engine_mode=jina_mode,
+                    jina_wait_for_selector=jina_selector,  # Pass Jina selector
+                    jina_timeout=jina_timeout_val,  # Pass Jina timeout
                 )
             )
 

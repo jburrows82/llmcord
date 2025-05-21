@@ -130,10 +130,13 @@ fallback_general_url_content_extractor: "beautifulsoup"
 
 # --- Jina Reader Settings (Optional) ---
 # Configure the engine mode for Jina Reader.
-# Supported values: "direct", "browser"
-# "direct": (Speed First) Fastest engine, optimized for speed but unable to handle JavaScript-generated dynamic content.
-# "browser": (Best Quality) High-quality engine designed to resolve rendering issues and deliver the best content output. Potentially better for JS-heavy sites but might be slower.
-jina_engine_mode: "direct"
+# Supported values: "direct", "browser", "default"
+# "direct": (Speed First) Fastest engine, optimized for speed but unable to handle JavaScript-generated dynamic content. (Sends X-Engine: direct)
+# "browser": (Best Quality) High-quality engine designed to resolve rendering issues and deliver the best content output. Potentially better for JS-heavy sites but might be slower. (Sends X-Engine: browser)
+# "default": (Most Compatible) Does not send an X-Engine header, allowing Jina to use its current default or most compatible engine. Good balance between quality and speed.
+jina_engine_mode: "default"
+# jina_wait_for_selector: null # Optional: CSS selector (e.g., "#content", ".main-article"). Jina will wait for this element. Default: null (disabled).
+# jina_timeout: null # Optional: Integer in seconds (e.g., 30). Jina will wait for this duration for dynamic content. Default: null (Jina's default timeout).
 
 # System prompt for the Gemini model (gemini-2.0-flash) when it's used to determine
 # web search queries for grounding non-Gemini/non-Grok models.

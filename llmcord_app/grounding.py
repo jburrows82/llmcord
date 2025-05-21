@@ -18,8 +18,12 @@ from .constants import (
     FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
     DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
     DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
-    JINA_ENGINE_MODE_CONFIG_KEY,  # Added for Jina
-    DEFAULT_JINA_ENGINE_MODE,  # Added for Jina
+    JINA_ENGINE_MODE_CONFIG_KEY,
+    DEFAULT_JINA_ENGINE_MODE,
+    JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,
+    DEFAULT_JINA_WAIT_FOR_SELECTOR,
+    JINA_TIMEOUT_CONFIG_KEY,
+    DEFAULT_JINA_TIMEOUT,
 )
 from .content_fetchers import (
     fetch_searxng_results,
@@ -239,7 +243,14 @@ async def fetch_and_format_searxng_results(
                     max_text_length=searxng_content_limit,
                     jina_engine_mode=config.get(
                         JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE
-                    ),  # Pass Jina mode
+                    ),
+                    jina_wait_for_selector=config.get(
+                        JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,
+                        DEFAULT_JINA_WAIT_FOR_SELECTOR,
+                    ),
+                    jina_timeout=config.get(
+                        JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
+                    ),
                 )
             )
 

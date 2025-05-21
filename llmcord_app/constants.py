@@ -74,7 +74,7 @@ SEARXNG_BASE_URL_CONFIG_KEY = "searxng_base_url"
 SEARXNG_DEFAULT_URL = "http://localhost:18088"  # Default if not in config
 SEARXNG_NUM_RESULTS = 5
 GROUNDING_MODEL_PROVIDER = "google"
-GROUNDING_MODEL_NAME = "gemini-2.5-flash-preview-04-17"
+GROUNDING_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
 # --- ADDED CONSTANT ---
 GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 # --- ADDED CONSTANTS FOR SEARXNG URL CONTENT LENGTH ---
@@ -93,7 +93,13 @@ VALID_URL_EXTRACTORS = ["crawl4ai", "beautifulsoup", "jina"]
 # --- Jina Reader Settings ---
 JINA_ENGINE_MODE_CONFIG_KEY = "jina_engine_mode"
 DEFAULT_JINA_ENGINE_MODE = "direct"
-VALID_JINA_ENGINE_MODES = ["direct", "browser"]
+VALID_JINA_ENGINE_MODES = ["direct", "browser", "default"]
+JINA_WAIT_FOR_SELECTOR_CONFIG_KEY = "jina_wait_for_selector"  # Added
+DEFAULT_JINA_WAIT_FOR_SELECTOR = None  # Added - None means not used by default
+JINA_TIMEOUT_CONFIG_KEY = "jina_timeout"  # Added
+DEFAULT_JINA_TIMEOUT = (
+    None  # Added - None means not used by default, Jina might have its own default
+)
 
 # --- Gemini Thinking Budget ---
 GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"
@@ -128,7 +134,7 @@ DB_FOLDER = "ratelimit_dbs"
 # The actual availability depends on the user's config.yaml
 
 # --- ADDED: Fallback vision model if selected model cannot handle images ---
-FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-04-17"
+FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL = "google/gemini-2.5-flash-preview-05-20"
 
 # --- ADDED: Fallback model for incomplete non-Gemini streams ---
 FALLBACK_MODEL_FOR_INCOMPLETE_STREAM_PROVIDER_SLASH_MODEL = (
@@ -145,7 +151,7 @@ Do not apologize for the previous model. Focus on fulfilling the user's request 
 
 AVAILABLE_MODELS = {
     "google": [
-        "gemini-2.5-flash-preview-04-17",
+        "gemini-2.5-flash-preview-05-20",
         # Add other Gemini models as needed/supported
     ],
     "openai": [

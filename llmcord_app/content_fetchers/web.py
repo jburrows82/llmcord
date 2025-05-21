@@ -1,8 +1,6 @@
 import logging
 import re
-from typing import Optional
-import urllib.request  # Added for Jina
-import asyncio  # Added for Jina
+from typing import Optional, Dict  # Added Dict
 
 import httpx
 from bs4 import BeautifulSoup
@@ -15,31 +13,61 @@ from crawl4ai import (
 from ..models import UrlFetchResult
 
 
-from ..constants import DEFAULT_JINA_ENGINE_MODE  # Added for Jina engine mode
+from ..constants import (
+    DEFAULT_JINA_ENGINE_MODE,
+    # Config keys will be added to constants.py later
+    # JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,
+    # JINA_TIMEOUT_CONFIG_KEY,
+)
 
 
 async def fetch_with_jina(
     url: str,
     index: int,
+    httpx_client: httpx.AsyncClient,  # Added httpx_client
     max_text_length: Optional[int] = None,
     jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,
+    jina_wait_for_selector: Optional[str] = None,  # Added
+    jina_timeout: Optional[int] = None,  # Added
 ) -> UrlFetchResult:
-    """Fetches content using Jina Reader."""
-    logging.info(
-        f"Attempting to fetch URL with Jina Reader: {url} (Engine: {jina_engine_mode})"
-    )
-    jina_reader_url = f"https://r.jina.ai/{url}"
-    headers = {"X-Engine": jina_engine_mode}
-    try:
-        # urllib.request is synchronous, so run it in a thread
-        def sync_jina_fetch():
-            req = urllib.request.Request(jina_reader_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=20) as response:
-                content_bytes = response.read()
-                # Jina reader usually returns markdown, try decoding as UTF-8
-                return content_bytes.decode("utf-8", errors="replace")
+    """Fetches content using Jina Reader, supporting GET/POST and custom headers."""
+    headers: Dict[str, str] = {}
+    if jina_engine_mode.lower() != "default":
+        headers["X-Engine"] = jina_engine_mode
+    if jina_wait_for_selector:
+        headers["X-Wait-For-Selector"] = jina_wait_for_selector
+    if jina_timeout is not None:  # Check for None explicitly as 0 is a valid timeout
+        headers["X-Timeout"] = str(jina_timeout)
 
-        content = await asyncio.to_thread(sync_jina_fetch)
+    request_method = "GET"
+    target_jina_url = f"https://r.jina.ai/{url}"
+    post_data = None
+
+    if "#" in url:
+        logging.info(f"URL for Jina contains '#', using POST request: {url}")
+        request_method = "POST"
+        target_jina_url = "https://r.jina.ai/"
+        post_data = {"url": url}
+
+    logging.info(
+        f"Attempting Jina Reader fetch: {request_method} {target_jina_url} (Engine: {jina_engine_mode}, Selector: {jina_wait_for_selector}, Timeout: {jina_timeout})"
+    )
+
+    try:
+        if request_method == "POST":
+            response = await httpx_client.post(
+                target_jina_url,
+                headers=headers,
+                data=post_data,
+                timeout=30.0,  # Increased timeout for POST
+            )
+        else:
+            response = await httpx_client.get(
+                target_jina_url, headers=headers, timeout=20.0
+            )
+
+        response.raise_for_status()  # Raise an exception for bad status codes
+        content = response.text  # Jina Reader returns text (Markdown)
 
         if content:
             if max_text_length is not None and len(content) > max_text_length:
@@ -60,29 +88,31 @@ async def fetch_with_jina(
                 type="general_jina",
                 original_index=index,
             )
-    except urllib.error.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         logging.warning(
-            f"Jina: HTTPError for {url} ({jina_reader_url}): {e.code} {e.reason}"
+            f"Jina: HTTPStatusError for {url} ({target_jina_url}): {e.response.status_code} - {e.response.text[:200]}"
         )
         return UrlFetchResult(
             url=url,
             content=None,
-            error=f"Jina HTTPError: {e.code} {e.reason}",
+            error=f"Jina HTTPStatusError: {e.response.status_code}",
             type="general_jina",
             original_index=index,
         )
-    except urllib.error.URLError as e:
-        logging.warning(f"Jina: URLError for {url} ({jina_reader_url}): {e.reason}")
+    except httpx.RequestError as e:
+        logging.warning(
+            f"Jina: RequestError for {url} ({target_jina_url}): {type(e).__name__} - {e}"
+        )
         return UrlFetchResult(
             url=url,
             content=None,
-            error=f"Jina URLError: {e.reason}",
+            error=f"Jina RequestError: {type(e).__name__}",
             type="general_jina",
             original_index=index,
         )
     except Exception as e:
         logging.error(
-            f"Jina: Exception during fetch for {url} ({jina_reader_url}): {e}",
+            f"Jina: Exception during fetch for {url} ({target_jina_url}): {e}",
             exc_info=True,
         )
         return UrlFetchResult(
@@ -332,7 +362,9 @@ async def fetch_general_url_content(
     main_extractor: str,
     fallback_extractor: str,
     max_text_length: Optional[int] = None,
-    jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,  # Added jina_engine_mode
+    jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,
+    jina_wait_for_selector: Optional[str] = None,  # Added
+    jina_timeout: Optional[int] = None,  # Added
 ) -> UrlFetchResult:
     """
     Fetches content from a general URL using the specified main and fallback extractors.
@@ -349,7 +381,16 @@ async def fetch_general_url_content(
     async def _jina_fetcher_wrapper(
         u_param: str, i_param: int, mtl_param: Optional[int]
     ):
-        return await fetch_with_jina(u_param, i_param, mtl_param, jina_engine_mode)
+        # Pass httpx_client and new Jina params to fetch_with_jina
+        return await fetch_with_jina(
+            u_param,
+            i_param,
+            client,  # Pass the client
+            mtl_param,
+            jina_engine_mode,
+            jina_wait_for_selector,
+            jina_timeout,
+        )
 
     if main_extractor == "crawl4ai":
         chosen_main_fetcher = fetch_with_crawl4ai
