@@ -251,7 +251,7 @@ def close_all_db_managers():  # This remains synchronous
     """Closes all active database manager connections."""
     global db_managers
     logging.info("Closing database connections...")
-    for manager in db_managers.values():
-        manager.close()  # close is synchronous
+    # Connections are managed per-operation, so no explicit close needed for managers.
+    # We just clear the global dictionary.
     db_managers = {}
-    logging.info("Database connections closed.")
+    logging.info("Database manager references cleared.")

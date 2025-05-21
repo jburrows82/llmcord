@@ -723,7 +723,7 @@ class LLMCordClient(discord.Client):
             history_for_llm=history_for_llm,
             system_prompt_text=system_prompt_text,
             provider_config=provider_config,
-            extra_params=extra_api_params,
+            extra_api_params=extra_api_params,
             app_config=self.config,  # Pass app_config
             initial_user_warnings=user_warnings,
             use_plain_responses_config=use_plain_responses,

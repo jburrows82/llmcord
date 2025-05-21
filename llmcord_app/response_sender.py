@@ -73,6 +73,7 @@ async def handle_llm_response_stream(
     system_prompt_text: Optional[str],
     provider_config: Dict[str, Any],
     extra_api_params: Dict[str, Any],
+    app_config: Dict[str, Any],
     initial_user_warnings: Set[str],
     use_plain_responses_config: bool,
     split_limit_config: int,
