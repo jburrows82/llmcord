@@ -16,14 +16,12 @@ from . import models
 
 # --- ADDED: Tiktoken helper ---
 def _get_tokenizer_for_model(model_name: str):
-    """Gets the appropriate tiktoken encoder for a given model name."""
-    try:
-        return tiktoken.encoding_for_model(model_name)
-    except KeyError:
-        logging.warning(
-            f"No tiktoken encoder found for model '{model_name}'. Using 'cl100k_base' as fallback."
-        )
-        return tiktoken.get_encoding("cl100k_base")
+    """Gets the tiktoken encoder. Always uses 'o200k_base'."""
+    # User request: Always use o200k_base
+    logging.debug(
+        f"Requested tokenizer for model '{model_name}', returning 'o200k_base'."
+    )
+    return tiktoken.get_encoding("o200k_base")
 
 
 def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str, int]:
