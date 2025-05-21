@@ -155,7 +155,7 @@ system_prompt: |
 # web search queries for grounding non-Gemini/non-Grok models.
 # This prompt guides Gemini on how to generate relevant search terms.
 grounding_system_prompt: |
-  ANSWER IN ONLY ONE SENTENCE.
+  ANSWER IN ONE SENTENCE.
 
 # System prompt for the fallback model (e.g., when a non-Gemini stream is incomplete or a 422 error occurs).
 # This prompt guides the fallback model on how to respond concisely.
