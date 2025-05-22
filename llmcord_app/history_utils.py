@@ -1083,26 +1083,19 @@ async def _summarize_history_content(
         if role == "model": # Consistent role for LLM
             role = "assistant"
         
-        # Include external content if available, followed by the text content
         text_content = msg_data.get("text", "")
-        external_content = msg_data.get("external_content")
-        
-        # Format content similar to how it's formatted for the main API
-        final_content = ""
-        if external_content:
-            final_content = external_content + "\n\nUser's query:\n" + (text_content or "")
-        else:
-            final_content = text_content
-            
-        # Include user ID if it's a user message and content exists
-        if role == "user" and msg_data.get("user_id") and final_content:
+        # Include user ID if it's a user message and text exists
+        if role == "user" and msg_data.get("user_id") and text_content:
+            # Format similar to OpenAI's name field, but in content for general models
+            # text_content = f"(User {msg_data['user_id']}): {text_content}"
             # Per user request, use the name field if supported, otherwise just content.
             # For summarization, we'll just pass the content as is, the LLM should infer from context.
             pass
 
-        # Only add if there's content to summarize
-        if final_content:
-            entry = {"role": role, "content": final_content}
+
+        # For summarization, we only care about text content. Files/external_content are not included.
+        if text_content: # Only add if there's text
+            entry = {"role": role, "content": text_content}
             # Add name if it's a user message and user_id is present
             if role == "user" and msg_data.get("user_id"):
                 entry["name"] = str(msg_data.get("user_id"))

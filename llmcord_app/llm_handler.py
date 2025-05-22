@@ -4,8 +4,6 @@ import random
 import json
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 import io
-import os
-import datetime
 from PIL import Image
 
 # OpenAI specific imports
@@ -31,50 +29,6 @@ from .constants import (
 )
 from .rate_limiter import get_db_manager, get_available_keys
 from .utils import _truncate_base64_in_payload, default_serializer
-
-
-def log_llm_payload_to_file(payload: Dict[str, Any], provider: str, model_name: str, key_display: str, attempt: int) -> None:
-    """
-    Log the LLM request payload to a text file.
-    
-    Args:
-        payload: The payload dictionary to log
-        provider: The LLM provider name
-        model_name: The model being used
-        key_display: Obscured API key for identification
-        attempt: The current attempt number
-    """
-    try:
-        # Create logs directory if it doesn't exist
-        os.makedirs('logs', exist_ok=True)
-        
-        # Generate timestamp for the log entry
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Create a filename with the date
-        log_filename = f"logs/llm_payloads_{datetime.datetime.now().strftime('%Y-%m-%d')}.log"
-        
-        # Prepare the log entry
-        log_entry = f"\n\n{'='*80}\n"
-        log_entry += f"TIMESTAMP: {timestamp}\n"
-        log_entry += f"PROVIDER: {provider}\n"
-        log_entry += f"MODEL: {model_name}\n"
-        log_entry += f"KEY: {key_display}\n"
-        log_entry += f"ATTEMPT: {attempt}\n"
-        log_entry += f"{'='*80}\n\n"
-        
-        # Add the payload with truncated base64 data
-        truncated_payload = _truncate_base64_in_payload(payload)
-        log_entry += json.dumps(truncated_payload, indent=2, default=default_serializer)
-        log_entry += "\n"
-        
-        # Append to the log file
-        with open(log_filename, 'a', encoding='utf-8') as log_file:
-            log_file.write(log_entry)
-            
-        logging.info(f"LLM payload logged to {log_filename}")
-    except Exception as e:
-        logging.error(f"Error logging LLM payload to file: {e}")
 
 
 async def generate_response_stream(
@@ -506,7 +460,7 @@ async def generate_response_stream(
                         **api_config,
                     }
 
-                # --- Print and Log Payload ---
+                # --- Print Payload ---
                 try:
                     print(
                         f"\n--- LLM Request Payload (Provider: {provider}, Model: {model_name}, Key: {key_display}, Attempt: {compression_attempt + 1}) ---"
@@ -518,17 +472,8 @@ async def generate_response_stream(
                         )
                     )
                     print("--- End LLM Request Payload ---\n")
-                    
-                    # Log payload to file
-                    log_llm_payload_to_file(
-                        payload_to_print,
-                        provider,
-                        model_name,
-                        key_display,
-                        compression_attempt + 1
-                    )
                 except Exception as print_err:
-                    logging.error(f"Error printing/logging LLM payload: {print_err}")
+                    logging.error(f"Error printing LLM payload: {print_err}")
                     print(
                         f"Raw Payload Data (may contain unserializable objects):\n{payload_to_print}\n"
                     )
