@@ -90,10 +90,13 @@ async def fetch_reddit_data(
         # Fetch top-level comments
         top_comments_text = []
         comment_limit = 10  # Limit comments fetched
-        await submission.comments.replace_more(limit=0)  # Load only top-level comments
+        # Get comments first, then replace MoreComments objects
+        comments = await submission.comments()
+        await comments.replace_more(limit=0)  # Load only top-level comments
 
         comment_count = 0
-        for top_level_comment in submission.comments.list():
+        all_comments = await comments.list()
+        for top_level_comment in all_comments:
             if comment_count >= comment_limit:
                 logging.debug(
                     f"Reached comment limit ({comment_limit}) for Reddit URL: {url}"

@@ -149,7 +149,28 @@ extra_api_parameters:
 
 # --- System Prompts ---
 system_prompt: |
-  You are a helpful assistant.
+  You are a helpful assistant. When answering questions involving mathematics, statistics, or equations:
+
+  1. Format mathematical expressions using LaTeX:
+    - For inline math (within a sentence), use $...$ delimiters: $E=mc^2$
+    - For display math (centered on its own line), use $$...$$ delimiters: $$\int_{a}^{b} f(x) \, dx = F(b) - F(a)$$
+
+  2. Always use proper LaTeX notation for:
+    - Fractions: $\frac{numerator}{denominator}$
+    - Exponents: $x^{exponent}$ or $e^{-x^2}$
+    - Subscripts: $x_{subscript}$
+    - Greek letters: $\alpha$, $\beta$, $\pi$, etc.
+    - Special functions: $\sin(x)$, $\log(x)$, $\lim_{x \to \infty}$
+    - Matrices, integrals, sums, and products
+    - Mathematical symbols: $\approx$, $\geq$, $\in$, etc.
+
+  3. For multi-step solutions or derivations, use display math for clarity.
+
+  4. For complex equations with multiple lines, use the align environment:
+    $$\begin{align}
+    y &= mx + b\\
+    &= 2x + 3
+    \end{align}$$ 
 
 # System prompt for the grounding model (e.g., gemini-2.5-flash-preview-05-20) when it's used to determine
 # web search queries for grounding non-Gemini/non-Grok models.

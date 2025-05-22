@@ -216,9 +216,16 @@ async def generate_response_stream(
                         )
 
                 if gemini_parts_for_this_msg:
+                    # Map OpenAI roles to Gemini roles (Gemini only accepts "user" and "model")
+                    gemini_role = "user"
+                    if original_msg_data["role"] == "assistant":
+                        gemini_role = "model"
+                    elif original_msg_data["role"] == "system":
+                        gemini_role = "user"  # Use "user" for system, as Gemini doesn't have a system role
+                    
                     current_history_for_api_call.append(
                         {
-                            "role": original_msg_data["role"],
+                            "role": gemini_role,
                             "parts": gemini_parts_for_this_msg,
                         }
                     )
