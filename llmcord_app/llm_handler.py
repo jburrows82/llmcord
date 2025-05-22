@@ -218,7 +218,7 @@ async def generate_response_stream(
                 if gemini_parts_for_this_msg:
                     # Map OpenAI roles to Gemini roles (Gemini only accepts "user" and "model")
                     gemini_role = "user"
-                    if original_msg_data["role"] == "assistant":
+                    if original_msg_data["role"] == "assistant" or original_msg_data["role"] == "model":
                         gemini_role = "model"
                     elif original_msg_data["role"] == "system":
                         gemini_role = "user"  # Use "user" for system, as Gemini doesn't have a system role

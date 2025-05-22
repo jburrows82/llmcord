@@ -538,16 +538,23 @@ async def build_message_history(
                     curr_node.parent_msg = parent
 
             # Add to raw_history_entries_reversed (oldest will be at the end)
-            raw_history_entries_reversed.append(
-                {
-                    "id": current_msg_id,
-                    "role": curr_node.role,
-                    "text": curr_node.text,
-                    "files": curr_node.api_file_parts,
-                    "external_content": curr_node.external_content,
-                    "user_id": curr_node.user_id,
-                }
-            )
+            # Only include external_content for the current message being processed
+            history_entry = {
+                "id": current_msg_id,
+                "role": curr_node.role,
+                "text": curr_node.text,
+                "files": curr_node.api_file_parts,
+                "user_id": curr_node.user_id,
+            }
+            
+            # Only add external_content for the current message node
+            # This ensures it's used for the current request but not saved in history
+            if is_current_message_node:
+                history_entry["external_content"] = curr_node.external_content
+            else:
+                history_entry["external_content"] = None
+                
+            raw_history_entries_reversed.append(history_entry)
             if curr_node.has_bad_attachments:
                 user_warnings.add("⚠️ Some attachments might not have been processed.")
             if curr_node.fetch_parent_failed:
@@ -648,7 +655,8 @@ async def build_message_history(
                 )
 
                 # Subtract tokens for external_content and image data from the budget for the text field
-                if latest_query_data["external_content"]:
+                # External content will only exist for the current message
+                if latest_query_data.get("external_content"):
                     budget_for_latest_query_node_text_field -= len(
                         tokenizer.encode(
                             latest_query_data["external_content"]
@@ -756,7 +764,8 @@ async def build_message_history(
                     effective_max_tokens_for_messages - current_history_token_sum
                 )
 
-                if latest_query_data["external_content"]:
+                # External content will only exist for the current message
+                if latest_query_data.get("external_content"):
                     budget_for_latest_query_node_text_field -= len(
                         tokenizer.encode(
                             latest_query_data["external_content"]
@@ -815,11 +824,13 @@ async def build_message_history(
     api_formatted_history = []
     for entry in final_api_message_parts:
         # Construct the text content that goes into the API call for this message
-        text_content_for_api = (
-            (entry["external_content"] + "\n\nUser's query:\n" + (entry["text"] or ""))
-            if entry["external_content"]
-            else (entry["text"] or "")
-        )
+        # Only include external_content if it's the current message
+        is_current_message = entry.get("id") == new_msg.id
+        text_content_for_api = entry["text"] or ""
+        
+        # Only use external_content for the new message, even if somehow it got saved in history
+        if is_current_message and entry.get("external_content"):
+            text_content_for_api = entry["external_content"] + "\n\nUser's query:\n" + text_content_for_api
 
         # Ensure file parts are within limits for this specific message
         # (max_files_per_message applies to files *within* one API message part, not total history files)
