@@ -49,6 +49,8 @@ from .constants import (
     FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
     DEEP_SEARCH_MODEL_CONFIG_KEY,
     GEMINI_SAFETY_SETTINGS_CONFIG_KEY,
+    SUMMARIZATION_MODEL_CONFIG_KEY,
+    SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY, # ADDED
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -443,6 +445,36 @@ async def get_config(filename="config.yaml"):
                 logging.info(
                     f"'{DEEP_SEARCH_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[DEEP_SEARCH_MODEL_CONFIG_KEY]}"
                 )
+
+            if SUMMARIZATION_MODEL_CONFIG_KEY not in config_data or not config_data.get(
+                SUMMARIZATION_MODEL_CONFIG_KEY
+            ):
+                config_data[SUMMARIZATION_MODEL_CONFIG_KEY] = (
+                    "openai/gpt-4.1"  # Default
+                )
+                logging.info(
+                    f"'{SUMMARIZATION_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[SUMMARIZATION_MODEL_CONFIG_KEY]}"
+                )
+
+            if SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY not in config_data or not isinstance(config_data.get(SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY), dict):
+                config_data[SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY] = {
+                    "temperature": 0.5,
+                    # Removed max_tokens
+                } # Default parameters
+                logging.info(
+                    f"'{SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY}' not found or invalid. Using default parameters."
+                )
+            else:
+                # Ensure essential defaults if some keys are missing from a partially defined dict
+                default_sum_params = {
+                    "temperature": 0.5,
+                    # Removed max_tokens
+                }
+                for key, value in default_sum_params.items():
+                    if key not in config_data[SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY]:
+                        config_data[SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY][key] = value
+                        logging.info(f"Summarization param '{key}' not found. Using default: {value}")
+
 
             # --- Load Output Sharing Settings ---
             if OUTPUT_SHARING_CONFIG_KEY not in config_data:

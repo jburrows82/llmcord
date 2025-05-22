@@ -245,19 +245,7 @@ async def handle_llm_response_stream(
             # Determine if the fallback model is Gemini to adjust parameters
             is_fallback_gemini = current_provider == "google"
 
-            if "max_tokens" in current_extra_params and is_fallback_gemini:
-                current_extra_params["max_output_tokens"] = current_extra_params.pop(
-                    "max_tokens"
-                )
-            # Remove max_output_tokens if fallback is not Gemini and it was added for Gemini
-            elif (
-                "max_output_tokens" in current_extra_params
-                and not is_fallback_gemini
-                and "max_tokens" not in current_extra_params
-            ):
-                current_extra_params["max_tokens"] = current_extra_params.pop(
-                    "max_output_tokens"
-                )
+            # Token limit logic removed
 
             if is_fallback_gemini:
                 global_use_thinking_budget = client.config.get(
@@ -272,9 +260,7 @@ async def handle_llm_response_stream(
                     )
             else:  # Remove Gemini specific params if fallback is not Gemini
                 current_extra_params.pop("thinking_budget", None)
-                current_extra_params.pop(
-                    "max_output_tokens", None
-                )  # Ensure this is removed if not already handled by max_tokens logic
+                # Token limit logic removed
 
             # Get and prepare the system prompt for the fallback model
             fallback_system_prompt_text_from_config = client.config.get(

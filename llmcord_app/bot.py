@@ -38,7 +38,7 @@ from .utils import (
     is_image_url,
     extract_text_from_pdf_bytes,
 )
-from .llm_handler import generate_response_stream
+from .llm_handler import generate_response_stream # generate_response_stream is already imported
 from .commands import (
     set_model_command,
     get_user_model_preference,
@@ -677,6 +677,8 @@ class LLMCordClient(discord.Client):
                     new_msg.author.id, self.config.get("system_prompt")
                 ),
             ),
+            app_config=self.config,  # ADDED
+            generate_response_stream_func=generate_response_stream,  # ADDED
         )
 
         if not history_for_llm:

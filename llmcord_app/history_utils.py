@@ -1,20 +1,30 @@
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable, AsyncGenerator, Tuple # Added Callable, AsyncGenerator, Tuple
+import types # ADDED
 import asyncio
 import base64
 import httpx
 import re
-import tiktoken  # Added tiktoken
+import tiktoken
+import json # Added json
 
 import discord
 
-from .constants import AT_AI_PATTERN, STREAMING_INDICATOR
+from .constants import (
+    AT_AI_PATTERN,
+    STREAMING_INDICATOR,
+    SUMMARIZATION_MODEL_CONFIG_KEY,
+    SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY,
+)
 from . import models
+from .llm_handler import generate_response_stream
+from .prompt_utils import prepare_system_prompt # Ensure this is available
+
 # Assuming google.genai.types will be passed as google_types_module
 # Assuming extract_text_from_pdf_bytes will be passed as a function
 
 
-# --- ADDED: Tiktoken helper ---
+# --- Tiktoken helper ---
 def _get_tokenizer_for_model(model_name: str):
     """Gets the tiktoken encoder. Always uses 'o200k_base'."""
     # User request: Always use o200k_base
@@ -24,14 +34,14 @@ def _get_tokenizer_for_model(model_name: str):
     return tiktoken.get_encoding("o200k_base")
 
 
-def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str, int]:
+def _truncate_text_by_tokens(text: str, tokenizer, token_limit: int) -> tuple[str, int]:
     """Truncates text to a maximum number of tokens and returns the truncated text and token count."""
     if not text:
         return "", 0
     tokens = tokenizer.encode(text)
     actual_token_count = len(tokens)
-    if actual_token_count > max_tokens:
-        truncated_tokens = tokens[:max_tokens]
+    if actual_token_count > token_limit:
+        truncated_tokens = tokens[:token_limit]
         try:
             truncated_text = tokenizer.decode(truncated_tokens)
         except UnicodeDecodeError:
@@ -43,7 +53,7 @@ def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str
                 )
                 return "", actual_token_count  # Return original token count
         if (
-            truncated_text and max_tokens > 0
+            truncated_text and token_limit > 0
         ):  # Ensure ellipsis isn't added to an empty or zero-token result
             truncated_text += "..."
         return truncated_text, actual_token_count  # Return original token count
@@ -162,6 +172,11 @@ async def build_message_history(
     at_ai_pattern_re: Any,
     providers_supporting_usernames_const: tuple,
     system_prompt_text_for_budgeting: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None, # ADDED app_config
+    generate_response_stream_func: Optional[Callable[ # ADDED generate_response_stream_func
+        [str, str, List[Dict[str, Any]], Optional[str], Dict[str, Any], Dict[str, Any], Dict[str, Any]],
+        AsyncGenerator[Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None]
+    ]] = None,
 ) -> List[Dict[str, Any]]:
     raw_history_entries_reversed = []  # Oldest last initially, will be reversed
 
@@ -563,10 +578,10 @@ async def build_message_history(
         ::-1
     ]  # Reverse to make it chronological
 
-    # 2. Tokenize and Prepare for Truncation
+    # 2. Tokenize and Prepare for Summarization / Truncation
     tokenizer = _get_tokenizer_for_model(target_model_name)
 
-    # Adjust max_tokens_for_text budget for the system prompt
+    # Adjust token budget for the system prompt
     effective_max_tokens_for_messages = max_tokens_for_text
     if system_prompt_text_for_budgeting:
         system_prompt_tokens = len(tokenizer.encode(system_prompt_text_for_budgeting))
@@ -576,6 +591,134 @@ async def build_message_history(
         logging.debug(
             f"Original max_tokens_for_text: {max_tokens_for_text}. System prompt tokens: {system_prompt_tokens}. Effective budget for messages: {effective_max_tokens_for_messages}"
         )
+
+    # --- Summarization Logic ---
+    if app_config and generate_response_stream_func and len(chronological_entries_data) > 2: # Need at least 3 messages to summarize
+        current_total_tokens = sum(len(tokenizer.encode(
+            (entry.get("external_content", "") + "\n\nUser's query:\n" + (entry.get("text", "") or ""))
+            if entry.get("external_content")
+            else (entry.get("text", "") or "")
+        )) for entry in chronological_entries_data)
+
+        # Add image token costs to current_total_tokens
+        for entry_data_for_sum_tokens in chronological_entries_data:
+            if entry_data_for_sum_tokens.get("files"):
+                num_images_in_entry_sum = 0
+                for file_part_struct_sum in entry_data_for_sum_tokens["files"]:
+                    if isinstance(file_part_struct_sum, dict) and file_part_struct_sum.get("type") == "image_url":
+                        img_url_dict_sum = file_part_struct_sum.get("image_url", {})
+                        data_url_val_sum = img_url_dict_sum.get("url", "")
+                        if (data_url_val_sum.startswith("data:image") and ";base64," in data_url_val_sum) or \
+                           (is_target_provider_gemini and isinstance(file_part_struct_sum, google_types_module.Part) and \
+                            hasattr(file_part_struct_sum, "inline_data") and file_part_struct_sum.inline_data and \
+                            file_part_struct_sum.inline_data.mime_type.startswith("image/")):
+                            num_images_in_entry_sum += 1
+                current_total_tokens += num_images_in_entry_sum * 765
+
+
+        summarization_threshold = effective_max_tokens_for_messages - 3000 # Leave 3k tokens buffer for new query + response
+        if current_total_tokens > summarization_threshold and summarization_threshold > 0 :
+            logging.info(f"Token count {current_total_tokens} exceeds threshold {summarization_threshold}. Attempting summarization.")
+
+            messages_to_summarize_data = []
+            messages_to_keep_after_summary = []
+
+            if len(chronological_entries_data) >= 2:
+                # Keep the last assistant message (if any) and the latest user query
+                latest_user_query_entry = chronological_entries_data[-1]
+                assistant_message_before_latest_user_query = None
+
+                if len(chronological_entries_data) >= 2 and chronological_entries_data[-2]["role"] in ("assistant", "model"):
+                    assistant_message_before_latest_user_query = chronological_entries_data[-2]
+                    messages_to_summarize_data = chronological_entries_data[:-2]
+                    messages_to_keep_after_summary.append(assistant_message_before_latest_user_query)
+                else: # No assistant message right before, or only user messages
+                    messages_to_summarize_data = chronological_entries_data[:-1]
+                
+                messages_to_keep_after_summary.append(latest_user_query_entry)
+
+            else: # Not enough messages to keep specific ones, summarize all (should be rare with len > 2 check)
+                messages_to_summarize_data = list(chronological_entries_data)
+
+
+            if messages_to_summarize_data:
+                summarization_model_str = app_config.get(SUMMARIZATION_MODEL_CONFIG_KEY, "openai/gpt-4.1")
+                summary_text = await _summarize_history_content(
+                    messages_to_summarize_data,
+                    summarization_model_str,
+                    app_config,
+                    generate_response_stream_func,
+                    str(new_msg.author.id) # For summary message name
+                    # google_types_module no longer passed
+                )
+
+                if summary_text:
+                    logging.info("Summarization successful.")
+                    summary_message_entry = {
+                        "id": f"summary_{new_msg.id}_{int(asyncio.get_event_loop().time())}", # Unique ID for summary
+                        "role": "user", # Summary is presented as a user message
+                        "text": f"**Conversation Summary:**\n\n{summary_text}",
+                        "files": [],
+                        "external_content": None,
+                        "user_id": new_msg.author.id, # Attributed to the user who triggered the interaction
+                    }
+                    
+                    new_chronological_entries = [summary_message_entry] + messages_to_keep_after_summary
+                    
+                    # Check token count of new history
+                    new_total_tokens = sum(len(tokenizer.encode(
+                        (entry.get("external_content", "") + "\n\nUser's query:\n" + (entry.get("text", "") or ""))
+                        if entry.get("external_content")
+                        else (entry.get("text", "") or "")
+                    )) for entry in new_chronological_entries)
+                    # Add image token costs for kept messages
+                    for entry_kept in messages_to_keep_after_summary:
+                        if entry_kept.get("files"):
+                            num_images_kept = 0
+                            for file_part_kept in entry_kept["files"]:
+                                if isinstance(file_part_kept, dict) and file_part_kept.get("type") == "image_url":
+                                    img_url_dict_kept = file_part_kept.get("image_url", {})
+                                    data_url_val_kept = img_url_dict_kept.get("url", "")
+                                    if (data_url_val_kept.startswith("data:image") and ";base64," in data_url_val_kept) or \
+                                       (is_target_provider_gemini and isinstance(file_part_kept, google_types_module.Part) and \
+                                        hasattr(file_part_kept, "inline_data") and file_part_kept.inline_data and \
+                                        file_part_kept.inline_data.mime_type.startswith("image/")):
+                                        num_images_kept +=1
+                            new_total_tokens += num_images_kept * 765
+
+
+                    if new_total_tokens > effective_max_tokens_for_messages:
+                        logging.warning(f"Summarized history ({new_total_tokens} tokens) still too long. Attempting to summarize the summary itself.")
+                        # Summarize the summary
+                        summary_to_summarize_again = [{
+                            "role": "user", # Treat the first summary as user content for the next summarization
+                            "text": summary_message_entry["text"],
+                            "user_id": new_msg.author.id
+                        }]
+                        second_summary_text = await _summarize_history_content(
+                            summary_to_summarize_again,
+                            summarization_model_str,
+                            app_config,
+                            generate_response_stream_func,
+                            str(new_msg.author.id)
+                            # google_types_module no longer passed
+                        )
+                        if second_summary_text:
+                            summary_message_entry["text"] = f"**Conversation Summary (Further Condensed):**\n\n{second_summary_text}"
+                            new_chronological_entries = [summary_message_entry] + messages_to_keep_after_summary
+                            logging.info("Second summarization successful.")
+                        else:
+                            logging.error("Second summarization failed. Proceeding with original summary and truncation.")
+                            user_warnings.add("⚠️ Summarization was too long and could not be further condensed. History may be heavily truncated.")
+                    
+                    chronological_entries_data = new_chronological_entries # Update history
+                    user_warnings.add("⚠️ Conversation history was summarized to fit context window.")
+                else:
+                    logging.error("Summarization failed. Proceeding with original history and truncation.")
+                    user_warnings.add("⚠️ Automatic history summarization failed. History may be truncated.")
+            else:
+                logging.info("Not enough messages to perform a meaningful summarization, or no messages to summarize after keeping latest.")
+
 
     tokenized_entries = []
     for entry_data in chronological_entries_data:
@@ -633,7 +776,7 @@ async def build_message_history(
         latest_query_data = tokenized_entries.pop()
     history_data_to_truncate = tokenized_entries  # Remaining entries are prior history
 
-    # 4. Perform Truncation using effective_max_tokens_for_messages
+    # 4. Perform Truncation using effective token budget for messages
     final_api_message_parts = []
 
     if not history_data_to_truncate:  # No prior history
@@ -917,4 +1060,142 @@ async def build_message_history(
     return api_formatted_history
 
 
+async def _summarize_history_content(
+    messages_to_summarize: List[Dict[str, Any]],
+    summarization_model_str: str,
+    app_config: Dict[str, Any],
+    generate_response_stream_func: Callable,
+    user_id_for_summary_name: str
+    # google_types_module: types.ModuleType # REMOVED parameter
+) -> Optional[str]:
+    """
+    Calls an LLM to summarize the provided message history.
+    """
+    # Removed assert statements as they were also flagged by the linter.
+
+    if not messages_to_summarize:
+        return None
+
+    # Prepare messages for the summarization prompt (simple role and content)
+    conversation_for_prompt = []
+    for msg_data in messages_to_summarize:
+        role = msg_data.get("role", "user")
+        if role == "model": # Consistent role for LLM
+            role = "assistant"
+        
+        text_content = msg_data.get("text", "")
+        # Include user ID if it's a user message and text exists
+        if role == "user" and msg_data.get("user_id") and text_content:
+            # Format similar to OpenAI's name field, but in content for general models
+            # text_content = f"(User {msg_data['user_id']}): {text_content}"
+            # Per user request, use the name field if supported, otherwise just content.
+            # For summarization, we'll just pass the content as is, the LLM should infer from context.
+            pass
+
+
+        # For summarization, we only care about text content. Files/external_content are not included.
+        if text_content: # Only add if there's text
+            entry = {"role": role, "content": text_content}
+            # Add name if it's a user message and user_id is present
+            if role == "user" and msg_data.get("user_id"):
+                entry["name"] = str(msg_data.get("user_id"))
+            conversation_for_prompt.append(entry)
+    
+    if not conversation_for_prompt:
+        logging.info("No text content found in messages to summarize.")
+        return None
+
+    # Using json.dumps for a clean, readable representation in the prompt
+    conversation_json_str = json.dumps(conversation_for_prompt, indent=2)
+
+    summarization_prompt_text = f"""Summarize this conversation. The summary is essential for continuing with the conversation. This summary is for a feature that uses an LLM call to summarize the past conversation when the conversation's context window is almost full, rather than dropping old messages.
+
+<conversation>
+{conversation_json_str}
+</conversation>
+
+Provide the summary as if you are the user {user_id_for_summary_name} creating a note for yourself to remember the key points and context. The summary should be detailed enough to allow the main AI assistant to seamlessly continue the conversation without losing important information. Focus on facts, decisions, key questions asked, and important context provided by all participants.
+"""
+    try:
+        sum_provider, sum_model_name = summarization_model_str.split("/", 1)
+    except ValueError:
+        logging.error(f"Invalid summarization_model format: {summarization_model_str}")
+        return None
+
+    sum_provider_config = app_config.get("providers", {}).get(sum_provider, {})
+    if not sum_provider_config or not sum_provider_config.get("api_keys"):
+        logging.error(f"Summarization provider '{sum_provider}' not configured with API keys.")
+        return None
+
+    # Use a minimal, clean history for the summarization call itself
+    # The actual conversation to be summarized is part of the system prompt.
+    summarization_history_for_llm = [
+        {"role": "user", "content": summarization_prompt_text} # The prompt itself is the user message
+    ]
+    
+    # System prompt for summarizer can be simple or None
+    # For this task, the main instruction is in the user message (summarization_prompt_text)
+    summarizer_system_prompt = None # Or a very generic "You are a helpful summarizer."
+
+    # Extra params for summarization - can be tuned.
+    # Get specific summarization parameters from app_config, falling back to general extra_api_parameters or defaults.
+    default_summarizer_params = {
+        "temperature": 0.5,
+        # Removed max_tokens comment
+    }
+    # Start with general extra_api_parameters
+    summarizer_extra_params = app_config.get("extra_api_parameters", {}).copy()
+    # Then apply defaults for summarizer-specific params if not already in general ones
+    for key, value in default_summarizer_params.items():
+        if key not in summarizer_extra_params:
+            summarizer_extra_params[key] = value
+            
+    # Then override with specific summarization_model_params from config
+    specific_summarizer_params = app_config.get(SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY, {})
+    summarizer_extra_params.update(specific_summarizer_params) # This applies the overrides
+
+    logging.debug(f"Summarizer effective extra_params: {summarizer_extra_params}")
+
+    # Token limit logic removed
+
+
+
+
+    summary_text_parts = []
+    try:
+        logging.info(f"Calling summarization model {sum_provider}/{sum_model_name}")
+        async for text_chunk, finish_reason, _, error_msg in generate_response_stream_func(
+            provider=sum_provider,
+            model_name=sum_model_name,
+            history_for_llm=summarization_history_for_llm,
+            system_prompt_text=summarizer_system_prompt,
+            provider_config=sum_provider_config,
+            extra_params=summarizer_extra_params,
+            app_config=app_config # Pass app_config
+        ):
+            if error_msg:
+                logging.error(f"Error during summarization stream: {error_msg}")
+                return None
+            if text_chunk:
+                summary_text_parts.append(text_chunk)
+            if finish_reason:
+                # Simplified check: "stop" or "end_turn" are considered successful.
+                # For Google, FINISH_REASON_UNSPECIFIED often means success if content was received.
+                # We will rely on content being present for success.
+                if finish_reason.lower() not in ("stop", "end_turn"):
+                    if sum_provider == "google" and finish_reason == "FINISH_REASON_UNSPECIFIED": # Directly compare string if that's what API returns
+                        pass # Treat as a valid (though unspecified) stop for Google
+                    else:
+                        logging.warning(f"Summarization stream finished with reason: {finish_reason}")
+                break
+        
+        final_summary = "".join(summary_text_parts).strip()
+        if not final_summary:
+            logging.warning("Summarization model returned an empty summary.")
+            return None
+        return final_summary
+
+    except Exception as e:
+        logging.exception(f"Exception during summarization call: {e}")
+        return None
 # STREAMING_INDICATOR is now imported from .constants
