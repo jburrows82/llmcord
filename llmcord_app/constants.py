@@ -169,8 +169,6 @@ AVAILABLE_MODELS = {
 # Keywords for Model Override
 DEEP_SEARCH_KEYWORDS = ["deepsearch", "deepersearch"]
 DEEP_SEARCH_MODEL_CONFIG_KEY = "deep_search_model"
-SUMMARIZATION_MODEL_CONFIG_KEY = "summarization_model"
-SUMMARIZATION_MODEL_PARAMS_CONFIG_KEY = "summarization_model_params" # ADDED
 
 # --- Gemini Safety Settings ---
 GEMINI_SAFETY_SETTINGS_CONFIG_KEY = "gemini_safety_settings"

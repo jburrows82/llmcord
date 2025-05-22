@@ -303,7 +303,10 @@ async def generate_response_stream(
                         return
                     api_content_kwargs["contents"] = gemini_contents
                     gemini_extra_params = extra_params.copy()
-                    # Token limit logic removed
+                    if "max_tokens" in gemini_extra_params:
+                        gemini_extra_params["max_output_tokens"] = (
+                            gemini_extra_params.pop("max_tokens")
+                        )
                     gemini_thinking_budget_val = gemini_extra_params.pop(
                         "thinking_budget", None
                     )
@@ -715,7 +718,7 @@ async def generate_response_stream(
 
                 if (
                     not content_received and stream_finish_reason
-                ):  # No content, but a finish reason
+                ):  # No content, but a finish reason (e.g. max_tokens without output)
                     logging.warning(
                         f"LLM stream for key {key_display} finished with reason '{stream_finish_reason}' but NO content was received. Aborting retries for this key."
                     )

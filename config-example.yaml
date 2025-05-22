@@ -127,33 +127,22 @@ providers:
 # --- Default Model Selection ---
 model: openai/gpt-4.1 # Example: Select the provider and model
 grounding_model: "google/gemini-2.5-flash-preview-05-20" # Model used for grounding pre-step (generating search queries for SearXNG)
-summarization_model: "openai/gpt-4.1" # Model used for chat history summarization
 fallback_vision_model: "google/gemini-2.5-flash-preview-05-20" # Fallback model if the selected model doesn't support vision but images are present
 fallback_model_incomplete_stream: "google/gemini-2.5-flash-preview-05-20" # Fallback model if a non-Gemini stream ends incompletely or a 422 error occurs
 deep_search_model: "x-ai/grok-3" # Model to use when 'deepsearch' or 'deepersearch' keywords are detected
-
-# --- Parameters for the Summarization Model ---
-# These parameters are specifically for the summarization LLM call.
-# They will override any general 'extra_api_parameters' if there's an overlap for the summarization model.
-summarization_model_params:
-  temperature: 0.5
-  # Removed max_tokens for summary
-  # top_p: 0.9
-  # frequency_penalty: 0.1
-  # presence_penalty: 0.1
 
 # --- Extra API Parameters ---
 # These parameters are passed to the LLM API if supported by the provider.
 extra_api_parameters:
   # Common OpenAI-compatible parameters:
-  # Removed max_tokens
+  max_tokens: 4096
   temperature: 1.0
   # top_p: 1.0
   # frequency_penalty: 0.0
   # presence_penalty: 0.0
 
   # Example Gemini parameters (these would be used if model starts with 'google/'):
-  # # Removed max_output_tokens
+  # max_output_tokens: 4096
   # temperature: 1.0
   # top_p: 0.95
   # top_k: 40
