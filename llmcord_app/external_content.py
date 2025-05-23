@@ -30,9 +30,12 @@ from .constants import (
     JINA_ENGINE_MODE_CONFIG_KEY,
     DEFAULT_JINA_ENGINE_MODE,
     JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,  # Added
-    JINA_TIMEOUT_CONFIG_KEY,  # Added
-    DEFAULT_JINA_WAIT_FOR_SELECTOR,  # Added
-    DEFAULT_JINA_TIMEOUT,  # Added
+    JINA_TIMEOUT_CONFIG_KEY,
+    DEFAULT_JINA_WAIT_FOR_SELECTOR,
+    DEFAULT_JINA_TIMEOUT,
+    # Crawl4AI
+    CRAWL4AI_CACHE_MODE_CONFIG_KEY,  # Added
+    DEFAULT_CRAWL4AI_CACHE_MODE,  # Added
 )
 
 
@@ -188,11 +191,14 @@ async def fetch_external_content(
         jina_selector = config.get(  # Added
             JINA_WAIT_FOR_SELECTOR_CONFIG_KEY, DEFAULT_JINA_WAIT_FOR_SELECTOR
         )
-        jina_timeout_val = config.get(  # Added
+        jina_timeout_val = config.get(
             JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
         )
+        crawl4ai_cache = config.get( # Added
+            CRAWL4AI_CACHE_MODE_CONFIG_KEY, DEFAULT_CRAWL4AI_CACHE_MODE
+        )
         logging.info(
-            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}', Jina mode: '{jina_mode}', Selector: '{jina_selector}', Timeout: {jina_timeout_val}."
+            f"Processing {len(general_urls_to_batch)} general URLs with main: '{main_extractor_method}', fallback: '{fallback_extractor_method}', Jina mode: '{jina_mode}', Selector: '{jina_selector}', Timeout: {jina_timeout_val}, Crawl4AI Cache: '{crawl4ai_cache}'."
         )
 
         general_url_processing_tasks = []
@@ -206,8 +212,9 @@ async def fetch_external_content(
                     fallback_extractor=fallback_extractor_method,
                     max_text_length=max_text_length,
                     jina_engine_mode=jina_mode,
-                    jina_wait_for_selector=jina_selector,  # Pass Jina selector
-                    jina_timeout=jina_timeout_val,  # Pass Jina timeout
+                    jina_wait_for_selector=jina_selector,
+                    jina_timeout=jina_timeout_val,
+                    crawl4ai_cache_mode=crawl4ai_cache,  # Pass Crawl4AI cache mode
                 )
             )
 

@@ -222,6 +222,15 @@ jina_engine_mode: "default"
 # jina_wait_for_selector: null # Optional: CSS selector (e.g., "#content", ".main-article"). Jina will wait for this element. Default: null (disabled).
 # jina_timeout: null # Optional: Integer in seconds (e.g., 30). Jina will wait for this duration for dynamic content. Default: null (Jina's default timeout).
 
+# --- Crawl4AI Settings (Optional) ---
+# Configure the cache mode for Crawl4AI.
+# Supported values: "bypass", "enabled", "refresh", "only_refresh"
+# "bypass": (Default) No caching. Always fetches live content.
+# "enabled": Uses cached content if available and not expired (default TTL is 1 day). Fetches live if not cached or expired.
+# "refresh": Fetches live content and updates the cache.
+# "only_refresh": Only fetches live content if it's already in cache (to update it), otherwise does nothing.
+# crawl4ai_cache_mode: "bypass"
+
 # --- Gemini Thinking Budget Settings ---
 # Optional: Allows Gemini models to spend more time "thinking" before generating a response.
 # This can potentially improve response quality for complex queries but may increase latency.

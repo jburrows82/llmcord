@@ -23,6 +23,9 @@ from .constants import (
     DEFAULT_JINA_WAIT_FOR_SELECTOR,
     JINA_TIMEOUT_CONFIG_KEY,
     DEFAULT_JINA_TIMEOUT,
+    # Crawl4AI
+    CRAWL4AI_CACHE_MODE_CONFIG_KEY,  # Added
+    DEFAULT_CRAWL4AI_CACHE_MODE,  # Added
 )
 from .content_fetchers import (
     fetch_searxng_results,
@@ -260,6 +263,9 @@ async def fetch_and_format_searxng_results(
                     ),
                     jina_timeout=config.get(
                         JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
+                    ),
+                    crawl4ai_cache_mode=config.get(  # Added
+                        CRAWL4AI_CACHE_MODE_CONFIG_KEY, DEFAULT_CRAWL4AI_CACHE_MODE
                     ),
                 )
             )

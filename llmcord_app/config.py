@@ -49,6 +49,10 @@ from .constants import (
     FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
     DEEP_SEARCH_MODEL_CONFIG_KEY,
     GEMINI_SAFETY_SETTINGS_CONFIG_KEY,
+    # Crawl4AI settings
+    CRAWL4AI_CACHE_MODE_CONFIG_KEY,  # Added
+    DEFAULT_CRAWL4AI_CACHE_MODE,  # Added
+    VALID_CRAWL4AI_CACHE_MODES,  # Added
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -702,6 +706,25 @@ async def get_config(filename="config.yaml"):
                     )
                     config_data[JINA_TIMEOUT_CONFIG_KEY] = DEFAULT_JINA_TIMEOUT
             # If it's None, it remains None (DEFAULT_JINA_TIMEOUT)
+
+            # --- Load Crawl4AI Cache Mode ---
+            if CRAWL4AI_CACHE_MODE_CONFIG_KEY not in config_data:
+                config_data[CRAWL4AI_CACHE_MODE_CONFIG_KEY] = (
+                    DEFAULT_CRAWL4AI_CACHE_MODE
+                )
+                logging.info(
+                    f"'{CRAWL4AI_CACHE_MODE_CONFIG_KEY}' not found. Using default: {DEFAULT_CRAWL4AI_CACHE_MODE}"
+                )
+            elif (
+                config_data[CRAWL4AI_CACHE_MODE_CONFIG_KEY]
+                not in VALID_CRAWL4AI_CACHE_MODES
+            ):
+                logging.warning(
+                    f"Invalid value for '{CRAWL4AI_CACHE_MODE_CONFIG_KEY}': {config_data[CRAWL4AI_CACHE_MODE_CONFIG_KEY]}. Using default: {DEFAULT_CRAWL4AI_CACHE_MODE}"
+                )
+                config_data[CRAWL4AI_CACHE_MODE_CONFIG_KEY] = (
+                    DEFAULT_CRAWL4AI_CACHE_MODE
+                )
 
             return config_data
 

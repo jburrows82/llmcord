@@ -99,6 +99,16 @@ DEFAULT_JINA_TIMEOUT = (
     None  # Added - None means not used by default, Jina might have its own default
 )
 
+# --- Crawl4AI Settings ---
+CRAWL4AI_CACHE_MODE_CONFIG_KEY = "crawl4ai_cache_mode"  # Added
+DEFAULT_CRAWL4AI_CACHE_MODE = "bypass"  # Added
+VALID_CRAWL4AI_CACHE_MODES = [
+    "bypass",
+    "enabled",
+    "refresh",
+    "only_refresh",
+]  # Added
+
 # --- Gemini Thinking Budget ---
 GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"
 GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY = "gemini_thinking_budget_value"

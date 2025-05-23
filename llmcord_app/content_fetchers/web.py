@@ -125,13 +125,27 @@ async def fetch_with_jina(
 
 
 async def fetch_with_crawl4ai(
-    url: str, index: int, max_text_length: Optional[int] = None
+    url: str,
+    index: int,
+    max_text_length: Optional[int] = None,
+    crawl4ai_cache_mode: str = "bypass",  # Added
 ) -> UrlFetchResult:
     """Fetches content using Crawl4AI."""
-    logging.info(f"Attempting to fetch URL with Crawl4AI: {url}")
+    logging.info(
+        f"Attempting to fetch URL with Crawl4AI: {url} (Cache Mode: {crawl4ai_cache_mode})"
+    )
     try:
+        # Convert string cache mode to Crawl4AI CacheMode enum
+        try:
+            cache_mode_enum = CacheMode[crawl4ai_cache_mode.upper()]
+        except KeyError:
+            logging.warning(
+                f"Invalid crawl4ai_cache_mode '{crawl4ai_cache_mode}', defaulting to BYPASS."
+            )
+            cache_mode_enum = CacheMode.BYPASS
+
         run_config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,  # Or CacheMode.ENABLED if caching is desired
+            cache_mode=cache_mode_enum,  # Use configured cache mode
             # Add other relevant Crawl4AI configs here if needed, e.g., user_agent
             # For now, using default markdown generator
         )
@@ -363,8 +377,9 @@ async def fetch_general_url_content(
     fallback_extractor: str,
     max_text_length: Optional[int] = None,
     jina_engine_mode: str = DEFAULT_JINA_ENGINE_MODE,
-    jina_wait_for_selector: Optional[str] = None,  # Added
-    jina_timeout: Optional[int] = None,  # Added
+    jina_wait_for_selector: Optional[str] = None,
+    jina_timeout: Optional[int] = None,
+    crawl4ai_cache_mode: str = "bypass",  # Added
 ) -> UrlFetchResult:
     """
     Fetches content from a general URL using the specified main and fallback extractors.
@@ -374,48 +389,54 @@ async def fetch_general_url_content(
     main_fetcher_name = ""
     fallback_fetcher_name = ""
 
-    # Define helper functions to capture the 'client' variable from the outer scope
+    # Define helper functions to capture variables from the outer scope
     async def _bs_fetcher_wrapper(u_param: str, i_param: int, mtl_param: Optional[int]):
         return await fetch_with_beautifulsoup(u_param, i_param, client, mtl_param)
 
     async def _jina_fetcher_wrapper(
         u_param: str, i_param: int, mtl_param: Optional[int]
     ):
-        # Pass httpx_client and new Jina params to fetch_with_jina
         return await fetch_with_jina(
             u_param,
             i_param,
-            client,  # Pass the client
+            client,
             mtl_param,
             jina_engine_mode,
             jina_wait_for_selector,
             jina_timeout,
         )
 
+    async def _crawl4ai_fetcher_wrapper(
+        u_param: str, i_param: int, mtl_param: Optional[int]
+    ): # Added wrapper for crawl4ai
+        return await fetch_with_crawl4ai(
+            u_param, i_param, mtl_param, crawl4ai_cache_mode
+        )
+
     if main_extractor == "crawl4ai":
-        chosen_main_fetcher = fetch_with_crawl4ai
+        chosen_main_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
         main_fetcher_name = "Crawl4AI"
     elif main_extractor == "beautifulsoup":
         chosen_main_fetcher = _bs_fetcher_wrapper
         main_fetcher_name = "BeautifulSoup"
     elif main_extractor == "jina":
-        chosen_main_fetcher = _jina_fetcher_wrapper  # Use wrapper
+        chosen_main_fetcher = _jina_fetcher_wrapper
         main_fetcher_name = "Jina"
     else:  # Should not happen due to config validation
         logging.error(
             f"Invalid main_extractor specified: {main_extractor}. Defaulting to crawl4ai."
         )
-        chosen_main_fetcher = fetch_with_crawl4ai
+        chosen_main_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
         main_fetcher_name = "Crawl4AI (defaulted)"
 
     if fallback_extractor == "crawl4ai":
-        chosen_fallback_fetcher = fetch_with_crawl4ai
+        chosen_fallback_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
         fallback_fetcher_name = "Crawl4AI"
     elif fallback_extractor == "beautifulsoup":
         chosen_fallback_fetcher = _bs_fetcher_wrapper
         fallback_fetcher_name = "BeautifulSoup"
     elif fallback_extractor == "jina":
-        chosen_fallback_fetcher = _jina_fetcher_wrapper  # Use wrapper
+        chosen_fallback_fetcher = _jina_fetcher_wrapper
         fallback_fetcher_name = "Jina"
     else:  # Should not happen
         logging.error(
@@ -425,7 +446,7 @@ async def fetch_general_url_content(
         fallback_fetcher_name = "BeautifulSoup (defaulted)"
 
     logging.info(
-        f"Attempting general URL fetch for {url} with main extractor: {main_fetcher_name}"
+        f"Attempting general URL fetch for {url} with main extractor: {main_fetcher_name} (Crawl4AI Cache: {crawl4ai_cache_mode if main_extractor == 'crawl4ai' else 'N/A'})"
     )
     main_result = await chosen_main_fetcher(url, index, max_text_length)
 
@@ -433,7 +454,7 @@ async def fetch_general_url_content(
         return main_result
     else:
         logging.warning(
-            f"{main_fetcher_name} failed for {url} (Error: {main_result.error}). Falling back to {fallback_fetcher_name}."
+            f"{main_fetcher_name} failed for {url} (Error: {main_result.error}). Falling back to {fallback_fetcher_name} (Crawl4AI Cache: {crawl4ai_cache_mode if fallback_extractor == 'crawl4ai' else 'N/A'})."
         )
 
         # Ensure main and fallback are not the same to avoid re-running the same failed fetcher
@@ -446,7 +467,7 @@ async def fetch_general_url_content(
                 url=url,
                 content=None,
                 error=f"{main_fetcher_name} Error: {main_result.error} (Fallback was same method).",
-                type="general",
+                type="general", # Type should reflect the fetcher used, but this is a generic error state
                 original_index=index,
             )
 
