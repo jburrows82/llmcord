@@ -152,8 +152,6 @@ AVAILABLE_MODELS = {
     ],
     "openai": [
         "gpt-4.1",
-        "claude-3.7-sonnet",
-        "claude-3.7-sonnet-thought",
         "o4-mini",
         # Add other OpenAI models as needed/supported
     ],
@@ -165,6 +163,11 @@ AVAILABLE_MODELS = {
         "mistral-medium-latest"
         # Add other Mistral models as needed/supported
     ],
+    "anthropic": [
+        "claude-3.7-sonnet",
+        "claude-3.7-sonnet-thought",
+        "claude-sonnet-4"
+    ]
 }
 # Keywords for Model Override
 DEEP_SEARCH_KEYWORDS = ["deepsearch", "deepersearch"]
