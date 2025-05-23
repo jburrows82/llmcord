@@ -265,7 +265,7 @@ async def fetch_external_content(
                     f"Unexpected result type from other URL fetch: {type(result_other)}"
                 )
 
-    # Process Google Lens Images Sequentially (remains the same)
+    # Process Google Lens Images Concurrently
     if use_google_lens:
         lens_images_to_process = image_attachments[
             :max_files_per_message
@@ -275,43 +275,57 @@ async def fetch_external_content(
                 f"⚠️ Only processing first {max_files_per_message} images for Google Lens."
             )
 
-        logging.info(
-            f"Processing {len(lens_images_to_process)} Google Lens images sequentially..."
-        )
-        for i, attachment in enumerate(lens_images_to_process):
+        if lens_images_to_process:
             logging.info(
-                f"Starting Google Lens processing for image {i + 1}/{len(lens_images_to_process)}..."
+                f"Processing {len(lens_images_to_process)} Google Lens images concurrently..."
             )
+            lens_processing_tasks = []
+            for i, attachment in enumerate(lens_images_to_process):
+                lens_processing_tasks.append(
+                    process_google_lens_image(attachment.url, i, config)
+                )
+
             try:
-                # Pass config to process_google_lens_image
-                lens_result = await process_google_lens_image(
-                    attachment.url, i, config
-                )  # Pass config here
-                url_fetch_results.append(lens_result)
-                if lens_result.error:
-                    logging.warning(
-                        f"Google Lens processing failed for image {i + 1}: {lens_result.error}"
-                    )
-                    user_warnings.add(
-                        f"⚠️ Google Lens failed for image {i + 1}: {lens_result.error[:100]}..."
-                    )
-                else:
-                    logging.info(f"Finished Google Lens processing for image {i + 1}.")
-            except Exception as e:
-                logging.exception(
-                    f"Unexpected error during sequential Google Lens processing for image {i + 1}"
+                lens_results_gathered = await asyncio.gather(
+                    *lens_processing_tasks, return_exceptions=True
                 )
-                user_warnings.add(f"⚠️ Unexpected error processing Lens image {i + 1}")
-                # Use the correct UrlFetchResult class
-                url_fetch_results.append(
-                    models.UrlFetchResult(
-                        url=attachment.url,
-                        content=None,
-                        error=f"Unexpected processing error: {type(e).__name__}",
-                        type="google_lens_fallback_failed",
-                        original_index=i,
-                    )
+                for i, lens_result_or_exc in enumerate(lens_results_gathered):
+                    attachment_url_for_error = lens_images_to_process[i].url
+                    if isinstance(lens_result_or_exc, models.UrlFetchResult):
+                        url_fetch_results.append(lens_result_or_exc)
+                        if lens_result_or_exc.error:
+                            logging.warning(
+                                f"Google Lens processing failed for image {lens_result_or_exc.original_index + 1} ({attachment_url_for_error}): {lens_result_or_exc.error}"
+                            )
+                            user_warnings.add(
+                                f"⚠️ Google Lens failed for image {lens_result_or_exc.original_index + 1}: {lens_result_or_exc.error[:100]}..."
+                            )
+                        else:
+                            logging.info(
+                                f"Finished Google Lens processing for image {lens_result_or_exc.original_index + 1} ({attachment_url_for_error})."
+                            )
+                    elif isinstance(lens_result_or_exc, Exception):
+                        logging.exception(
+                            f"Unexpected exception during concurrent Google Lens processing for image {i+1} ({attachment_url_for_error})"
+                        )
+                        user_warnings.add(
+                            f"⚠️ Unexpected error processing Lens image {i+1}"
+                        )
+                        url_fetch_results.append(
+                            models.UrlFetchResult(
+                                url=attachment_url_for_error,
+                                content=None,
+                                error=f"Unexpected processing error: {type(lens_result_or_exc).__name__}",
+                                type="google_lens_fallback_failed",
+                                original_index=i, # original_index here refers to the index in lens_images_to_process
+                            )
+                        )
+            except Exception as e_lens_gather:
+                logging.error(
+                    f"Google Lens batch processing gather failed: {e_lens_gather}",
+                    exc_info=True,
                 )
+                user_warnings.add("⚠️ Critical error during batch Google Lens processing.")
 
     return url_fetch_results
 
