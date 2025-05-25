@@ -177,7 +177,11 @@ AVAILABLE_MODELS = {
         "claude-3.7-sonnet",
         "claude-3.7-sonnet-thought",
         "claude-sonnet-4"
-    ]
+    ],
+    "deepseek": [
+        "deepseek-ai/DeepSeek-V3-0324"
+        # Add other DeepSeek models as needed/supported
+    ],
 }
 # Keywords for Model Override
 DEEP_SEARCH_KEYWORDS = ["deepsearch", "deepersearch"]
