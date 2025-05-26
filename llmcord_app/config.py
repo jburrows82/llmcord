@@ -53,6 +53,20 @@ from .constants import (
     CRAWL4AI_CACHE_MODE_CONFIG_KEY,  # Added
     DEFAULT_CRAWL4AI_CACHE_MODE,  # Added
     VALID_CRAWL4AI_CACHE_MODES,  # Added
+    # External Web Content API
+    WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY,
+    WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY,
+    WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY,
+    DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED,
+    DEFAULT_WEB_CONTENT_EXTRACTION_API_URL,
+    DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS,
+    # Grounding Model Parameters
+    GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY,
+    DEFAULT_GROUNDING_MODEL_TEMPERATURE,
+    GROUNDING_MODEL_TOP_K_CONFIG_KEY,
+    DEFAULT_GROUNDING_MODEL_TOP_K,
+    GROUNDING_MODEL_TOP_P_CONFIG_KEY,
+    DEFAULT_GROUNDING_MODEL_TOP_P,
 )
 
 # --- ADDED DEFAULT GROUNDING PROMPT ---
@@ -418,6 +432,100 @@ async def get_config(filename="config.yaml"):
                     f"'{GROUNDING_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[GROUNDING_MODEL_CONFIG_KEY]}"
                 )
 
+            # --- Load Grounding Model Parameters ---
+            # Temperature
+            if GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY not in config_data:
+                config_data[GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY] = (
+                    DEFAULT_GROUNDING_MODEL_TEMPERATURE
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_GROUNDING_MODEL_TEMPERATURE}"
+                )
+            else:
+                try:
+                    val = float(config_data[GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY])
+                    if not (0.0 <= val <= 1.0):
+                        logging.warning(
+                            f"'{GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY}' ({val}) must be between 0.0 and 1.0. "
+                            f"Using default: {DEFAULT_GROUNDING_MODEL_TEMPERATURE}"
+                        )
+                        config_data[GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY] = (
+                            DEFAULT_GROUNDING_MODEL_TEMPERATURE
+                        )
+                    else:
+                        config_data[GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY}' is not a valid float. "
+                        f"Using default: {DEFAULT_GROUNDING_MODEL_TEMPERATURE}"
+                    )
+                    config_data[GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY] = (
+                        DEFAULT_GROUNDING_MODEL_TEMPERATURE
+                    )
+
+            # Top K
+            if GROUNDING_MODEL_TOP_K_CONFIG_KEY not in config_data:
+                config_data[GROUNDING_MODEL_TOP_K_CONFIG_KEY] = (
+                    DEFAULT_GROUNDING_MODEL_TOP_K
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_TOP_K_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_K}"
+                )
+            else:
+                try:
+                    val = int(config_data[GROUNDING_MODEL_TOP_K_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{GROUNDING_MODEL_TOP_K_CONFIG_KEY}' ({val}) must be a positive integer. "
+                            f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_K}"
+                        )
+                        config_data[GROUNDING_MODEL_TOP_K_CONFIG_KEY] = (
+                            DEFAULT_GROUNDING_MODEL_TOP_K
+                        )
+                    else:
+                        config_data[GROUNDING_MODEL_TOP_K_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{GROUNDING_MODEL_TOP_K_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_K}"
+                    )
+                    config_data[GROUNDING_MODEL_TOP_K_CONFIG_KEY] = (
+                        DEFAULT_GROUNDING_MODEL_TOP_K
+                    )
+
+            # Top P
+            if GROUNDING_MODEL_TOP_P_CONFIG_KEY not in config_data:
+                config_data[GROUNDING_MODEL_TOP_P_CONFIG_KEY] = (
+                    DEFAULT_GROUNDING_MODEL_TOP_P
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_TOP_P_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_P}"
+                )
+            else:
+                try:
+                    val = float(config_data[GROUNDING_MODEL_TOP_P_CONFIG_KEY])
+                    if not (0.0 <= val <= 1.0):
+                        logging.warning(
+                            f"'{GROUNDING_MODEL_TOP_P_CONFIG_KEY}' ({val}) must be between 0.0 and 1.0. "
+                            f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_P}"
+                        )
+                        config_data[GROUNDING_MODEL_TOP_P_CONFIG_KEY] = (
+                            DEFAULT_GROUNDING_MODEL_TOP_P
+                        )
+                    else:
+                        config_data[GROUNDING_MODEL_TOP_P_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{GROUNDING_MODEL_TOP_P_CONFIG_KEY}' is not a valid float. "
+                        f"Using default: {DEFAULT_GROUNDING_MODEL_TOP_P}"
+                    )
+                    config_data[GROUNDING_MODEL_TOP_P_CONFIG_KEY] = (
+                        DEFAULT_GROUNDING_MODEL_TOP_P
+                    )
+
             if (
                 FALLBACK_VISION_MODEL_CONFIG_KEY not in config_data
                 or not config_data.get(FALLBACK_VISION_MODEL_CONFIG_KEY)
@@ -725,6 +833,79 @@ async def get_config(filename="config.yaml"):
                 config_data[CRAWL4AI_CACHE_MODE_CONFIG_KEY] = (
                     DEFAULT_CRAWL4AI_CACHE_MODE
                 )
+
+            # --- Load External Web Content API Settings ---
+            if WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY not in config_data:
+                config_data[WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED
+                )
+                logging.info(
+                    f"'{WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED}"
+                )
+            elif not isinstance(
+                config_data[WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY], bool
+            ):
+                logging.warning(
+                    f"'{WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY}' is not a boolean. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED}"
+                )
+                config_data[WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED
+                )
+
+            if WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY not in config_data:
+                config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_URL
+                )
+                logging.info(
+                    f"'{WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_URL}"
+                )
+            elif not isinstance(
+                config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY], str
+            ) or not config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY].strip():
+                logging.warning(
+                    f"'{WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY}' is not a non-empty string. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_URL}"
+                )
+                config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_URL
+                )
+
+            if WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY not in config_data:
+                config_data[WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
+                )
+                logging.info(
+                    f"'{WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS}"
+                )
+            else:
+                try:
+                    val = int(
+                        config_data[WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY]
+                    )
+                    if val <= 0:
+                        logging.warning(
+                            f"'{WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY}' ({val}) must be positive. "
+                            f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS}"
+                        )
+                        config_data[
+                            WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY
+                        ] = DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
+                    else:
+                        config_data[
+                            WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY
+                        ] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS}"
+                    )
+                    config_data[
+                        WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY
+                    ] = DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
 
             return config_data
 

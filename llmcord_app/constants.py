@@ -79,6 +79,14 @@ GROUNDING_SYSTEM_PROMPT_CONFIG_KEY = "grounding_system_prompt"
 SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY = "searxng_url_content_max_length"
 SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH = 20000
 
+# --- Grounding Model Parameters ---
+GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY = "grounding_model_temperature"
+DEFAULT_GROUNDING_MODEL_TEMPERATURE = 0.7
+GROUNDING_MODEL_TOP_K_CONFIG_KEY = "grounding_model_top_k"
+DEFAULT_GROUNDING_MODEL_TOP_K = 40
+GROUNDING_MODEL_TOP_P_CONFIG_KEY = "grounding_model_top_p"
+DEFAULT_GROUNDING_MODEL_TOP_P = 0.95
+
 # --- General URL Content Extraction ---
 MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = "main_general_url_content_extractor"
 FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = (
@@ -108,6 +116,14 @@ VALID_CRAWL4AI_CACHE_MODES = [
     "refresh",
     "only_refresh",
 ]  # Added
+
+# --- External Web Content API ---
+WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY = "web_content_extraction_api_enabled"
+WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY = "web_content_extraction_api_url"
+WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY = "web_content_extraction_api_max_results"
+DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED = False
+DEFAULT_WEB_CONTENT_EXTRACTION_API_URL = "http://localhost:8080/search"
+DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS = 3
 
 # --- Gemini Thinking Budget ---
 GEMINI_USE_THINKING_BUDGET_CONFIG_KEY = "gemini_use_thinking_budget"
