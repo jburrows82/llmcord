@@ -862,9 +862,12 @@ async def get_config(filename="config.yaml"):
                     f"'{WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY}' not found. "
                     f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_URL}"
                 )
-            elif not isinstance(
-                config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY], str
-            ) or not config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY].strip():
+            elif (
+                not isinstance(
+                    config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY], str
+                )
+                or not config_data[WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY].strip()
+            ):
                 logging.warning(
                     f"'{WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY}' is not a non-empty string. "
                     f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_URL}"
@@ -903,9 +906,9 @@ async def get_config(filename="config.yaml"):
                         f"'{WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY}' is not a valid integer. "
                         f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS}"
                     )
-                    config_data[
-                        WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY
-                    ] = DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
+                    config_data[WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY] = (
+                        DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
+                    )
 
             return config_data
 

@@ -120,7 +120,9 @@ VALID_CRAWL4AI_CACHE_MODES = [
 # --- External Web Content API ---
 WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY = "web_content_extraction_api_enabled"
 WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY = "web_content_extraction_api_url"
-WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY = "web_content_extraction_api_max_results"
+WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY = (
+    "web_content_extraction_api_max_results"
+)
 DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED = False
 DEFAULT_WEB_CONTENT_EXTRACTION_API_URL = "http://localhost:8080/search"
 DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS = 3
@@ -189,11 +191,7 @@ AVAILABLE_MODELS = {
         "mistral-medium-latest"
         # Add other Mistral models as needed/supported
     ],
-    "anthropic": [
-        "claude-3.7-sonnet",
-        "claude-3.7-sonnet-thought",
-        "claude-sonnet-4"
-    ],
+    "anthropic": ["claude-3.7-sonnet", "claude-3.7-sonnet-thought", "claude-sonnet-4"],
     "deepseek": [
         "deepseek-ai/DeepSeek-V3-0324"
         # Add other DeepSeek models as needed/supported

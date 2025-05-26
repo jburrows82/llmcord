@@ -13,9 +13,9 @@ from .constants import (
     GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY,  # Added
     GROUNDING_MODEL_TOP_K_CONFIG_KEY,  # Added
     GROUNDING_MODEL_TOP_P_CONFIG_KEY,  # Added
-    DEFAULT_GROUNDING_MODEL_TEMPERATURE, # Added
-    DEFAULT_GROUNDING_MODEL_TOP_K, # Added
-    DEFAULT_GROUNDING_MODEL_TOP_P, # Added
+    DEFAULT_GROUNDING_MODEL_TEMPERATURE,  # Added
+    DEFAULT_GROUNDING_MODEL_TOP_K,  # Added
+    DEFAULT_GROUNDING_MODEL_TOP_P,  # Added
     SEARXNG_NUM_RESULTS_CONFIG_KEY,
     AllKeysFailedError,
     # General URL Extractors
@@ -185,7 +185,9 @@ async def fetch_and_format_searxng_results(
         WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY,
         DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS,
     )
-    api_content_limit = config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY) # Reuse existing limit
+    api_content_limit = config.get(
+        SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY
+    )  # Reuse existing limit
 
     if api_enabled:
         logging.info(
@@ -193,7 +195,9 @@ async def fetch_and_format_searxng_results(
         )
         payload = {"query": queries[0], "max_results": api_max_results}
         try:
-            response = await httpx_client.post(api_url, json=payload, timeout=30.0) # Consider making timeout configurable
+            response = await httpx_client.post(
+                api_url, json=payload, timeout=30.0
+            )  # Consider making timeout configurable
             response.raise_for_status()
             api_response_json = response.json()
 
@@ -213,70 +217,114 @@ async def fetch_and_format_searxng_results(
                 item_str_parts = []
                 item_url = item.get("url", "N/A")
                 item_source_type = item.get("source_type", "unknown")
-                
-                item_str_parts.append(f"Source {item_idx + 1}: {item_url} (Type: {item_source_type})")
+
+                item_str_parts.append(
+                    f"Source {item_idx + 1}: {item_url} (Type: {item_source_type})"
+                )
 
                 if item.get("processed_successfully") and item.get("data"):
                     data = item["data"]
-                    
+
                     if item_source_type == "youtube":
                         title = data.get("title", "N/A")
-                        item_str_parts.append(f"  Title: {discord.utils.escape_markdown(title)}")
+                        item_str_parts.append(
+                            f"  Title: {discord.utils.escape_markdown(title)}"
+                        )
                         channel = data.get("channel_name", "N/A")
-                        item_str_parts.append(f"  Channel: {discord.utils.escape_markdown(channel)}")
+                        item_str_parts.append(
+                            f"  Channel: {discord.utils.escape_markdown(channel)}"
+                        )
                         transcript = data.get("transcript")
                         if transcript:
-                            if api_content_limit and len(transcript) > api_content_limit:
+                            if (
+                                api_content_limit
+                                and len(transcript) > api_content_limit
+                            ):
                                 transcript = transcript[: api_content_limit - 3] + "..."
-                            item_str_parts.append(f"  Transcript: {discord.utils.escape_markdown(transcript)}")
+                            item_str_parts.append(
+                                f"  Transcript: {discord.utils.escape_markdown(transcript)}"
+                            )
                         comments = data.get("comments")
                         if comments and isinstance(comments, list):
                             comment_texts = [
                                 f"    - {discord.utils.escape_markdown(c.get('text', ''))}"
-                                for c in comments if isinstance(c, dict) and c.get("text")
+                                for c in comments
+                                if isinstance(c, dict) and c.get("text")
                             ]
                             if comment_texts:
-                                item_str_parts.append("  Comments:\n" + "\n".join(comment_texts))
-                    
+                                item_str_parts.append(
+                                    "  Comments:\n" + "\n".join(comment_texts)
+                                )
+
                     elif item_source_type == "reddit":
                         title = data.get("post_title", "N/A")
-                        item_str_parts.append(f"  Title: {discord.utils.escape_markdown(title)}")
+                        item_str_parts.append(
+                            f"  Title: {discord.utils.escape_markdown(title)}"
+                        )
                         body = data.get("post_body")
                         if body:
                             if api_content_limit and len(body) > api_content_limit:
                                 body = body[: api_content_limit - 3] + "..."
-                            item_str_parts.append(f"  Post Body: {discord.utils.escape_markdown(body)}")
+                            item_str_parts.append(
+                                f"  Post Body: {discord.utils.escape_markdown(body)}"
+                            )
                         comments = data.get("comments")
                         if comments and isinstance(comments, list):
                             comment_texts = [
                                 f"    - {discord.utils.escape_markdown(c.get('text', ''))} (Score: {c.get('score', 'N/A')})"
-                                for c in comments if isinstance(c, dict) and c.get("text")
+                                for c in comments
+                                if isinstance(c, dict) and c.get("text")
                             ]
                             if comment_texts:
-                                item_str_parts.append("  Comments:\n" + "\n".join(comment_texts))
-                                
+                                item_str_parts.append(
+                                    "  Comments:\n" + "\n".join(comment_texts)
+                                )
+
                     elif item_source_type == "pdf":
                         text_content = data.get("text_content")
                         if text_content:
-                            if api_content_limit and len(text_content) > api_content_limit:
-                                text_content = text_content[: api_content_limit - 3] + "..."
-                            item_str_parts.append(f"  Content: {discord.utils.escape_markdown(text_content)}")
-                            
+                            if (
+                                api_content_limit
+                                and len(text_content) > api_content_limit
+                            ):
+                                text_content = (
+                                    text_content[: api_content_limit - 3] + "..."
+                                )
+                            item_str_parts.append(
+                                f"  Content: {discord.utils.escape_markdown(text_content)}"
+                            )
+
                     elif item_source_type == "webpage":
                         title = data.get("title")
                         if title:
-                            item_str_parts.append(f"  Title: {discord.utils.escape_markdown(title)}")
+                            item_str_parts.append(
+                                f"  Title: {discord.utils.escape_markdown(title)}"
+                            )
                         text_content = data.get("text_content")
                         if text_content:
-                            if api_content_limit and len(text_content) > api_content_limit:
-                                text_content = text_content[: api_content_limit - 3] + "..."
-                            item_str_parts.append(f"  Content: {discord.utils.escape_markdown(text_content)}")
-                    else: # unknown or other types
+                            if (
+                                api_content_limit
+                                and len(text_content) > api_content_limit
+                            ):
+                                text_content = (
+                                    text_content[: api_content_limit - 3] + "..."
+                                )
+                            item_str_parts.append(
+                                f"  Content: {discord.utils.escape_markdown(text_content)}"
+                            )
+                    else:  # unknown or other types
                         raw_content_str = str(data)
-                        if api_content_limit and len(raw_content_str) > api_content_limit:
-                             raw_content_str = raw_content_str[:api_content_limit-3]+"..."
-                        item_str_parts.append(f"  Data: {discord.utils.escape_markdown(raw_content_str)}")
-                    
+                        if (
+                            api_content_limit
+                            and len(raw_content_str) > api_content_limit
+                        ):
+                            raw_content_str = (
+                                raw_content_str[: api_content_limit - 3] + "..."
+                            )
+                        item_str_parts.append(
+                            f"  Data: {discord.utils.escape_markdown(raw_content_str)}"
+                        )
+
                     formatted_api_results_content.append("\n".join(item_str_parts))
                 elif item.get("error"):
                     logging.warning(
@@ -285,18 +333,25 @@ async def fetch_and_format_searxng_results(
                     item_str_parts.append(f"  Error: {item.get('error')}")
                     formatted_api_results_content.append("\n".join(item_str_parts))
 
-
             if formatted_api_results_content:
-                query_for_header = queries[0] # Since we used queries[0] for the API call
+                query_for_header = queries[
+                    0
+                ]  # Since we used queries[0] for the API call
                 header = (
                     f"Answer the user's query based on the following information from the External Web Content API "
                     f'(for query: "{discord.utils.escape_markdown(query_for_header)}"): \n\n'
                 )
-                final_context = header + "\n\n---\n\n".join(formatted_api_results_content)
-                logging.info(f"Formatted context from External Web Content API: {final_context[:500]}...")
+                final_context = header + "\n\n---\n\n".join(
+                    formatted_api_results_content
+                )
+                logging.info(
+                    f"Formatted context from External Web Content API: {final_context[:500]}..."
+                )
                 return final_context.strip()
             else:
-                logging.info("External Web Content API did not return any processable content.")
+                logging.info(
+                    "External Web Content API did not return any processable content."
+                )
                 return None
 
         except httpx.RequestError as e:
@@ -307,10 +362,12 @@ async def fetch_and_format_searxng_results(
                 f"External Web Content API request failed with status {e.response.status_code}: {e.response.text}"
             )
             return None
-        except Exception as e:
-            logging.exception("Unexpected error while processing External Web Content API response.")
+        except Exception:
+            logging.exception(
+                "Unexpected error while processing External Web Content API response."
+            )
             return None
-    
+
     # --- Original SearXNG and content fetching logic (if external API is not enabled or fails to return content) ---
     searxng_base_url = config.get(SEARXNG_BASE_URL_CONFIG_KEY)
     if not searxng_base_url:
@@ -322,7 +379,9 @@ async def fetch_and_format_searxng_results(
     logging.info(
         f"Fetching SearxNG results for {len(queries)} queries related to user query: '{user_query_for_log[:100]}...'"
     )
-    searxng_content_limit = config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY) # Already defined as api_content_limit if API was enabled
+    searxng_content_limit = config.get(
+        SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY
+    )  # Already defined as api_content_limit if API was enabled
 
     # API keys for specific fetchers (LLMCord's internal fetchers)
     youtube_api_key = config.get("youtube_api_key")

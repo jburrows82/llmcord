@@ -191,10 +191,8 @@ async def fetch_external_content(
         jina_selector = config.get(  # Added
             JINA_WAIT_FOR_SELECTOR_CONFIG_KEY, DEFAULT_JINA_WAIT_FOR_SELECTOR
         )
-        jina_timeout_val = config.get(
-            JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
-        )
-        crawl4ai_cache = config.get( # Added
+        jina_timeout_val = config.get(JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT)
+        crawl4ai_cache = config.get(  # Added
             CRAWL4AI_CACHE_MODE_CONFIG_KEY, DEFAULT_CRAWL4AI_CACHE_MODE
         )
         logging.info(
@@ -313,10 +311,10 @@ async def fetch_external_content(
                             )
                     elif isinstance(lens_result_or_exc, Exception):
                         logging.exception(
-                            f"Unexpected exception during concurrent Google Lens processing for image {i+1} ({attachment_url_for_error})"
+                            f"Unexpected exception during concurrent Google Lens processing for image {i + 1} ({attachment_url_for_error})"
                         )
                         user_warnings.add(
-                            f"⚠️ Unexpected error processing Lens image {i+1}"
+                            f"⚠️ Unexpected error processing Lens image {i + 1}"
                         )
                         url_fetch_results.append(
                             models.UrlFetchResult(
@@ -324,7 +322,7 @@ async def fetch_external_content(
                                 content=None,
                                 error=f"Unexpected processing error: {type(lens_result_or_exc).__name__}",
                                 type="google_lens_fallback_failed",
-                                original_index=i, # original_index here refers to the index in lens_images_to_process
+                                original_index=i,  # original_index here refers to the index in lens_images_to_process
                             )
                         )
             except Exception as e_lens_gather:
@@ -332,7 +330,9 @@ async def fetch_external_content(
                     f"Google Lens batch processing gather failed: {e_lens_gather}",
                     exc_info=True,
                 )
-                user_warnings.add("⚠️ Critical error during batch Google Lens processing.")
+                user_warnings.add(
+                    "⚠️ Critical error during batch Google Lens processing."
+                )
 
     return url_fetch_results
 

@@ -408,13 +408,13 @@ async def fetch_general_url_content(
 
     async def _crawl4ai_fetcher_wrapper(
         u_param: str, i_param: int, mtl_param: Optional[int]
-    ): # Added wrapper for crawl4ai
+    ):  # Added wrapper for crawl4ai
         return await fetch_with_crawl4ai(
             u_param, i_param, mtl_param, crawl4ai_cache_mode
         )
 
     if main_extractor == "crawl4ai":
-        chosen_main_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
+        chosen_main_fetcher = _crawl4ai_fetcher_wrapper  # Use wrapper
         main_fetcher_name = "Crawl4AI"
     elif main_extractor == "beautifulsoup":
         chosen_main_fetcher = _bs_fetcher_wrapper
@@ -426,11 +426,11 @@ async def fetch_general_url_content(
         logging.error(
             f"Invalid main_extractor specified: {main_extractor}. Defaulting to crawl4ai."
         )
-        chosen_main_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
+        chosen_main_fetcher = _crawl4ai_fetcher_wrapper  # Use wrapper
         main_fetcher_name = "Crawl4AI (defaulted)"
 
     if fallback_extractor == "crawl4ai":
-        chosen_fallback_fetcher = _crawl4ai_fetcher_wrapper # Use wrapper
+        chosen_fallback_fetcher = _crawl4ai_fetcher_wrapper  # Use wrapper
         fallback_fetcher_name = "Crawl4AI"
     elif fallback_extractor == "beautifulsoup":
         chosen_fallback_fetcher = _bs_fetcher_wrapper
@@ -467,7 +467,7 @@ async def fetch_general_url_content(
                 url=url,
                 content=None,
                 error=f"{main_fetcher_name} Error: {main_result.error} (Fallback was same method).",
-                type="general", # Type should reflect the fetcher used, but this is a generic error state
+                type="general",  # Type should reflect the fetcher used, but this is a generic error state
                 original_index=index,
             )
 
