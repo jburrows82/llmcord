@@ -2,70 +2,80 @@
 # Discord Bot Settings
 # ==============================================================================
 
-bot_token:
-client_id:
-status_message:
+bot_token: YOUR_DISCORD_BOT_TOKEN # Replace with your bot's token
+client_id: YOUR_DISCORD_CLIENT_ID # Replace with your bot's client ID
+status_message: "Listening to your commands!" # Message displayed as the bot's status
 
-# --- Message & Interaction Limits ---
-max_text: 2000 # Max TOTAL tokens for the entire prompt sent to the LLM. This includes the system prompt, all message history (user text, bot responses, external content like YouTube/Reddit/web summaries), and tokens from any image data (if applicable, for models like GPT-4 Vision). Uses tiktoken for counting. If exceeded, history is truncated.
-max_images: 5
-max_messages: 25
+# --- Message & Interaction Configuration ---
+max_text: 2000       # Max TOTAL tokens for the LLM prompt (system, history, content, images). Uses tiktoken.
+max_images: 5        # Max number of images allowed in a single message.
+max_messages: 25     # Max number of messages to include in the history sent to the LLM.
 max_message_node_cache: 500 # Max messages stored in the internal bot cache for quick history retrieval.
 
 # --- Behavior Settings ---
 edit_delay_seconds: 1.0 # Delay in seconds between edits for streaming responses.
-use_plain_responses: false
-allow_dms: true
+use_plain_responses: false # If true, bot responses will be plain text without Discord formatting.
+allow_dms: true          # If true, the bot will respond to direct messages.
 
 # --- Permissions ---
+# Configure user, role, and channel permissions for bot interaction.
+# IDs are Discord Snowflakes (e.g., user ID, role ID, channel ID).
+# Empty lists mean no restrictions of that type.
 permissions:
   users:
-    allowed_ids: []
-    blocked_ids: []
+    allowed_ids: [] # Whitelist: Only these user IDs can interact.
+    blocked_ids: [] # Blacklist: These user IDs cannot interact.
   roles:
-    allowed_ids: []
-    blocked_ids: []
+    allowed_ids: [] # Whitelist: Only users with these role IDs can interact.
+    blocked_ids: [] # Blacklist: Users with these role IDs cannot interact.
   channels:
-    allowed_ids: []
-    blocked_ids: []
+    allowed_ids: [] # Whitelist: Bot only operates in these channel IDs.
+    blocked_ids: [] # Blacklist: Bot ignores these channel IDs.
 
 # ==============================================================================
 # API Keys & External Services
 # ==============================================================================
 
-# --- YouTube Data API v3 settings ---
+# --- YouTube Data API v3 ---
+# Required for fetching YouTube video transcripts and metadata.
 # Get an API key from Google Cloud Console: https://console.cloud.google.com/apis/credentials
-# Make sure to enable the "YouTube Data API v3" for your project.
-youtube_api_key: # NOTE: YouTube API still uses a single key in this implementation
+# Ensure the "YouTube Data API v3" is enabled for your project.
+youtube_api_key: YOUR_YOUTUBE_API_KEY # NOTE: YouTube API still uses a single key in this implementation
 
-# --- Reddit API settings ---
+# --- Reddit API ---
+# Required for fetching content from Reddit.
 # Create a 'script' app on Reddit: https://www.reddit.com/prefs/apps
-reddit_client_id:
-reddit_client_secret:
-reddit_user_agent: # e.g., discord:my-llm-bot:v1.0 (by u/your_reddit_username)
+reddit_client_id: YOUR_REDDIT_CLIENT_ID
+reddit_client_secret: YOUR_REDDIT_CLIENT_SECRET
+reddit_user_agent: "discord:your-llm-bot-name:v1.0 (by u/your_reddit_username)" # Customize appropriately
 
-# --- SerpAPI settings ---
+# --- SerpAPI ---
+# For web search capabilities if not using a model with built-in search (e.g., non-Gemini/Grok).
 # Get API keys from SerpApi: https://serpapi.com/manage-api-key
-# Provide a list of keys for rotation and retries
+# Provide a list of keys for rotation and retries.
 serpapi_api_keys:
   - YOUR_SERPAPI_KEY_1
-  # - YOUR_SERPAPI_KEY_2
-  # - ...
+  # Optional: Additional SerpAPI key for rotation. Comment out to disable.
+  - YOUR_SERPAPI_KEY_2
+  # Optional: Additional SerpAPI key for rotation. Comment out to disable.
+  - ...
 
-# --- Optional: Proxy configuration for youtube-transcript-api ---
+# --- Proxy Configuration for YouTube Transcripts (Optional) ---
 # See: https://github.com/jdepoix/youtube-transcript-api#working-around-ip-bans-requestblocked-or-ipblocked-exception
-# Uncomment and configure ONE of the types below if you experience transcript fetch errors (ParseError, RequestBlocked, etc.)
-# proxy_config:
-#   type: "webshare" # Recommended for reliability. Requires a Webshare "Residential" proxy plan.
-#   # For webshare:
-#   username: "YOUR_WEBSHARE_USERNAME" # Find in your Webshare Proxy Settings
-#   password: "YOUR_WEBSHARE_PASSWORD" # Find in your Webshare Proxy Settings
+# Uncomment and configure ONE of the types below if you experience transcript fetch errors.
+# Optional: Proxy configuration for youtube-transcript-api. Configure as needed. Comment out the entire block to disable. Note: Only one proxy type (webshare or generic) should be configured if used.
+proxy_config:
+  type: "webshare" # Recommended for reliability. Requires a Webshare "Residential" proxy plan.
+  # For webshare:
+  username: "YOUR_WEBSHARE_USERNAME" # Find in your Webshare Proxy Settings
+  password: "YOUR_WEBSHARE_PASSWORD" # Find in your Webshare Proxy Settings
 # --- OR ---
 # proxy_config:
 #   type: "generic"
 #   # For generic:
 #   http_url: "http://user:pass@your_proxy_host:port" # Your HTTP proxy URL
 #   https_url: "https://user:pass@your_proxy_host:port" # Your HTTPS proxy URL (often same as http_url)
+
 
 # ==============================================================================
 # LLM Provider Settings
@@ -74,96 +84,123 @@ serpapi_api_keys:
 providers:
   openai:
     base_url: https://api.openai.com/v1
-    # Provide a list of keys for rotation and retries
     api_keys:
       - YOUR_OPENAI_KEY_1
-      # - YOUR_OPENAI_KEY_2
-      # - ...
-    disable_vision: false
+      # Optional: Additional OpenAI API key. Comment out to disable.
+      - YOUR_OPENAI_KEY_2
+      # Optional: Additional OpenAI API key. Comment out to disable.
+      - ...
+    disable_vision: false # Set to true to disable vision capabilities for OpenAI models.
   x-ai:
     base_url: https://api.x.ai/v1
     api_keys:
       - YOUR_XAI_KEY_1
-      # - ...
+      # Optional: Additional X-AI API key. Comment out to disable.
+      - ...
   google:
-    # For google-genai, base_url is not used. API keys are configured directly.
-    # Provide a list of Google API Keys here for rotation and retries.
+    # For google-genai (Gemini), base_url is not used. API keys are configured directly.
     api_keys:
       - YOUR_GEMINI_KEY_1
-      # - YOUR_GEMINI_KEY_2
-      # - ...
+      # Optional: Additional Google API key. Comment out to disable.
+      - YOUR_GEMINI_KEY_2
+      # Optional: Additional Google API key. Comment out to disable.
+      - ...
   mistral:
     base_url: https://api.mistral.ai/v1
     api_keys:
       - YOUR_MISTRAL_KEY_1
-      # - ...
+      # Optional: Additional Mistral API key. Comment out to disable.
+      - ...
   groq:
     base_url: https://api.groq.com/openai/v1
     api_keys:
       - YOUR_GROQ_KEY_1
-      # - ...
+      # Optional: Additional Groq API key. Comment out to disable.
+      - ...
   openrouter:
     base_url: https://openrouter.ai/api/v1
     api_keys:
       - YOUR_OPENROUTER_KEY_1
-      # - ...
+      # Optional: Additional OpenRouter API key. Comment out to disable.
+      - ...
+
   # --- Local / Keyless Providers ---
+  # These providers typically run locally and do not require API keys.
   ollama:
-    base_url: http://localhost:11434/v1
-    api_keys: [] # Explicitly empty list for keyless providers
+    base_url: http://localhost:11434/v1 # Default Ollama API endpoint.
+    api_keys: [] # Explicitly empty list for keyless providers.
   lmstudio:
-    base_url: http://localhost:1234/v1
+    base_url: http://localhost:1234/v1 # Default LM Studio API endpoint.
     api_keys: []
   vllm:
-    base_url: http://localhost:8000/v1
+    base_url: http://localhost:8000/v1 # Default vLLM API endpoint.
     api_keys: []
   oobabooga:
-    base_url: http://localhost:5000/v1
+    base_url: http://localhost:5000/v1 # Default Oobabooga Text Generation WebUI API endpoint.
     api_keys: []
   jan:
-    base_url: http://localhost:1337/v1
+    base_url: http://localhost:1337/v1 # Default Jan API endpoint.
     api_keys: []
 
 # --- Default Model Selection ---
-model: openai/gpt-4.1 # Example: Select the provider and model
-grounding_model: "google/gemini-2.5-flash-preview-05-20" # Model used for grounding pre-step (generating search queries for SearXNG)
-# --- Grounding Model Specific Parameters (for Gemini) ---
-# These parameters are applied if the grounding_model is a Gemini model and supports them.
-# (Optional) Temperature for the grounding model (Gemini) used to generate search queries.
-# Affects randomness. Higher values (e.g., 0.9) make output more random, lower values (e.g., 0.2) make it more deterministic.
-# Must be a float between 0.0 and 1.0. Default: 0.7 (see llmcord_app/constants.py)
-# grounding_model_temperature: 0.7
+# Specify the primary model to use for responses. Format: "provider_name/model_identifier"
+model: openai/gpt-4o # Example: Selects gpt-4o from OpenAI.
 
-# (Optional) Top-k sampling for the grounding model.
+# Model used for the grounding pre-step (e.g., generating search queries for SearXNG).
+grounding_model: "google/gemini-1.5-flash-latest"
+
+# Fallback model if the selected 'model' doesn't support vision but images are present.
+fallback_vision_model: "google/gemini-1.5-flash-latest"
+
+# Fallback model if a non-Gemini stream ends incompletely or a 422 error occurs.
+fallback_model_incomplete_stream: "google/gemini-1.5-flash-latest"
+
+# Model to use when 'deepsearch' or 'deepersearch' keywords are detected in user input.
+deep_search_model: "x-ai/grok-1" # Example, ensure this model is available and configured.
+
+# --- Grounding Model Specific Parameters (Primarily for Gemini) ---
+# These parameters are applied if the 'grounding_model' is a Gemini model and supports them.
+# They fine-tune how search queries are generated for grounding.
+
+# Optional: Temperature for the grounding model. Affects randomness. Comment out to disable.
+# Affects randomness. Higher values (e.g., 0.9) make output more random, lower (e.g., 0.2) more deterministic.
+# Must be a float between 0.0 and 1.0. Default: 0.7 (see llmcord_app/constants.py)
+grounding_model_temperature: 0.7
+
+# Optional: Top-k sampling for the grounding model. Comment out to disable.
 # The model will consider the k most probable tokens at each step.
 # Must be a positive integer. Default: 40 (see llmcord_app/constants.py)
-# grounding_model_top_k: 40
+grounding_model_top_k: 40
 
-# (Optional) Top-p (nucleus) sampling for the grounding model.
+# Optional: Top-p (nucleus) sampling for the grounding model. Comment out to disable.
 # The model will consider the smallest set of tokens whose cumulative probability exceeds p.
 # Must be a float between 0.0 and 1.0. Default: 0.95 (see llmcord_app/constants.py)
-# grounding_model_top_p: 0.95
-fallback_vision_model: "google/gemini-2.5-flash-preview-05-20" # Fallback model if the selected model doesn't support vision but images are present
-fallback_model_incomplete_stream: "google/gemini-2.5-flash-preview-05-20" # Fallback model if a non-Gemini stream ends incompletely or a 422 error occurs
-deep_search_model: "x-ai/grok-3" # Model to use when 'deepsearch' or 'deepersearch' keywords are detected
+grounding_model_top_p: 0.95
 
 # --- Extra API Parameters ---
-# These parameters are passed to the LLM API if supported by the provider.
+# These parameters are passed to the LLM API if supported by the provider and model.
+# They allow for fine-tuning model behavior beyond standard configurations.
 extra_api_parameters:
   # Common OpenAI-compatible parameters:
-  max_tokens: 4096
-  temperature: 1.0
-  # top_p: 1.0
-  # frequency_penalty: 0.0
-  # presence_penalty: 0.0
+  max_tokens: 4096       # Maximum number of tokens to generate in the response.
+  temperature: 1.0       # Sampling temperature. Higher values = more random, lower = more deterministic.
+  # Optional: Top-p sampling for LLM. Comment out to disable.
+  top_p: 1.0             # Nucleus sampling: considers tokens with cumulative probability mass p.
+  # Optional: Frequency penalty for LLM. Comment out to disable.
+  frequency_penalty: 0.0 # Penalizes new tokens based on their existing frequency in the text so far.
+  # Optional: Presence penalty for LLM. Comment out to disable.
+  presence_penalty: 0.0  # Penalizes new tokens based on whether they appear in the text so far.
 
-  # Example Gemini parameters (these would be used if model starts with 'google/'):
-  # max_output_tokens: 4096
-  # temperature: 1.0
-  # top_p: 0.95
-  # top_k: 40
+  # Optional: Example Gemini-specific parameters. Configure as needed. Comment out the entire block to disable.
+  # These would be used if 'model' starts with 'google/' and the Gemini API supports them.
+  # Refer to Google AI Gemini API documentation for supported parameters.
+  # max_output_tokens: 4096 # (Gemini specific) Max tokens in the output.
+  # temperature: 1.0        # (Gemini specific) Sampling temperature.
+  # top_p: 0.95             # (Gemini specific) Nucleus sampling.
+  # top_k: 40               # (Gemini specific) Top-k sampling.
 
 # --- System Prompts ---
+# Default system prompt guiding the main LLM's behavior.
 system_prompt: |
   You are a helpful assistant. When answering questions involving mathematics, statistics, or equations:
 
@@ -186,22 +223,21 @@ system_prompt: |
     $$\begin{align}
     y &= mx + b\\
     &= 2x + 3
-    \end{align}$$ 
+    \end{align}$$
 
-# System prompt for the grounding model (e.g., gemini-2.5-flash-preview-05-20) when it's used to determine
-# web search queries for grounding non-Gemini/non-Grok models.
-# This prompt guides Gemini on how to generate relevant search terms.
+# System prompt for the 'grounding_model' (e.g., Gemini) when generating search queries
+# for non-Gemini/non-Grok models. Guides how search terms are formulated.
 grounding_system_prompt: |
   ANSWER IN ONE SENTENCE.
 
-# System prompt for the fallback model (e.g., when a non-Gemini stream is incomplete or a 422 error occurs).
-# This prompt guides the fallback model on how to respond concisely.
+# Optional: System prompt for the fallback model. Comment out to disable.
+# Used when a non-Gemini stream is incomplete or a 422 error occurs.
 # If commented out or empty, a default prompt emphasizing brevity will be used.
-# fallback_model_system_prompt: |
-#   You are a very concise assistant. The previous model failed. Briefly answer the user's query.
+fallback_model_system_prompt: |
+  You are a very concise assistant. The previous model failed. Briefly answer the user's query.
 
 # --- Rate Limiting ---
-# Rate limit cooldown for API keys in hours
+# Cooldown period in hours for API keys that hit a rate limit.
 rate_limit_cooldown_hours: 24
 
 # ==============================================================================
@@ -209,75 +245,67 @@ rate_limit_cooldown_hours: 24
 # ==============================================================================
 
 # --- SearXNG Settings ---
-# SearXNG instance URL for grounding enhancement:
-# Used if a non-Gemini/non-Grok model is selected, to provide web search results.
-searxng_base_url: http://localhost:18088 # Your SearxNG instance with /search endpoint and JSON format enabled
+# SearXNG instance URL for grounding enhancement (web search results for non-Gemini/Grok models).
+searxng_base_url: http://localhost:18088 # Your SearXNG instance with /search endpoint and JSON format enabled.
 
-# Maximum character length for text extracted from each URL fetched by SearxNG.
-# This helps keep the context provided to non-Gemini/non-Grok models concise.
+# Max character length for text extracted from each URL fetched by SearXNG.
 searxng_url_content_max_length: 20000
-# Number of results to fetch from SearXNG for each grounding query
+# Number of results to fetch from SearXNG for each grounding query.
 searxng_num_results_fetch: 5
 
-# --- General URL Content Extraction Settings ---
-# Configure the primary and fallback methods for extracting content from general web URLs.
-# Supported values: "crawl4ai", "beautifulsoup", "jina"
-# "crawl4ai" uses a more advanced crawler designed for AI, good for modern/JS-heavy sites.
-# "beautifulsoup" is a simpler HTML parser, good as a fallback or for basic sites.
-# "jina" uses Jina Reader (r.jina.ai) to fetch and process content, good for general articles.
+# --- General URL Content Extraction ---
+# Primary and fallback methods for extracting content from web URLs.
+# "crawl4ai": Advanced crawler for modern/JS-heavy sites.
+# "beautifulsoup": Simpler HTML parser, good for basic sites or as fallback.
+# "jina": Uses Jina Reader (r.jina.ai), good for general articles.
 main_general_url_content_extractor: "crawl4ai"
 fallback_general_url_content_extractor: "beautifulsoup"
 
-# --- Jina Reader Settings (Optional) ---
-# Configure the engine mode for Jina Reader.
-# Supported values: "direct", "browser", "default"
-# "direct": (Speed First) Fastest engine, optimized for speed but unable to handle JavaScript-generated dynamic content. (Sends X-Engine: direct)
-# "browser": (Best Quality) High-quality engine designed to resolve rendering issues and deliver the best content output. Potentially better for JS-heavy sites but might be slower. (Sends X-Engine: browser)
-# "default": (Most Compatible) Does not send an X-Engine header, allowing Jina to use its current default or most compatible engine. Good balance between quality and speed.
+# --- Jina Reader Settings (r.jina.ai) ---
+# Engine mode for Jina Reader.
+# "direct": Fastest, speed-first, no JS rendering. (X-Engine: direct)
+# "browser": Best quality, handles JS, slower. (X-Engine: browser)
+# "default": Jina's default, balances quality/speed. (No X-Engine header)
 jina_engine_mode: "default"
-# jina_wait_for_selector: null # Optional: CSS selector (e.g., "#content", ".main-article"). Jina will wait for this element. Default: null (disabled).
-# jina_timeout: null # Optional: Integer in seconds (e.g., 30). Jina will wait for this duration for dynamic content. Default: null (Jina's default timeout).
+# Optional: CSS selector for Jina to wait for. Comment out to disable.
+# Example: "#content", ".main-article". Default: null (disabled).
+jina_wait_for_selector: null
+# Optional: Timeout in seconds for Jina. Comment out to disable.
+# Integer (e.g., 30). Jina waits this duration for dynamic content. Default: null (Jina's default).
+jina_timeout: null
 
-# --- Crawl4AI Settings (Optional) ---
-# Configure the cache mode for Crawl4AI.
-# Supported values: "bypass", "enabled", "refresh", "only_refresh"
-# "bypass": (Default) No caching. Always fetches live content.
-# "enabled": Uses cached content if available and not expired (default TTL is 1 day). Fetches live if not cached or expired.
-# "refresh": Fetches live content and updates the cache.
-# "only_refresh": Only fetches live content if it's already in cache (to update it), otherwise does nothing.
-# crawl4ai_cache_mode: "bypass"
+# --- Crawl4AI Settings ---
+# Cache mode for Crawl4AI.
+# "bypass": (Default) No caching. Always fetches live.
+# "enabled": Uses cache if available & not expired (1-day TTL). Fetches live if not cached/expired.
+# "refresh": Fetches live and updates cache.
+# "only_refresh": Fetches live only if already in cache (to update it).
+# Optional: Cache mode for Crawl4AI. Comment out to disable.
+crawl4ai_cache_mode: "bypass"
 
-# --- External Web Content API Settings (Optional) ---
-# Configure an external API that fetches content from SearXNG results.
-# If enabled, this API will be called to get content from URLs found by SearXNG.
-# The content returned by this API will be appended to the LLM query.
-# URLs processed by this API will be ignored by LLMCord's internal fetchers.
-web_content_extraction_api_enabled: false # Set to true to enable this feature.
-web_content_extraction_api_url: "http://localhost:8080/search" # URL of the Web Content Extraction API.
-web_content_extraction_api_max_results: 3 # Max number of results to request from the API for content extraction.
+# --- External Web Content API (Optional) ---
+# If enabled, this API fetches content from SearXNG URLs.
+# Content from this API is appended to LLM query. URLs processed here are skipped by internal fetchers.
+web_content_extraction_api_enabled: false # Set to true to enable.
+web_content_extraction_api_url: "http://localhost:8080/search" # URL of the API.
+web_content_extraction_api_max_results: 3 # Max results to request from this API.
 
-# --- Gemini Thinking Budget Settings ---
-# Optional: Allows Gemini models to spend more time "thinking" before generating a response.
-# This can potentially improve response quality for complex queries but may increase latency.
-# Refer to Google AI documentation for "thinkingBudget" for more details.
-# This setting applies ONLY to Gemini models.
-# gemini_use_thinking_budget: false  # Set to true to enable the thinking_budget parameter by default for Gemini.
-                                  # Users can override this with the /setgeminithinking command.
-# gemini_thinking_budget_value: 1024 # The actual budget value (0-24576) to use if enabled.
-                                   # This value is global and not user-configurable via command.
+# --- Gemini Thinking Budget (Optional) ---
+# Allows Gemini models more "thinking" time, potentially improving complex query responses but increasing latency.
+# Applies ONLY to Gemini models. See Google AI docs for "thinkingBudget".
+# Optional: Enable Gemini thinking budget. Comment out to disable.
+# Users can override with /setgeminithinking command.
+gemini_use_thinking_budget: false
+# Optional: Value for Gemini thinking budget. Comment out to disable.
+# Actual budget value (0-24576) if enabled. Global, not user-configurable by command.
+gemini_thinking_budget_value: 1024
 
 # --- Gemini Safety Settings ---
 # Configure safety thresholds for Gemini models.
-# Supported categories: HARM_CATEGORY_HARASSMENT, HARM_CATEGORY_HATE_SPEECH, HARM_CATEGORY_SEXUALLY_EXPLICIT, HARM_CATEGORY_DANGEROUS_CONTENT, HARM_CATEGORY_CIVIC_INTEGRITY.
-# Supported thresholds (API string values):
-#   BLOCK_NONE: Always show regardless of probability.
-#   BLOCK_ONLY_HIGH: Block when high probability of unsafe content.
-#   BLOCK_MEDIUM_AND_ABOVE: Block when medium or high probability. (Default for most models, except Civic Integrity and newer 1.5 models)
-#   BLOCK_LOW_AND_ABOVE: Block when low, medium, or high probability.
-#   HARM_BLOCK_THRESHOLD_UNSPECIFIED: Uses the model's default threshold.
-# Default for gemini-1.5-pro/flash (002+) is BLOCK_NONE for all categories.
-# Default for Civic Integrity is often BLOCK_NONE for newer models or BLOCK_MOST for others in AI Studio.
-# Refer to the latest Google AI Gemini API documentation for precise defaults for your chosen model.
+# Categories: HARM_CATEGORY_HARASSMENT, HARM_CATEGORY_HATE_SPEECH, HARM_CATEGORY_SEXUALLY_EXPLICIT, HARM_CATEGORY_DANGEROUS_CONTENT, HARM_CATEGORY_CIVIC_INTEGRITY.
+# Thresholds: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE, HARM_BLOCK_THRESHOLD_UNSPECIFIED.
+# Defaults vary by model version; check Google AI Gemini API docs.
+# gemini-1.5-pro/flash (002+) often default to BLOCK_NONE.
 gemini_safety_settings:
   HARM_CATEGORY_HARASSMENT: BLOCK_NONE
   HARM_CATEGORY_HATE_SPEECH: BLOCK_NONE
@@ -288,13 +316,15 @@ gemini_safety_settings:
 # ==============================================================================
 # Output Sharing Settings (Optional)
 # ==============================================================================
-# Enables sharing LLM output via a public ngrok URL using Grip to render Markdown.
+# Enables sharing LLM output via a public ngrok URL, rendered with Grip.
 output_sharing:
-  ngrok_enabled: false # Set to true to enable this feature
-  ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Your ngrok authtoken (optional but recommended)
-  grip_port: 6419 # Port for the Python HTTP server (formerly Grip server)
-  ngrok_static_domain: null # Example: your-reserved-domain.ngrok-free.app (requires ngrok account)
-  cleanup_on_shutdown: true # Set to false to keep shared HTML files across bot restarts
-  url_shortener_enabled: false # Set to true to use a URL shortener for the ngrok link
-  url_shortener_service: "tinyurl" # Currently supported: "tinyurl"
-  # url_shortener_api_key: null # For future services that might require an API key
+  ngrok_enabled: false # Set to true to enable this feature.
+  ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Your ngrok authtoken (optional but recommended).
+  grip_port: 6419 # Port for the Python HTTP server (formerly Grip server).
+  ngrok_static_domain: null # Example: your-reserved-domain.ngrok-free.app (requires ngrok account).
+  cleanup_on_shutdown: true # Set to false to keep shared HTML files across bot restarts.
+  url_shortener_enabled: false # Set to true to use a URL shortener for the ngrok link.
+  url_shortener_service: "tinyurl" # Currently supported: "tinyurl".
+  # Optional: API key for URL shortener service. Comment out to disable.
+  # For future services that might require an API key.
+  url_shortener_api_key: null
