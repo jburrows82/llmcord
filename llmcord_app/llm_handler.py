@@ -391,14 +391,9 @@ async def generate_response_stream(
                             budget_to_apply is not None
                             and 0 <= budget_to_apply <= 24576
                         ):
-                            if (
-                                not hasattr(api_config, "thinking_config")
-                                or api_config.thinking_config is None
-                            ):
-                                api_config.thinking_config = (
-                                    google_types.ThinkingConfig()
-                                )
-                            api_config.thinking_config.thinking_budget = budget_to_apply
+                            api_config.thinking_config = google_types.ThinkingConfig(
+                                thinking_budget=budget_to_apply
+                            )
                             logging.debug(
                                 f"Applied thinking_budget: {budget_to_apply} to Gemini ThinkingConfig"
                             )
