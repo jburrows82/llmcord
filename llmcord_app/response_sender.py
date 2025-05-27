@@ -330,7 +330,9 @@ async def handle_llm_response_stream(
         footer_text = f"Model: {current_model_name}"
         if attempt_num == 1:
             footer_text += f" (Retried from {original_model_name_param})"
-        base_embed.set_footer(text=footer_text)
+        # Footer is now set on the final message segment, not on the base_embed initially.
+        # The footer_text variable defined on L330-L332 is no longer used here.
+        # Logic to construct footer_text_final is now within the stream loop for the final segment.
         for warning_text in sorted(
             list(initial_user_warnings)
         ):  # Use list() for sorting a set
@@ -599,6 +601,12 @@ async def handle_llm_response_stream(
                                     is_final_chunk_for_attempt
                                     and is_successful_finish_attempt
                                 ):
+                                    # Add footer only to the final, successful message segment
+                                    footer_text_final = f"Model: {current_model_name}"
+                                    if attempt_num == 1: # This is for retry logic
+                                        footer_text_final += f" (Retried from {original_model_name_param})"
+                                    current_segment_embed.set_footer(text=footer_text_final)
+
                                     has_sources = (
                                         grounding_metadata_for_this_attempt
                                         and (
