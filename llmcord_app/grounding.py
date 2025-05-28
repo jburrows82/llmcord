@@ -103,7 +103,6 @@ async def get_web_search_queries_from_gemini(
             "temperature": grounding_temperature,
             "top_k": grounding_top_k,
             "top_p": grounding_top_p,
-            "thinking_budget": 0,  # Keep thinking budget minimal for grounding
         }
 
         stream_generator = generate_response_stream_func(
