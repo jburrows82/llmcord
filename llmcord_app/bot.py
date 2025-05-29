@@ -585,12 +585,15 @@ class LLMCordClient(discord.Client):
             )
 
             if history_for_custom_prompt:
+                image_urls = [att.url for att in image_attachments]
                 custom_search_queries = await generate_search_queries_with_custom_prompt(
                     latest_query=cleaned_content,
                     chat_history=history_for_custom_prompt,
                     config=self.config,
                     generate_response_stream_func=generate_response_stream,  # Pass the imported function
                     current_model_id=final_provider_slash_model,
+                    httpx_client=self.httpx_client,  # Pass the httpx_client
+                    image_urls=image_urls,
                 )
 
                 if custom_search_queries:  # List of queries

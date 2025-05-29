@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json  # For parsing LLM response
+import base64  # Added for image encoding
 from datetime import datetime  # Added for date/time
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
 
@@ -741,9 +742,11 @@ async def generate_search_queries_with_custom_prompt(
         ],
     ],
     current_model_id: str,
+    httpx_client: httpx.AsyncClient,  # Added httpx_client
+    image_urls: Optional[List[str]] = None,
 ) -> Optional[List[str]]:
     """
-    Generates search queries using a custom prompt with a non-Gemini model.
+    Generates search queries using a custom prompt with a non-Gemini model, potentially with images.
     """
     logging.info(
         f"Attempting to generate search queries with custom prompt for model: {current_model_id}"
@@ -778,8 +781,48 @@ async def generate_search_queries_with_custom_prompt(
     # Exclude the last message from chat_history as it's the latest_query,
     # already embedded in formatted_prompt.
     # chat_history[:-1] correctly handles empty or single-element lists.
+
+    processed_image_data_urls = []
+    if image_urls and httpx_client:  # Ensure client is available
+        for img_url in image_urls:
+            try:
+                response = await httpx_client.get(img_url, timeout=10)  # Added timeout
+                response.raise_for_status()  # Raise HTTPStatusError for bad responses (4xx or 5xx)
+                image_bytes = await response.aread()
+                mime_type = response.headers.get(
+                    "Content-Type", "image/jpeg"
+                )  # Default to jpeg if not found
+
+                # Ensure mime_type is a valid image type if necessary, or log warning
+                if not mime_type.startswith("image/"):
+                    logging.warning(
+                        f"Content-Type '{mime_type}' from {img_url} is not an image type. Skipping image."
+                    )
+                    continue  # Or handle as an error
+
+                base64_encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+                data_url = f"data:{mime_type};base64,{base64_encoded_image}"
+                processed_image_data_urls.append(data_url)
+                logging.info(
+                    f"Successfully processed and added image as data URL: {img_url[:50]}..."
+                )
+            except httpx.HTTPStatusError as e:
+                logging.error(f"HTTP error fetching image {img_url}: {e}")
+                # Optionally, decide if you want to skip this image or stop the process
+            except httpx.TimeoutException as e:
+                logging.error(f"Timeout fetching image {img_url}: {e}")
+            except Exception as e:
+                logging.error(f"Error processing image {img_url}: {e}")
+
+    user_prompt_content_parts = [{"type": "text", "text": formatted_prompt}]
+    if processed_image_data_urls:  # Use the new list of data URIs
+        for data_url in processed_image_data_urls:
+            user_prompt_content_parts.append(
+                {"type": "image_url", "image_url": {"url": data_url}}
+            )
+
     messages_for_llm = chat_history[:-1] + [
-        {"role": "user", "content": formatted_prompt}
+        {"role": "user", "content": user_prompt_content_parts}
     ]
 
     try:
