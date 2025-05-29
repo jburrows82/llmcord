@@ -69,6 +69,58 @@ from .constants import (
     DEFAULT_GROUNDING_MODEL_TOP_P,
 )
 
+# Alternative Search Query Generation Config Keys
+ALT_SEARCH_SECTION_KEY = "alternative_search_query_generation"
+ALT_SEARCH_ENABLED_KEY = "enabled"
+ALT_SEARCH_PROMPT_KEY = "search_query_generation_prompt_template"
+
+DEFAULT_ALT_SEARCH_PROMPT_TEMPLATE = """
+Current Date/Time Context: {current_date}, {current_day_of_week}, {current_time}
+
+Write a search query for a search engine based on the given latest user query and conversation context. If the latest query references a search platform (like "search reddit", "google that", "look on youtube") or is a continuation of the previous topic, incorporate the context from the previous query to form a complete search query.
+
+If there are multiple entities, make a search query for each of them. For example, 'Which is better in terms of nutritional value, orange or apple?' In this example, the entities are 'orange' and 'apple', and the user is asking which is better in terms of nutritional value. The appropriate search queries for each entity here are 'nutritional value of orange' and 'nutritional value of apple'. 
+
+If the latest query doesn't require a web search, return <web_not_needed>. Respond with the final answer only in JSON format. 
+
+Examples:
+1. If the query is "Which is better, OpenAI or Anthropic?", the output should be:
+```json
+{
+"search_queries": [
+    "OpenAI company overview features products strengths weaknesses",
+    "Anthropic company overview features products strengths weaknesses"
+]
+}
+```
+
+2. If the previous query was "best gaming phone" and the latest query is "search reddit", the output should be:
+```json
+{
+"search_queries": [
+    "reddit best gaming phone recommendations discussions"
+]
+}
+```
+
+3. If the query is "latest news", the output should be:
+```json
+{
+"search_queries": [
+    "Latest news as of..."
+]
+}
+```
+
+4. If the query is "hi", the output must be:
+```
+<web_not_needed>
+```
+
+<latest query>
+{latest_query}
+</latest query>
+""".strip()
 # --- ADDED DEFAULT GROUNDING PROMPT ---
 DEFAULT_GROUNDING_SYSTEM_PROMPT = """
 You are an expert at analyzing user queries and conversation history to determine the most effective web search queries that will help answer the user's latest request or continue the conversation meaningfully.
@@ -909,6 +961,48 @@ async def get_config(filename="config.yaml"):
                     config_data[WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY] = (
                         DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
                     )
+
+            # --- Load Alternative Search Query Generation Settings ---
+            alt_search_config = config_data.get(ALT_SEARCH_SECTION_KEY, {})
+            if not isinstance(alt_search_config, dict):
+                logging.warning(
+                    f"'{ALT_SEARCH_SECTION_KEY}' section is not a dictionary. Using defaults."
+                )
+                alt_search_config = {}
+            config_data[ALT_SEARCH_SECTION_KEY] = (
+                alt_search_config  # Ensure the section exists in config_data
+            )
+
+            # Enabled
+            if ALT_SEARCH_ENABLED_KEY not in alt_search_config:
+                alt_search_config[ALT_SEARCH_ENABLED_KEY] = False
+                logging.info(
+                    f"'{ALT_SEARCH_ENABLED_KEY}' not found in '{ALT_SEARCH_SECTION_KEY}'. Defaulting to False."
+                )
+            elif not isinstance(alt_search_config[ALT_SEARCH_ENABLED_KEY], bool):
+                logging.warning(
+                    f"'{ALT_SEARCH_ENABLED_KEY}' in '{ALT_SEARCH_SECTION_KEY}' is not a boolean. Defaulting to False."
+                )
+                alt_search_config[ALT_SEARCH_ENABLED_KEY] = False
+
+            # Search Query Generation Prompt Template
+            if (
+                ALT_SEARCH_PROMPT_KEY not in alt_search_config
+                or not alt_search_config.get(ALT_SEARCH_PROMPT_KEY)
+            ):
+                alt_search_config[ALT_SEARCH_PROMPT_KEY] = (
+                    DEFAULT_ALT_SEARCH_PROMPT_TEMPLATE
+                )
+                logging.info(
+                    f"'{ALT_SEARCH_PROMPT_KEY}' not found or empty in '{ALT_SEARCH_SECTION_KEY}'. Using default template."
+                )
+            elif not isinstance(alt_search_config[ALT_SEARCH_PROMPT_KEY], str):
+                logging.warning(
+                    f"'{ALT_SEARCH_PROMPT_KEY}' in '{ALT_SEARCH_SECTION_KEY}' is not a string. Using default template."
+                )
+                alt_search_config[ALT_SEARCH_PROMPT_KEY] = (
+                    DEFAULT_ALT_SEARCH_PROMPT_TEMPLATE
+                )
 
             return config_data
 

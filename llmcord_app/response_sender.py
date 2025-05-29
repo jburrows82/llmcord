@@ -603,9 +603,11 @@ async def handle_llm_response_stream(
                                 ):
                                     # Add footer only to the final, successful message segment
                                     footer_text_final = f"Model: {current_model_name}"
-                                    if attempt_num == 1: # This is for retry logic
+                                    if attempt_num == 1:  # This is for retry logic
                                         footer_text_final += f" (Retried from {original_model_name_param})"
-                                    current_segment_embed.set_footer(text=footer_text_final)
+                                    current_segment_embed.set_footer(
+                                        text=footer_text_final
+                                    )
 
                                     has_sources = (
                                         grounding_metadata_for_this_attempt

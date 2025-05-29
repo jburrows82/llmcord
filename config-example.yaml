@@ -328,3 +328,54 @@ output_sharing:
   # Optional: API key for URL shortener service. Comment out to disable.
   # For future services that might require an API key.
   url_shortener_api_key: null
+
+alternative_search_query_generation:
+  enabled: false
+  # Prompt to send to non-Gemini models for search query generation.
+  # {latest_query} will be replaced with the user's latest message.
+  search_query_generation_prompt_template: |
+    Current Date/Time Context: {current_date}, {current_day_of_week}, {current_time}
+
+    Write a search query for a search engine based on the given latest user query and conversation context. If the latest query references a search platform (like "search reddit", "google that", "look on youtube") or is a continuation of the previous topic, incorporate the context from the previous query to form a complete search query.
+
+    If there are multiple entities, make a search query for each of them. For example, 'Which is better in terms of nutritional value, orange or apple?' In this example, the entities are 'orange' and 'apple', and the user is asking which is better in terms of nutritional value. The appropriate search queries for each entity here are 'nutritional value of orange' and 'nutritional value of apple'. 
+
+    If the latest query doesn't require a web search, return <web_not_needed>. Respond with the final answer only in JSON format. 
+
+    Examples:
+    1. If the query is "Which is better, OpenAI or Anthropic?", the output should be:
+    ```json
+    {
+    "search_queries": [
+      "OpenAI company overview features products strengths weaknesses",
+      "Anthropic company overview features products strengths weaknesses"
+    ]
+    }
+    ```
+
+    2. If the previous query was "best gaming phone" and the latest query is "search reddit", the output should be:
+    ```json
+    {
+    "search_queries": [
+      "reddit best gaming phone recommendations discussions"
+    ]
+    }
+    ```
+
+    3. If the query is "latest news", the output should be:
+    ```json
+    {
+    "search_queries": [
+      "Latest news as of..."
+    ]
+    }
+    ```
+
+    4. If the query is "hi", the output must be:
+    ```
+    <web_not_needed>
+    ```
+
+    <latest query>
+    {latest_query}
+    </latest query>

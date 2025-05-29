@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import json  # For parsing LLM response
+from datetime import datetime  # Added for date/time
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
 
 import discord  # For discord.utils.escape_markdown
@@ -47,7 +49,10 @@ from .content_fetchers import (
     fetch_general_url_content,  # This is the dynamic one from content_fetchers.web
 )
 from .utils import is_youtube_url, is_reddit_url, extract_reddit_submission_id
+
+Config = Dict[str, Any]  # For type hinting and accessing config
 # The generate_response_stream function will be passed as an argument
+# Note: LLMHandler import removed, will use Callable for the stream function
 
 
 async def get_web_search_queries_from_gemini(
@@ -157,6 +162,52 @@ async def get_web_search_queries_from_gemini(
         return None
 
 
+async def _fetch_single_query_from_web_content_api(
+    query_item_str: str,
+    client: httpx.AsyncClient,
+    api_url: str,
+    api_max_results: int,
+) -> Optional[Dict[str, Any]]:
+    """Helper to fetch and do initial processing for a single query to the external web content API."""
+    logging.info(
+        f"External Web Content API: Initiating fetch for query: '{query_item_str}'"
+    )
+    payload = {"query": query_item_str, "max_results": api_max_results}
+    try:
+        response = await client.post(api_url, json=payload, timeout=30.0)
+        response.raise_for_status()
+        api_response_json = response.json()
+
+        # Check for API's own error field
+        if api_response_json.get("error"):
+            logging.error(
+                f"External Web Content API returned a global error for query '{query_item_str}': {api_response_json['error']}"
+            )
+            return None  # API indicated an error for this specific query
+        return api_response_json
+
+    except httpx.RequestError as e:
+        logging.error(
+            f"HTTP RequestError calling External Web Content API for query '{query_item_str}' at {api_url}: {e}"
+        )
+        return None
+    except httpx.HTTPStatusError as e:
+        logging.error(
+            f"HTTP StatusError from External Web Content API for query '{query_item_str}' (status {e.response.status_code}): {e.response.text}"
+        )
+        return None
+    except json.JSONDecodeError as e:  # If response.json() fails
+        logging.error(
+            f"JSONDecodeError parsing External Web Content API response for query '{query_item_str}': {e}"
+        )
+        return None
+    except Exception as e_generic:  # Catch other unexpected errors during the fetch
+        logging.exception(
+            f"Unexpected error while fetching/parsing External Web Content API response for query '{query_item_str}': {e_generic}"
+        )
+        return None
+
+
 async def fetch_and_format_searxng_results(
     queries: List[str],
     user_query_for_log: str,  # For logging context
@@ -189,29 +240,57 @@ async def fetch_and_format_searxng_results(
     )  # Reuse existing limit
 
     if api_enabled:
+        all_formatted_contexts_from_api = []
         logging.info(
-            f"External Web Content API is enabled. Using it for query: '{queries[0]}'"
+            f"External Web Content API is enabled. Processing {len(queries)} queries."
         )
-        payload = {"query": queries[0], "max_results": api_max_results}
-        try:
-            response = await httpx_client.post(
-                api_url, json=payload, timeout=30.0
-            )  # Consider making timeout configurable
-            response.raise_for_status()
-            api_response_json = response.json()
 
-            if api_response_json.get("error"):
+        tasks = [
+            _fetch_single_query_from_web_content_api(
+                query_str, httpx_client, api_url, api_max_results
+            )
+            for query_str in queries
+        ]
+        # Use return_exceptions=True to handle individual task failures gracefully
+        api_call_results_or_exceptions = await asyncio.gather(
+            *tasks, return_exceptions=True
+        )
+
+        for query_idx, result_or_exc in enumerate(api_call_results_or_exceptions):
+            query_item_str = queries[query_idx]  # Get the original query for context
+
+            if isinstance(result_or_exc, Exception):
+                # This catches exceptions from the _fetch_single_query_from_web_content_api call
+                # or from asyncio.gather itself (e.g., cancellation).
+                # The helper function already logs specific httpx/json errors.
                 logging.error(
-                    f"External Web Content API returned a global error: {api_response_json['error']}"
+                    f"An exception occurred during the API call for query '{query_item_str}': {result_or_exc}"
                 )
-                return None
+                continue  # Skip to the next query's result
+
+            api_response_json = result_or_exc  # This is Optional[Dict[str, Any]]
+
+            if api_response_json is None:
+                # This means _fetch_single_query_from_web_content_api returned None,
+                # indicating an error that it already logged (e.g., API error field, HTTP error, JSON decode).
+                logging.info(
+                    f"Skipping query '{query_item_str}' due to previously logged API call failure or empty/error response from API."
+                )
+                continue
+
+            # --- Start of existing processing logic for a single successful API response ---
+            logging.info(
+                f"External Web Content API: Processing successful response for query {query_idx + 1}/{len(queries)}: '{query_item_str}'"
+            )
 
             api_results_data = api_response_json.get("results", [])
             if not api_results_data:
-                logging.info("External Web Content API returned no results.")
-                return None
+                logging.info(
+                    f"External Web Content API returned no 'results' data for query '{query_item_str}'."
+                )
+                continue  # Skip to the next query's result
 
-            formatted_api_results_content = []
+            current_query_formatted_api_results_content = []
             for item_idx, item in enumerate(api_results_data):
                 item_str_parts = []
                 item_url = item.get("url", "N/A")
@@ -323,47 +402,48 @@ async def fetch_and_format_searxng_results(
                         item_str_parts.append(
                             f"  Data: {discord.utils.escape_markdown(raw_content_str)}"
                         )
-
-                    formatted_api_results_content.append("\n".join(item_str_parts))
+                    current_query_formatted_api_results_content.append(
+                        "\n".join(item_str_parts)
+                    )
                 elif item.get("error"):
                     logging.warning(
-                        f"External API processing error for URL {item_url}: {item.get('error')}"
+                        f"External API processing error for URL {item_url} (query: '{query_item_str}'): {item.get('error')}"
                     )
                     item_str_parts.append(f"  Error: {item.get('error')}")
-                    formatted_api_results_content.append("\n".join(item_str_parts))
+                    current_query_formatted_api_results_content.append(
+                        "\n".join(item_str_parts)
+                    )
+            # End of loop for 'item in api_results_data'
 
-            if formatted_api_results_content:
-                query_for_header = queries[
-                    0
-                ]  # Since we used queries[0] for the API call
+            if current_query_formatted_api_results_content:
                 header = (
-                    f"Answer the user's query based on the following information from the External Web Content API "
-                    f'(for query: "{discord.utils.escape_markdown(query_for_header)}"): \n\n'
+                    f"Information from External Web Content API "
+                    f'(for query: "{discord.utils.escape_markdown(query_item_str)}"): \n\n'
                 )
-                final_context = header + "\n\n---\n\n".join(
-                    formatted_api_results_content
+                single_query_context = header + "\n\n---\n\n".join(
+                    current_query_formatted_api_results_content
                 )
-                logging.info(
-                    f"Formatted context from External Web Content API: {final_context[:500]}..."
-                )
-                return final_context.strip()
+                all_formatted_contexts_from_api.append(single_query_context)
             else:
                 logging.info(
-                    "External Web Content API did not return any processable content."
+                    f"External Web Content API did not return any processable content for query '{query_item_str}' after processing results."
                 )
-                return None
+            # --- End of existing processing logic for a single successful API response ---
+        # End of loop for 'result_or_exc in api_call_results_or_exceptions'
 
-        except httpx.RequestError as e:
-            logging.error(f"Error calling External Web Content API at {api_url}: {e}")
-            return None
-        except httpx.HTTPStatusError as e:
-            logging.error(
-                f"External Web Content API request failed with status {e.response.status_code}: {e.response.text}"
+        if all_formatted_contexts_from_api:
+            # Add a general header if combining results from multiple API queries
+            combined_header = "Answer the user's query based on the following information from the External Web Content API (results from one or more queries):\n\n"
+            final_api_context = combined_header + "\n\n=====\n\n".join(
+                all_formatted_contexts_from_api
             )
-            return None
-        except Exception:
-            logging.exception(
-                "Unexpected error while processing External Web Content API response."
+            logging.info(
+                f"Aggregated formatted context from External Web Content API for {len(all_formatted_contexts_from_api)} queries: {final_api_context[:500]}..."
+            )
+            return final_api_context.strip()
+        else:
+            logging.info(
+                "External Web Content API processing completed for all queries, but no processable content was gathered."
             )
             return None
 
@@ -639,3 +719,175 @@ async def fetch_and_format_searxng_results(
         "No content successfully fetched and formatted from SearxNG result URLs."
     )
     return None
+
+
+async def generate_search_queries_with_custom_prompt(
+    latest_query: str,
+    chat_history: List[Dict[str, Any]],
+    config: Config,
+    # Use Callable for the generate_response_stream function, similar to get_web_search_queries_from_gemini
+    generate_response_stream_func: Callable[
+        [
+            str,
+            str,
+            List[Dict[str, Any]],
+            Optional[str],
+            Dict[str, Any],
+            Dict[str, Any],
+            Config,
+        ],  # Added Config to signature based on llm_handler call
+        AsyncGenerator[
+            Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
+        ],
+    ],
+    current_model_id: str,
+) -> Optional[List[str]]:
+    """
+    Generates search queries using a custom prompt with a non-Gemini model.
+    """
+    logging.info(
+        f"Attempting to generate search queries with custom prompt for model: {current_model_id}"
+    )
+
+    alt_search_config_dict = config.get("alternative_search_query_generation", {})
+    prompt_template = alt_search_config_dict.get(
+        "search_query_generation_prompt_template", ""
+    )
+
+    if not prompt_template:
+        # This condition covers both missing 'alternative_search_query_generation' key
+        # and missing 'search_query_generation_prompt_template' key within it,
+        # or if the template itself is an empty string.
+        logging.warning(
+            "Search query generation prompt template is not configured, not found, or is empty. Skipping."
+        )
+        return None
+
+    now = datetime.now()
+    current_date_str = now.strftime("%Y-%m-%d")
+    current_day_of_week_str = now.strftime("%A")
+    current_time_str = now.strftime("%I:%M %p")  # e.g., "02:30 PM"
+
+    formatted_prompt = prompt_template.replace("{latest_query}", latest_query)
+    formatted_prompt = formatted_prompt.replace("{current_date}", current_date_str)
+    formatted_prompt = formatted_prompt.replace(
+        "{current_day_of_week}", current_day_of_week_str
+    )
+    formatted_prompt = formatted_prompt.replace("{current_time}", current_time_str)
+
+    # Exclude the last message from chat_history as it's the latest_query,
+    # already embedded in formatted_prompt.
+    # chat_history[:-1] correctly handles empty or single-element lists.
+    messages_for_llm = chat_history[:-1] + [
+        {"role": "user", "content": formatted_prompt}
+    ]
+
+    try:
+        provider_name, model_name = current_model_id.split("/", 1)
+    except ValueError:
+        logging.error(
+            f"Invalid format for current_model_id: {current_model_id}. Expected 'provider/model_name'."
+        )
+        return None
+
+    provider_config = config.get("providers", {}).get(provider_name, {})
+    if not provider_config or not provider_config.get("api_keys"):
+        logging.warning(
+            f"Cannot generate search queries: Provider '{provider_name}' (from current_model_id '{current_model_id}') not configured with API keys."
+        )
+        return None
+
+    final_response_text = ""
+    try:
+        # Parameters for the LLM call.
+        # Using default temperature, top_k, top_p from the model's configuration or llm_handler defaults.
+        # If specific overrides are needed, they could be fetched from config.alternative_search_query_generation
+        extra_params = {}  # Let the stream function use its defaults or model-specific settings
+
+        # Call the passed stream generation function
+        stream_generator = generate_response_stream_func(
+            provider=provider_name,
+            model_name=model_name,
+            history_for_llm=messages_for_llm,
+            system_prompt_text=None,  # Custom prompt is part of user message
+            provider_config=provider_config,
+            extra_params=extra_params,
+            app_config=config,  # Pass app_config
+        )
+
+        async for text_chunk, _, _, error_message in stream_generator:  # type: ignore
+            if error_message:
+                logging.error(
+                    f"LLM call error during custom search query generation: {error_message}"
+                )
+                return None  # Abort on first error
+            if text_chunk:
+                final_response_text += text_chunk
+
+        logging.debug(
+            f"LLM response for custom search query generation: {final_response_text}"
+        )
+
+        if not final_response_text:
+            logging.warning(
+                "LLM returned an empty response for search query generation."
+            )
+            return None
+
+        # llm_response_content is the raw string from LLM (final_response_text in this context)
+        content_to_process = final_response_text.strip()
+
+        # Markdown stripping logic
+        if content_to_process.startswith("```json"):
+            content_to_process = content_to_process[len("```json") :].strip()
+        elif content_to_process.startswith("```"):
+            content_to_process = content_to_process[len("```") :].strip()
+
+        if content_to_process.endswith("```"):
+            content_to_process = content_to_process[: -len("```")].strip()
+
+        # Now, check for the sentinel *before* JSON parsing
+        if content_to_process == "<web_not_needed>":
+            logging.info(
+                "LLM indicated no web search is needed via custom prompt (sentinel check after markdown strip)."
+            )
+            return None
+
+        # If not the sentinel, then attempt to parse as JSON
+        try:
+            parsed_response = json.loads(content_to_process)
+            if isinstance(parsed_response, dict):
+                search_queries = parsed_response.get("search_queries")
+                if isinstance(search_queries, list) and all(
+                    isinstance(q, str) for q in search_queries
+                ):
+                    logging.info(
+                        f"Successfully generated {len(search_queries)} search queries via custom prompt."
+                    )
+                    return search_queries
+                else:
+                    logging.warning(
+                        f"Parsed JSON does not contain a valid 'search_queries' list. Response: {content_to_process}"
+                    )
+                    return None
+            else:
+                logging.warning(
+                    f"Parsed JSON is not a dictionary. Response: {content_to_process}"
+                )
+                return None
+        except json.JSONDecodeError:
+            logging.warning(
+                f"Failed to parse LLM response as JSON for search query generation. Response: {content_to_process}"
+            )
+            return None
+
+    except AllKeysFailedError as e:
+        logging.error(
+            f"All API keys failed for custom search query generation model ({provider_name}/{model_name}): {e}"
+        )
+        return None
+    except Exception:
+        logging.exception(
+            "Unexpected error during custom search query generation LLM call:"
+        )
+        return None

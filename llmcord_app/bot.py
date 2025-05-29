@@ -57,6 +57,7 @@ from .external_content import (
 from .grounding import (
     get_web_search_queries_from_gemini,
     fetch_and_format_searxng_results,
+    generate_search_queries_with_custom_prompt,  # Added import
 )
 from .prompt_utils import prepare_system_prompt
 from .response_sender import (
@@ -494,6 +495,7 @@ class LLMCordClient(discord.Client):
 
         combined_context = ""
         url_fetch_results = []
+        custom_search_performed = False  # Flag to track if new search path was taken
         all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
         user_has_provided_urls = bool(all_urls_in_cleaned_content)
         has_only_backticked_urls = False
@@ -528,18 +530,113 @@ class LLMCordClient(discord.Client):
             logging.info(
                 "Skipping Gemini grounding/SearxNG step because Google Lens is active."
             )
-        elif (
+        # --- NEW: Alternative Search Query Generation ---
+        # Determine if alternative search query generation should be triggered
+        alt_search_config_dict = self.config.get(
+            "alternative_search_query_generation", {}
+        )
+        is_enabled = alt_search_config_dict.get("enabled", False)
+        trigger_alternative_search = False  # Initialize flag
+
+        if is_enabled:
+            current_model_id = final_provider_slash_model  # Alias for clarity
+            try:
+                # Extract provider from "provider/model_name"
+                provider_part = current_model_id.split("/", 1)[0]
+                if provider_part != "gemini":
+                    trigger_alternative_search = True
+            except IndexError:
+                # Log if format is unexpected
+                logging.warning(
+                    f"Could not parse provider from model ID: {current_model_id} "
+                    f"for alternative search check. Defaulting to not triggering alternative search."
+                )
+
+        # The block that was previously under the 'elif' now runs if 'trigger_alternative_search' is True
+        if trigger_alternative_search:
+            logging.info(
+                f"Attempting alternative search query generation for model {final_provider_slash_model}"
+            )
+            current_provider_is_gemini_for_history = provider == "google"
+
+            history_for_custom_prompt = await build_message_history(
+                new_msg=new_msg,
+                initial_cleaned_content=cleaned_content,  # latest_query for the prompt
+                combined_context="",  # No prior context for query generation step itself
+                max_messages=max_messages,
+                max_tokens_for_text=max_tokens_for_text_config,
+                max_files_per_message=max_files_per_message,
+                accept_files=accept_files,  # Based on the current final_provider_slash_model
+                use_google_lens=False,
+                is_target_provider_gemini=current_provider_is_gemini_for_history,
+                target_provider_name=provider,  # Provider of the current model
+                target_model_name=model_name,  # Name of the current model
+                user_warnings=user_warnings,
+                current_message_url_fetch_results=None,
+                msg_nodes_cache=self.msg_nodes,
+                bot_user_obj=self.user,
+                httpx_async_client=self.httpx_client,
+                models_module=models,
+                google_types_module=google_types,
+                extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
+                at_ai_pattern_re=AT_AI_PATTERN,
+                providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
+                system_prompt_text_for_budgeting=None,  # Custom prompt is a user message
+            )
+
+            if history_for_custom_prompt:
+                custom_search_queries = await generate_search_queries_with_custom_prompt(
+                    latest_query=cleaned_content,
+                    chat_history=history_for_custom_prompt,
+                    config=self.config,
+                    generate_response_stream_func=generate_response_stream,  # Pass the imported function
+                    current_model_id=final_provider_slash_model,
+                )
+
+                if custom_search_queries:  # List of queries
+                    logging.info(
+                        f"Custom prompt generated {len(custom_search_queries)} search queries: {custom_search_queries}"
+                    )
+                    searxng_derived_context = await fetch_and_format_searxng_results(
+                        custom_search_queries,
+                        cleaned_content,  # user_query_for_log
+                        self.config,
+                        self.httpx_client,
+                    )
+                    if searxng_derived_context:
+                        combined_context = searxng_derived_context
+                        logging.info(
+                            "Successfully fetched and formatted search results from custom queries."
+                        )
+                    else:
+                        logging.info(
+                            "Custom queries generated, but no content fetched/formatted from SearxNG."
+                        )
+                elif (
+                    custom_search_queries is None
+                ):  # Explicit None means <web_not_needed>
+                    logging.info("Custom prompt indicated no web search is needed.")
+                # If custom_search_queries is an empty list (e.g. error during generation but not None),
+                # it will just skip fetching, and combined_context remains empty.
+            else:
+                logging.warning(
+                    "Could not build history for custom search query generation. Skipping."
+                )
+            custom_search_performed = True
+        # --- END: Alternative Search Query Generation ---
+        elif (  # Original Gemini grounding path, ensure it's skipped if custom search was done
             (not user_has_provided_urls or has_only_backticked_urls)
             and not is_gemini
             and not is_grok_model
+            and not custom_search_performed  # Added condition
         ):
             if has_only_backticked_urls:
                 logging.info(
-                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and all user URLs are backticked. Attempting grounding pre-step for SearxNG."
+                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, custom search not performed, and all user URLs are backticked. Attempting grounding pre-step for SearxNG."
                 )
             else:  # No user URLs at all
                 logging.info(
-                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, and no user URLs detected. Attempting grounding pre-step for SearxNG."
+                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, custom search not performed, and no user URLs detected. Attempting grounding pre-step for SearxNG."
                 )
             history_for_gemini_grounding = await build_message_history(
                 new_msg=new_msg,
@@ -617,7 +714,7 @@ class LLMCordClient(discord.Client):
                 logging.warning(
                     "Could not build history for Gemini grounding step. Skipping SearxNG."
                 )
-        elif user_has_provided_urls:
+        elif user_has_provided_urls and not custom_search_performed:  # Added condition
             url_fetch_results = await fetch_external_content(
                 cleaned_content,
                 image_attachments,
