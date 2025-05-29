@@ -198,12 +198,13 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
                 "Your system prompt has been reset to the default.", ephemeral=False
             )
         else:
-            user_system_prompt_preferences[user_id] = prompt
+            modified_prompt = f"{prompt}\nDon't use LaTeX unless told by the user"
+            user_system_prompt_preferences[user_id] = modified_prompt
             logger.info(
-                f'User {user_id} ({interaction.user.name}) set system prompt to: "{prompt[:100]}{"..." if len(prompt) > 100 else ""}"'
+                f'User {user_id} ({interaction.user.name}) set system prompt to: "{modified_prompt[:100]}{"..." if len(modified_prompt) > 100 else ""}"'
             )
             await interaction.response.send_message(
-                f'Your system prompt has been set to: "{prompt[:200]}{"..." if len(prompt) > 200 else ""}"',
+                f'Your system prompt has been set to: "{modified_prompt[:200]}{"..." if len(modified_prompt) > 200 else ""}"',
                 ephemeral=False,
             )
 
