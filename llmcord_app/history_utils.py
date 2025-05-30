@@ -592,12 +592,17 @@ async def build_message_history(
         # However, the prompt error was about total prompt size, so we focus on text for now.
         current_entry_text_content = (
             (
-                entry_data["external_content"]
-                + "\n\nUser's query:\n"
+                "User's query:\n"
                 + (entry_data["text"] or "")
+                + "\n\nExternal Content:\n"
+                + entry_data["external_content"]
             )
             if entry_data["external_content"]
-            else (entry_data["text"] or "")
+            else (
+                "User's query:\n" + (entry_data["text"] or "")
+                if (entry_data["text"] or "")
+                else ""
+            )
         )
 
         # Calculate token count for text and external content first
@@ -658,9 +663,12 @@ async def build_message_history(
                 # External content will only exist for the current message
                 if latest_query_data.get("external_content"):
                     budget_for_latest_query_node_text_field -= len(
+                        tokenizer.encode("User's query:\n")
+                    )
+                    budget_for_latest_query_node_text_field -= len(
                         tokenizer.encode(
-                            latest_query_data["external_content"]
-                            + "\n\nUser's query:\n"
+                            "\n\nExternal Content:\n"
+                            + latest_query_data["external_content"]
                         )
                     )
 
@@ -767,9 +775,12 @@ async def build_message_history(
                 # External content will only exist for the current message
                 if latest_query_data.get("external_content"):
                     budget_for_latest_query_node_text_field -= len(
+                        tokenizer.encode("User's query:\n")
+                    )
+                    budget_for_latest_query_node_text_field -= len(
                         tokenizer.encode(
-                            latest_query_data["external_content"]
-                            + "\n\nUser's query:\n"
+                            "\n\nExternal Content:\n"
+                            + latest_query_data["external_content"]
                         )
                     )
 
@@ -831,7 +842,10 @@ async def build_message_history(
         # Only use external_content for the new message, even if somehow it got saved in history
         if is_current_message and entry.get("external_content"):
             text_content_for_api = (
-                entry["external_content"] + "\n\nUser's query:\n" + text_content_for_api
+                "User's query:\n"
+                + text_content_for_api
+                + "\n\nExternal Content:\n"
+                + entry["external_content"]
             )
 
         # Ensure file parts are within limits for this specific message
