@@ -552,7 +552,7 @@ class LLMCordClient(discord.Client):
             try:
                 # Extract provider from "provider/model_name"
                 provider_part = current_model_id.split("/", 1)[0]
-                if provider_part != "gemini":
+                if provider_part != "google":
                     trigger_alternative_search = True
             except IndexError:
                 # Log if format is unexpected
