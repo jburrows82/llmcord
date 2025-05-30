@@ -1164,17 +1164,18 @@ async def generate_response_stream(
                         )
                         break
                 else:  # Other BadRequestError or InvalidArgument
-                    logging.error(
-                        f"Initial Request Bad request error for provider '{provider}' with key {key_display}. Error: {e}. Aborting retries for all keys."
+                    logging.warning(  # Changed from error to warning, as we are retrying
+                        f"Initial Request Bad request error for provider '{provider}' with key {key_display}. Error: {e}. Trying next key."  # Updated message
                     )
                     if isinstance(e, google_api_exceptions.InvalidArgument) and hasattr(
                         e, "details"
                     ):
-                        logging.error(
+                        logging.warning(  # Consistent logging level
                             f"Google API InvalidArgument Details: {e.details}"
                         )
                     llm_errors.append(f"Key {key_display}: Initial Bad Request - {e}")
-                    raise AllKeysFailedError(provider, llm_errors) from e
+                    last_error_type = "bad_request"  # Set last_error_type for consistency
+                    break  # Changed from raise to break to try next key
 
             except UnprocessableEntityError as e:  # OpenAI specific 422
                 logging.warning(
