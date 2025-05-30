@@ -500,13 +500,13 @@ async def handle_llm_response_stream(
                                         * split_limit_config
                                     ]
                                     prev_text = prev_text[
-                                        : MAX_EMBED_DESCRIPTION_LENGTH
-                                        + len(STREAMING_INDICATOR)
+                                        :MAX_EMBED_DESCRIPTION_LENGTH
                                     ]
                                     temp_prev_embed = discord.Embed.from_dict(
                                         response_msgs[prev_msg_idx].embeds[0].to_dict()
                                     )
-                                    temp_prev_embed.description = prev_text or "..."
+                                    stripped_prev_text = prev_text.strip() if prev_text else ""
+                                    temp_prev_embed.description = stripped_prev_text or "..."
                                     temp_prev_embed.color = EMBED_COLOR_COMPLETE
                                     try:
                                         await response_msgs[prev_msg_idx].edit(
@@ -558,36 +558,36 @@ async def handle_llm_response_stream(
                                     value=field.value,
                                     inline=field.inline,
                                 )
+ 
+                            # Ensure display text for description is never just whitespace
+                            stripped_current_display_text = current_display_text.strip() if current_display_text else ""
+                            effective_display_text_for_segment = stripped_current_display_text or "..."
 
                             current_segment_embed.description = (
-                                (current_display_text or "...")
+                                effective_display_text_for_segment
                                 if is_final_chunk_for_attempt
-                                else (
-                                    (current_display_text or "...")
-                                    + STREAMING_INDICATOR
-                                )
+                                else (effective_display_text_for_segment + STREAMING_INDICATOR)
                             )
-
+ 
                             if is_final_chunk_for_attempt and is_blocked_attempt:
-                                current_segment_embed.description = (
-                                    (current_display_text or "...")
-                                    .replace(STREAMING_INDICATOR, "")
-                                    .strip()
-                                )
+                                # Use the already stripped and defaulted text if available
+                                base_blocked_text = stripped_current_display_text # This was from current_display_text
+
+                                block_message_addon = ""
                                 if finish_reason.lower() == "safety":
-                                    current_segment_embed.description += (
-                                        "\n\n⚠️ Response blocked by safety filters."
-                                    )
+                                    block_message_addon = "⚠️ Response blocked by safety filters."
                                 elif finish_reason.lower() == "recitation":
-                                    current_segment_embed.description += (
-                                        "\n\n⚠️ Response stopped due to recitation."
-                                    )
+                                    block_message_addon = "⚠️ Response stopped due to recitation."
                                 else:
-                                    current_segment_embed.description += f"\n\n⚠️ Response blocked (Reason: {finish_reason})."
+                                    block_message_addon = f"⚠️ Response blocked (Reason: {finish_reason})."
+
+                                if base_blocked_text:
+                                    current_segment_embed.description = f"{base_blocked_text}\n\n{block_message_addon}"
+                                else:
+                                    current_segment_embed.description = block_message_addon
+                                
                                 current_segment_embed.description = (
-                                    current_segment_embed.description[
-                                        :MAX_EMBED_DESCRIPTION_LENGTH
-                                    ]
+                                    current_segment_embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
                                 )
                                 current_segment_embed.color = EMBED_COLOR_ERROR
                             else:
