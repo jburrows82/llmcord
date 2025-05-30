@@ -158,6 +158,9 @@ fallback_model_incomplete_stream: "google/gemini-1.5-flash-latest"
 # Model to use when 'deepsearch' or 'deepersearch' keywords are detected in user input.
 deep_search_model: "x-ai/grok-1" # Example, ensure this model is available and configured.
 
+# Model to use for the /enhanceprompt command.
+enhance_prompt_model: "google/gemini-1.5-flash-latest" # Example, can be any configured model.
+
 # --- Grounding Model Specific Parameters (Primarily for Gemini) ---
 # These parameters are applied if the 'grounding_model' is a Gemini model and supports them.
 # They fine-tune how search queries are generated for grounding.

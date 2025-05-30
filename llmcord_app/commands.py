@@ -14,6 +14,7 @@ from .constants import (
     USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
     USER_MODEL_PREFS_FILENAME,
 )
+from .llm_handler import enhance_prompt_with_llm
 
 logger = logging.getLogger(__name__)
 
@@ -368,3 +369,112 @@ async def help_command(interaction: discord.Interaction):
             "Could not display help information. Please check bot logs.",
             ephemeral=True,
         )
+
+# --- ADDED: Slash Command for Enhancing Prompts ---
+@app_commands.describe(prompt="The prompt you want to enhance.")
+async def enhance_prompt_command(interaction: discord.Interaction, prompt: str):
+    """
+    Enhances a given prompt using an LLM based on predefined strategies.
+    """
+    await interaction.response.defer(ephemeral=False, thinking=True)
+    enhanced_prompt_text = ""
+    error_occurred = False
+    final_error_message_to_user = "Sorry, I encountered an error while trying to enhance your prompt."
+    prompt_design_strategies_doc = ""
+    prompt_guide_2_doc = ""
+
+    try:
+        # Load prompt enhancement documents
+        doc_path_base = "prompt_data"
+        strategies_doc_path = os.path.join(doc_path_base, "prompt_design_strategies.md")
+        guide_2_doc_path = os.path.join(doc_path_base, "prompt_guide_2.md")
+
+        try:
+            async with aiofiles.open(strategies_doc_path, "r", encoding="utf-8") as f:
+                prompt_design_strategies_doc = await f.read()
+            async with aiofiles.open(guide_2_doc_path, "r", encoding="utf-8") as f:
+                prompt_guide_2_doc = await f.read()
+        except FileNotFoundError as fnf_err:
+            logger.error(f"Prompt enhancement document not found: {fnf_err}")
+            await interaction.followup.send("A required document for prompt enhancement is missing. Please contact the bot administrator.", ephemeral=True)
+            return
+        except IOError as io_err:
+            logger.error(f"IOError reading prompt enhancement document: {io_err}")
+            await interaction.followup.send("Could not read a required document for prompt enhancement. Please contact the bot administrator.", ephemeral=True)
+            return
+
+        if not hasattr(interaction.client, "config"):
+            logger.error("Client object does not have a 'config' attribute for enhance_prompt_command.")
+            await interaction.followup.send(final_error_message_to_user, ephemeral=True)
+            return
+
+        app_config = interaction.client.config
+        default_enhance_model = "google/gemini-1.0-pro" # Default if not specified in config
+        enhance_model_str = app_config.get("enhance_prompt_model", default_enhance_model)
+
+        try:
+            provider, model_name = enhance_model_str.split("/", 1)
+        except ValueError:
+            logger.error(f"Invalid format for enhance_prompt_model: '{enhance_model_str}'. Using default: {default_enhance_model}")
+            provider, model_name = default_enhance_model.split("/", 1)
+            final_error_message_to_user = f"Error in config for enhancement model (using default). {final_error_message_to_user}"
+
+
+        provider_config = app_config.get("providers", {}).get(provider, {})
+        if not provider_config or not provider_config.get("api_keys"):
+            logger.error(f"No API keys or config for provider '{provider}' (enhancement model).")
+            await interaction.followup.send(f"Configuration error for enhancement model's provider '{provider}'. {final_error_message_to_user}", ephemeral=True)
+            return
+
+        extra_params = app_config.get("extra_api_parameters", {}).copy()
+
+        async for text_chunk, finish_reason, _, error_message in enhance_prompt_with_llm(
+            prompt_to_enhance=prompt,
+            prompt_design_strategies_doc=prompt_design_strategies_doc,
+            prompt_guide_2_doc=prompt_guide_2_doc,
+            provider=provider,
+            model_name=model_name,
+            provider_config=provider_config,
+            extra_params=extra_params,
+            app_config=app_config,
+        ):
+            if error_message:
+                logger.error(f"LLM enhancement stream error: {error_message}")
+                final_error_message_to_user = f"An error occurred during enhancement: {error_message}"
+                error_occurred = True
+                break
+            if text_chunk:
+                enhanced_prompt_text += text_chunk
+            if finish_reason:
+                logger.info(f"LLM enhancement finished. Reason: {finish_reason}")
+                if finish_reason not in ["stop", "length", "end_turn", "FINISH_REASON_UNSPECIFIED"]:
+                    logger.warning(f"Unexpected finish reason from LLM: {finish_reason}")
+                break
+        
+        if error_occurred:
+            await interaction.followup.send(final_error_message_to_user, ephemeral=True)
+            return
+
+        if not enhanced_prompt_text.strip():
+            logger.warning("LLM returned an empty enhanced prompt.")
+            await interaction.followup.send("The LLM returned an empty enhanced prompt. Please try again.", ephemeral=True)
+            return
+
+        response_content = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(prompt)}\n```\n**Enhanced Prompt (Model: {provider}/{model_name}):**\n```\n{discord.utils.escape_markdown(enhanced_prompt_text.strip())}\n```"
+        
+        if len(response_content) > 1990: # Adjusted for safety margin
+            available_space = 1990 - (len(response_content) - len(enhanced_prompt_text.strip()))
+            if available_space > 50:
+                 enhanced_prompt_text = enhanced_prompt_text.strip()[:available_space] + "..."
+                 response_content = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(prompt)}\n```\n**Enhanced Prompt (Model: {provider}/{model_name}) (truncated):**\n```\n{discord.utils.escape_markdown(enhanced_prompt_text)}\n```"
+            else:
+                await interaction.followup.send("The enhanced prompt is too long to display.", ephemeral=True)
+                return
+
+        await interaction.followup.send(response_content)
+        logger.info(f"User {interaction.user.id} ({interaction.user.name}) successfully used /enhanceprompt for: \"{prompt[:50]}...\" with model {provider}/{model_name}")
+
+    except Exception as e:
+        logger.error(f"Critical error in enhance_prompt_command for user {interaction.user.id}: {e}", exc_info=True)
+        if not interaction.response.is_done():
+             await interaction.followup.send(final_error_message_to_user,ephemeral=True)

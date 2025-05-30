@@ -48,6 +48,7 @@ from .commands import (
     get_user_gemini_thinking_budget_preference,
     help_command,
     load_all_preferences,
+    enhance_prompt_command, # Added
 )
 from .permissions import is_message_allowed
 from .external_content import (
@@ -137,6 +138,14 @@ class LLMCordClient(discord.Client):
                 name="help",
                 description="Displays all available commands and how to use them.",
                 callback=help_command,
+            )
+        )
+        # --- ADDED: Register /enhanceprompt command ---
+        self.tree.add_command(
+            app_commands.Command(
+                name="enhanceprompt",
+                description="Enhances a given prompt using an LLM.",
+                callback=enhance_prompt_command,
             )
         )
         # Sync commands

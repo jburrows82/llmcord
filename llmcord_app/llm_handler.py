@@ -1229,3 +1229,66 @@ async def generate_response_stream(
         f"All LLM API keys failed for provider '{provider}'. Errors: {json.dumps(llm_errors)}"
     )
     raise AllKeysFailedError(provider, llm_errors)
+
+
+async def enhance_prompt_with_llm(
+    prompt_to_enhance: str,
+    prompt_design_strategies_doc: str,
+    prompt_guide_2_doc: str,
+    provider: str,
+    model_name: str,
+    provider_config: Dict[str, Any],
+    extra_params: Dict[str, Any],
+    app_config: Dict[str, Any],
+) -> AsyncGenerator[
+    Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
+]:
+    """
+    Enhances a given prompt using a specified LLM and provided documentation.
+
+    Args:
+        prompt_to_enhance: The user's original prompt.
+        prompt_design_strategies_doc: Content of the 'prompt design strategies' document.
+        prompt_guide_2_doc: Content of the 'prompt guide 2' document.
+        provider: The LLM provider.
+        model_name: The LLM model name.
+        provider_config: Configuration for the provider.
+        extra_params: Extra API parameters for the model.
+        app_config: Main application configuration.
+
+    Yields:
+        Same as generate_response_stream.
+    """
+    enhancement_user_prompt_content = f"""Improve the following user prompt so it follows the prompt design strategies and prompt guide provided below.
+Output only the improved prompt, without any preamble or explanation.
+
+<my prompt>
+{prompt_to_enhance}
+</my prompt>
+
+<prompt design strategies>
+{prompt_design_strategies_doc}
+</prompt design strategies>
+
+<prompt guide 2>
+{prompt_guide_2_doc}
+</prompt guide 2>
+
+Improved Prompt:"""
+
+    # The main instruction and content are now part of the user message.
+    history_for_enhancement_llm = [{"role": "user", "content": enhancement_user_prompt_content}]
+
+    logging.info(f"Attempting to enhance prompt using {provider}/{model_name} with instructions as user prompt.")
+
+    # Use the existing generate_response_stream function
+    async for chunk_tuple in generate_response_stream(
+        provider=provider,
+        model_name=model_name,
+        history_for_llm=history_for_enhancement_llm,
+        system_prompt_text=None, # System prompt is not used for this specific call
+        provider_config=provider_config,
+        extra_params=extra_params,
+        app_config=app_config,
+    ):
+        yield chunk_tuple
