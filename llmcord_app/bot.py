@@ -717,31 +717,39 @@ class LLMCordClient(discord.Client):
                     image_urls=image_urls,
                 )
 
-                if custom_search_queries:  # List of queries
-                    logging.info(
-                        f"Custom prompt generated {len(custom_search_queries)} search queries: {custom_search_queries}"
-                    )
-                    searxng_derived_context = await fetch_and_format_searxng_results(
-                        custom_search_queries,
-                        cleaned_content,  # user_query_for_log
-                        self.config,
-                        self.httpx_client,
-                    )
-                    if searxng_derived_context:
-                        combined_context = searxng_derived_context
+                if (
+                    isinstance(custom_search_queries, dict)
+                    and "web_search_required" in custom_search_queries
+                ):
+                    if custom_search_queries["web_search_required"]:
+                        queries = custom_search_queries.get("search_queries", [])
                         logging.info(
-                            "Successfully fetched and formatted search results from custom queries."
+                            f"Custom prompt generated {len(queries)} search queries: {queries}"
                         )
+                        if queries:
+                            searxng_derived_context = await fetch_and_format_searxng_results(
+                                queries,
+                                cleaned_content,  # user_query_for_log
+                                self.config,
+                                self.httpx_client,
+                            )
+                            if searxng_derived_context:
+                                combined_context = searxng_derived_context
+                                logging.info(
+                                    "Successfully fetched and formatted search results from custom queries."
+                                )
+                            else:
+                                logging.info(
+                                    "Custom queries generated, but no content fetched/formatted from SearxNG."
+                                )
+                        else:
+                            logging.info(
+                                "web_search_required is true but no search queries were generated."
+                            )
                     else:
-                        logging.info(
-                            "Custom queries generated, but no content fetched/formatted from SearxNG."
-                        )
-                elif (
-                    custom_search_queries is None
-                ):  # Explicit None means <web_not_needed>
-                    logging.info("Custom prompt indicated no web search is needed.")
-                # If custom_search_queries is an empty list (e.g. error during generation but not None),
-                # it will just skip fetching, and combined_context remains empty.
+                        logging.info("Custom prompt indicated no web search is needed (web_search_required: false).")
+                else:
+                    logging.warning("Custom search query generation returned unexpected structure or failed.")
             else:
                 logging.warning(
                     "Could not build history for custom search query generation. Skipping."

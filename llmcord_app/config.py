@@ -75,148 +75,72 @@ ALT_SEARCH_ENABLED_KEY = "enabled"
 ALT_SEARCH_PROMPT_KEY = "search_query_generation_prompt_template"
 
 DEFAULT_ALT_SEARCH_PROMPT_TEMPLATE = """
-Current Date/Time Context: {current_date}, {current_day_of_week}, {current_time}
+<task>
+Determine if web search is required to answer a user query and generate appropriate search queries if needed.
+</task>
 
-Write a search query for a search engine based on the given latest user query and conversation context. 
+<context>
+You are a search query generator that determines when web search is necessary to answer questions accurately.
+</context>
 
-Key instructions:
-- If the user explicitly requests a web search (e.g., "search the net", "search online", "look it up", "search for this", "google it"), treat it as a search request even for simple queries
-- If the user adds a platform-specific search request (e.g., "search reddit", "search youtube", "search google", "look on twitter"), create a search query that includes that platform
-- If the user requests verification or fact-checking (e.g., "fact check", "verify this", "check this", "is this true", "confirm this", "validate", "double check"), create a search query focused on verification/fact-checking
-- If any of these requests appear alone as a follow-up, apply them to the topic from the previous query
-- If the latest query is a continuation of the previous topic, incorporate the context from the previous query to form a complete search query
+<web_search_criteria>
+Web search is REQUIRED when:
 
-If there are multiple entities, make a search query for each of them. For example, 'Which is better in terms of nutritional value, orange or apple?' In this example, the entities are 'orange' and 'apple', and the user is asking which is better in terms of nutritional value. The appropriate search queries for each entity here are 'nutritional value of orange' and 'nutritional value of apple'. 
+1. **Local Information**: Questions requiring location-specific data (weather, local businesses, events, traffic)
+2. **Freshness**: Topics where information changes frequently or where your knowledge cutoff prevents accurate answers
+3. **Niche Information**: Highly specific details not commonly known (small businesses, local regulations, specialized products)
+4. **Accuracy-Critical**: Questions where outdated information could be harmful (software versions, prices, schedules, current events)
+</web_search_criteria>
 
-If the latest query doesn't require a web search AND doesn't contain explicit search instructions, return <web_not_needed>. Respond with the final answer only in JSON format. 
+<instructions>
+1. Analyze the user's query to determine if web search is needed based on the criteria above
+2. If web search is NOT needed, return: {"web_search_required": false}
+3. If web search IS needed:
+   - Identify all entities that need separate searches
+   - Create focused, specific search queries for each entity
+   - Return results in the specified JSON format
+</instructions>
 
-Examples:
-1. If the query is "Which is better, OpenAI or Anthropic?", the output should be:
-```json
-{
-"search_queries": [
-    "OpenAI company overview features products strengths weaknesses",
-    "Anthropic company overview features products strengths weaknesses"
-]
+<examples>
+<example>
+Input: "What's the weather like in Seattle today?"
+Output: {
+  "web_search_required": true,
+  "search_queries": ["Seattle weather today"]
 }
-```
+</example>
 
-2. If the previous query was "best gaming phone" and the latest query is "search reddit", the output should be:
-```json
-{
-"search_queries": [
-    "reddit best gaming phone recommendations discussions"
-]
+<example>
+Input: "Which team has better stats this season, 2025 Celtics or 2025 Lakers?"
+Output: {
+  "web_search_required": true,
+  "search_queries": ["2025 Celtics stats", "2025 Lakers stats"]
 }
-```
+</example>
 
-3. If the query is "latest news", the output should be:
-```json
-{
-"search_queries": [
-    "latest news today current events"
-]
+<example>
+Input: "What is the capital of France?"
+Output: {"web_search_required": false}
+</example>
+
+<example>
+Input: "What are the business hours for Joe's Pizza on Main Street?"
+Output: {
+  "web_search_required": true,
+  "search_queries": ["Joe's Pizza Main Street business hours"]
 }
-```
+</example>
+</examples>
 
-4. If the query is "What's the weather like? search the net", the output should be:
-```json
-{
-"search_queries": [
-    "current weather forecast today"
-]
-}
-```
+<output_format>
+Return ONLY valid JSON in one of these formats:
+- If web search needed: {"web_search_required": true, "search_queries": ["query1", "query2"]}
+- If web search NOT needed: {"web_search_required": false}
+</output_format>
 
-5. If the previous query was "tell me about quantum computing" and the latest query is "search the net", the output should be:
-```json
-{
-"search_queries": [
-    "quantum computing explained overview principles applications"
-]
-}
-```
-
-6. If the query is "best laptop for programming search reddit", the output should be:
-```json
-{
-"search_queries": [
-    "reddit best laptop programming developers recommendations"
-]
-}
-```
-
-7. If the query is "climate change effects search youtube", the output should be:
-```json
-{
-"search_queries": [
-    "youtube climate change effects impacts environment documentary"
-]
-}
-```
-
-8. If the query is "the great wall of china is 50,000 miles long fact check", the output should be:
-```json
-{
-"search_queries": [
-    "great wall of china length fact check actual size miles kilometers"
-]
-}
-```
-
-9. If the query is "vaccines cause autism verify this", the output should be:
-```json
-{
-"search_queries": [
-    "vaccines autism myth debunked fact check scientific evidence studies"
-]
-}
-```
-
-10. If the previous query was "the moon landing was fake" and the latest query is "fact check", the output should be:
-```json
-{
-"search_queries": [
-    "moon landing fake conspiracy theory fact check evidence debunked"
-]
-}
-```
-
-11. If the query is "Einstein invented the internet is this true", the output should be:
-```json
-{
-"search_queries": [
-    "Einstein internet invention fact check false claim history"
-]
-}
-```
-
-12. If the query is "coffee is good for you confirm this", the output should be:
-```json
-{
-"search_queries": [
-    "coffee health benefits risks scientific studies research evidence"
-]
-}
-```
-
-13. If the query is "hi", the output must be:
-```
-<web_not_needed>
-```
-
-14. If the query is "hi fact check", the output should be:
-```json
-{
-"search_queries": [
-    "hi greeting word origin meaning fact check"
-]
-}
-```
-
-<latest query>
+<query>
 {latest_query}
-</latest query>
+</query>
 """.strip()
 # --- ADDED DEFAULT GROUNDING PROMPT ---
 DEFAULT_GROUNDING_SYSTEM_PROMPT = """

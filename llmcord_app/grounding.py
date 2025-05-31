@@ -889,40 +889,50 @@ async def generate_search_queries_with_custom_prompt(
         if content_to_process.endswith("```"):
             content_to_process = content_to_process[: -len("```")].strip()
 
-        # Now, check for the sentinel *before* JSON parsing
-        if content_to_process == "<web_not_needed>":
-            logging.info(
-                "LLM indicated no web search is needed via custom prompt (sentinel check after markdown strip)."
-            )
-            return None
-
-        # If not the sentinel, then attempt to parse as JSON
+        # Parse as JSON and expect the new structure
         try:
             parsed_response = json.loads(content_to_process)
-            if isinstance(parsed_response, dict):
-                search_queries = parsed_response.get("search_queries")
-                if isinstance(search_queries, list) and all(
-                    isinstance(q, str) for q in search_queries
-                ):
-                    logging.info(
-                        f"Successfully generated {len(search_queries)} search queries via custom prompt."
-                    )
-                    return search_queries
+            if (
+                isinstance(parsed_response, dict)
+                and "web_search_required" in parsed_response
+                and isinstance(parsed_response["web_search_required"], bool)
+            ):
+                if parsed_response["web_search_required"]:
+                    search_queries = parsed_response.get("search_queries")
+                    if (
+                        isinstance(search_queries, list)
+                        and all(isinstance(q, str) for q in search_queries)
+                    ):
+                        logging.info(
+                            f"Successfully generated {len(search_queries)} search queries via custom prompt."
+                        )
+                        return {
+                            "web_search_required": True,
+                            "search_queries": search_queries,
+                        }
+                    else:
+                        logging.warning(
+                            f"web_search_required is true but 'search_queries' is missing or invalid. Response: {content_to_process}"
+                        )
+                        return {
+                            "web_search_required": True,
+                            "search_queries": [],
+                        }
                 else:
-                    logging.warning(
-                        f"Parsed JSON does not contain a valid 'search_queries' list. Response: {content_to_process}"
+                    logging.info(
+                        "LLM indicated no web search is needed via 'web_search_required': false."
                     )
-                    return None
+                    return {"web_search_required": False}
             else:
                 logging.warning(
-                    f"Parsed JSON is not a dictionary. Response: {content_to_process}"
+                    f"Parsed JSON does not match expected structure. Response: {content_to_process}"
                 )
-                return None
+                return {"web_search_required": False}
         except json.JSONDecodeError:
             logging.warning(
                 f"Failed to parse LLM response as JSON for search query generation. Response: {content_to_process}"
             )
-            return None
+            return {"web_search_required": False}
 
     except AllKeysFailedError as e:
         logging.error(
