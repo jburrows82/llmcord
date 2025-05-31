@@ -1174,7 +1174,9 @@ async def generate_response_stream(
                             f"Google API InvalidArgument Details: {e.details}"
                         )
                     llm_errors.append(f"Key {key_display}: Initial Bad Request - {e}")
-                    last_error_type = "bad_request"  # Set last_error_type for consistency
+                    last_error_type = (
+                        "bad_request"  # Set last_error_type for consistency
+                    )
                     break  # Changed from raise to break to try next key
 
             except UnprocessableEntityError as e:  # OpenAI specific 422
@@ -1278,16 +1280,20 @@ Output only the improved prompt, without any preamble or explanation.
 Improved Prompt:"""
 
     # The main instruction and content are now part of the user message.
-    history_for_enhancement_llm = [{"role": "user", "content": enhancement_user_prompt_content}]
+    history_for_enhancement_llm = [
+        {"role": "user", "content": enhancement_user_prompt_content}
+    ]
 
-    logging.info(f"Attempting to enhance prompt using {provider}/{model_name} with instructions as user prompt.")
+    logging.info(
+        f"Attempting to enhance prompt using {provider}/{model_name} with instructions as user prompt."
+    )
 
     # Use the existing generate_response_stream function
     async for chunk_tuple in generate_response_stream(
         provider=provider,
         model_name=model_name,
         history_for_llm=history_for_enhancement_llm,
-        system_prompt_text=None, # System prompt is not used for this specific call
+        system_prompt_text=None,  # System prompt is not used for this specific call
         provider_config=provider_config,
         extra_params=extra_params,
         app_config=app_config,

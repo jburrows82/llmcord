@@ -48,7 +48,8 @@ from .commands import (
     get_user_gemini_thinking_budget_preference,
     help_command,
     load_all_preferences,
-    enhance_prompt_command, # Added
+    enhance_prompt_command,  # Added for slash command
+    _execute_enhance_prompt_logic,  # Added for prefix command
 )
 from .permissions import is_message_allowed
 from .external_content import (
@@ -193,7 +194,118 @@ class LLMCordClient(discord.Client):
             should_process = True
 
         if not should_process:
-            return
+            # --- ADDED: Prefix command handling BEFORE should_process check for other types of messages ---
+            # Check for !enhanceprompt prefix command
+            ENHANCE_CMD_PREFIX = "!enhanceprompt"
+            if new_msg.content.startswith(ENHANCE_CMD_PREFIX):
+                if not is_message_allowed(
+                    new_msg, self.config, is_dm
+                ):  # Still check permissions
+                    logging.warning(
+                        f"Blocked {ENHANCE_CMD_PREFIX} from user {new_msg.author.id} in channel {new_msg.channel.id} due to permissions."
+                    )
+                    return
+
+                # Extract text after the command prefix, if any. Handles "!enhanceprompt" and "!enhanceprompt text"
+                text_content_from_message = new_msg.content[
+                    len(ENHANCE_CMD_PREFIX) :
+                ].strip()
+
+                prompt_text_for_prefix_cmd = ""
+                processed_from_file = False
+                attachment_filename = None
+                initial_status_message = "⏳ Enhancing your prompt..."  # Default
+
+                if new_msg.attachments:
+                    for attachment in new_msg.attachments:
+                        # Prioritize text files based on content_type.
+                        # Also consider common text file extensions if content_type is generic.
+                        is_text_content_type = (
+                            attachment.content_type
+                            and attachment.content_type.startswith("text/")
+                        )
+                        is_common_text_extension = attachment.filename.lower().endswith(
+                            (
+                                ".txt",
+                                ".md",
+                                ".py",
+                                ".js",
+                                ".html",
+                                ".css",
+                                ".json",
+                                ".xml",
+                                ".csv",
+                            )
+                        )
+
+                        if is_text_content_type or (
+                            attachment.content_type == "application/octet-stream"
+                            and is_common_text_extension
+                        ):
+                            try:
+                                file_bytes = await attachment.read()
+                                prompt_text_for_prefix_cmd = file_bytes.decode(
+                                    "utf-8", errors="replace"
+                                )
+                                attachment_filename = attachment.filename
+                                processed_from_file = True
+                                initial_status_message = f"⏳ Enhancing prompt from file `{discord.utils.escape_markdown(attachment_filename)}`..."
+                                logging.info(
+                                    f"{ENHANCE_CMD_PREFIX}: Processing content from attachment: {attachment.filename}"
+                                )
+                                break  # Process first valid text file
+                            except Exception as e:
+                                logging.error(
+                                    f"Error reading attachment {attachment.filename} for {ENHANCE_CMD_PREFIX}: {e}"
+                                )
+                                await new_msg.reply(
+                                    f"Sorry, I couldn't read the file: {attachment.filename}.",
+                                    mention_author=False,
+                                )
+                                return
+
+                if (
+                    not processed_from_file
+                ):  # No suitable file processed, or no attachments
+                    prompt_text_for_prefix_cmd = text_content_from_message
+
+                # After attempting to get from file or text, check if we have a prompt
+                if not prompt_text_for_prefix_cmd.strip():
+                    if (
+                        new_msg.attachments and not processed_from_file
+                    ):  # Attachments were present but not suitable
+                        await new_msg.reply(
+                            f"No suitable text file found in attachments for `{ENHANCE_CMD_PREFIX}`. Please provide a prompt as text or attach a recognized text file.",
+                            mention_author=False,
+                        )
+                    else:  # No text and no attachments or no suitable file
+                        await new_msg.reply(
+                            f"Please provide a prompt to enhance (either as text after `{ENHANCE_CMD_PREFIX}` or as a text file attachment).",
+                            mention_author=False,
+                        )
+                    return
+
+                try:
+                    await new_msg.reply(initial_status_message, mention_author=False)
+                except discord.HTTPException as e:
+                    logging.warning(
+                        f"Failed to send initial processing message for {ENHANCE_CMD_PREFIX}: {e}"
+                    )
+
+                # Call the refactored logic
+                await _execute_enhance_prompt_logic(
+                    new_msg, prompt_text_for_prefix_cmd, self
+                )
+
+                # If an initial reply was sent and the logic function sent more messages,
+                # we might want to delete the initial "Enhancing..." message if it's now redundant.
+                # However, _execute_enhance_prompt_logic now handles all replies.
+                # For simplicity, we'll leave the initial "Enhancing..." message if it was sent.
+                # Or, _execute_enhance_prompt_logic could take an optional initial_message_to_edit.
+                # For now, this is okay. The main responses will be replies.
+                return  # Handled as a prefix command
+
+            return  # If not a prefix command and not should_process for other reasons
 
         # --- Reload config & Check Global Reset ---
         # Config is now an instance variable, consider if reloading is needed per message

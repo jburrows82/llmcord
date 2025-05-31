@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.app_commands import Choice
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 import logging
 import json
 import os
@@ -13,8 +13,10 @@ from .constants import (
     USER_SYSTEM_PROMPTS_FILENAME,
     USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
     USER_MODEL_PREFS_FILENAME,
+    MAX_PLAIN_TEXT_LENGTH,  # Discord message character limit
 )
 from .llm_handler import enhance_prompt_with_llm
+from .ui import ResponseActionView  # For the button
 
 logger = logging.getLogger(__name__)
 
@@ -370,18 +372,67 @@ async def help_command(interaction: discord.Interaction):
             ephemeral=True,
         )
 
+
 # --- ADDED: Slash Command for Enhancing Prompts ---
-@app_commands.describe(prompt="The prompt you want to enhance.")
-async def enhance_prompt_command(interaction: discord.Interaction, prompt: str):
+
+
+async def _execute_enhance_prompt_logic(
+    response_target: Union[discord.Interaction, discord.Message],
+    original_prompt_text: str,
+    client_obj: discord.Client,
+):
     """
-    Enhances a given prompt using an LLM based on predefined strategies.
+    Core logic for enhancing a prompt and sending the response.
+    Can be called from a slash command (Interaction) or a prefix command (Message).
     """
-    await interaction.response.defer(ephemeral=False, thinking=True)
-    enhanced_prompt_text = ""
+    enhanced_prompt_text_from_llm = ""
     error_occurred = False
-    final_error_message_to_user = "Sorry, I encountered an error while trying to enhance your prompt."
+    final_error_message_to_user = (
+        "Sorry, I encountered an error while trying to enhance your prompt."
+    )
     prompt_design_strategies_doc = ""
     prompt_guide_2_doc = ""
+
+    user_obj = (
+        response_target.user
+        if isinstance(response_target, discord.Interaction)
+        else response_target.author
+    )
+    app_config = client_obj.config  # Assumes client_obj has a .config attribute
+
+    # Determine how to send messages
+    async def send_response(
+        content: Optional[str] = None,
+        view: Optional[discord.ui.View] = None,
+        ephemeral: bool = False,
+        initial: bool = False,
+    ):
+        if isinstance(response_target, discord.Interaction):
+            if (
+                initial
+                and hasattr(response_target, "response")
+                and not response_target.response.is_done()
+            ):
+                # This case is tricky with defer. For now, all interaction responses use followup.
+                # If defer was called, followup is needed.
+                return await response_target.followup.send(
+                    content=content, view=view, ephemeral=ephemeral
+                )
+            return await response_target.followup.send(
+                content=content, view=view, ephemeral=ephemeral
+            )
+        elif isinstance(response_target, discord.Message):
+            # For message commands, typically reply or send to channel.
+            # Let's use reply for subsequent messages if an initial one was sent, else channel.send or reply.
+            # For simplicity now, always reply.
+            send_kwargs = {"mention_author": False}
+            if content:
+                send_kwargs["content"] = content
+            if view:
+                send_kwargs["view"] = view
+            # ephemeral not directly supported for message.reply, user sees it.
+            return await response_target.reply(**send_kwargs)
+        return None
 
     try:
         # Load prompt enhancement documents
@@ -396,85 +447,276 @@ async def enhance_prompt_command(interaction: discord.Interaction, prompt: str):
                 prompt_guide_2_doc = await f.read()
         except FileNotFoundError as fnf_err:
             logger.error(f"Prompt enhancement document not found: {fnf_err}")
-            await interaction.followup.send("A required document for prompt enhancement is missing. Please contact the bot administrator.", ephemeral=True)
+            await send_response(
+                content="A required document for prompt enhancement is missing. Please contact the bot administrator.",
+                ephemeral=True,
+            )
             return
         except IOError as io_err:
             logger.error(f"IOError reading prompt enhancement document: {io_err}")
-            await interaction.followup.send("Could not read a required document for prompt enhancement. Please contact the bot administrator.", ephemeral=True)
+            await send_response(
+                content="Could not read a required document for prompt enhancement. Please contact the bot administrator.",
+                ephemeral=True,
+            )
             return
 
-        if not hasattr(interaction.client, "config"):
-            logger.error("Client object does not have a 'config' attribute for enhance_prompt_command.")
-            await interaction.followup.send(final_error_message_to_user, ephemeral=True)
-            return
-
-        app_config = interaction.client.config
-        default_enhance_model = "google/gemini-1.0-pro" # Default if not specified in config
-        enhance_model_str = app_config.get("enhance_prompt_model", default_enhance_model)
+        default_enhance_model = "google/gemini-1.0-pro"
+        enhance_model_str = app_config.get(
+            "enhance_prompt_model", default_enhance_model
+        )
 
         try:
             provider, model_name = enhance_model_str.split("/", 1)
         except ValueError:
-            logger.error(f"Invalid format for enhance_prompt_model: '{enhance_model_str}'. Using default: {default_enhance_model}")
+            logger.error(
+                f"Invalid format for enhance_prompt_model: '{enhance_model_str}'. Using default: {default_enhance_model}"
+            )
             provider, model_name = default_enhance_model.split("/", 1)
             final_error_message_to_user = f"Error in config for enhancement model (using default). {final_error_message_to_user}"
 
-
-        provider_config = app_config.get("providers", {}).get(provider, {})
-        if not provider_config or not provider_config.get("api_keys"):
-            logger.error(f"No API keys or config for provider '{provider}' (enhancement model).")
-            await interaction.followup.send(f"Configuration error for enhancement model's provider '{provider}'. {final_error_message_to_user}", ephemeral=True)
+        provider_config_from_app = app_config.get("providers", {}).get(provider, {})
+        if not provider_config_from_app or not provider_config_from_app.get("api_keys"):
+            logger.error(
+                f"No API keys or config for provider '{provider}' (enhancement model)."
+            )
+            await send_response(
+                content=f"Configuration error for enhancement model's provider '{provider}'. {final_error_message_to_user}",
+                ephemeral=True,
+            )
             return
 
-        extra_params = app_config.get("extra_api_parameters", {}).copy()
+        extra_params_from_app = app_config.get("extra_api_parameters", {}).copy()
 
-        async for text_chunk, finish_reason, _, error_message in enhance_prompt_with_llm(
-            prompt_to_enhance=prompt,
+        async for (
+            text_chunk,
+            finish_reason,
+            _,
+            error_message_llm,
+        ) in enhance_prompt_with_llm(
+            prompt_to_enhance=original_prompt_text,
             prompt_design_strategies_doc=prompt_design_strategies_doc,
             prompt_guide_2_doc=prompt_guide_2_doc,
             provider=provider,
             model_name=model_name,
-            provider_config=provider_config,
-            extra_params=extra_params,
+            provider_config=provider_config_from_app,
+            extra_params=extra_params_from_app,
             app_config=app_config,
         ):
-            if error_message:
-                logger.error(f"LLM enhancement stream error: {error_message}")
-                final_error_message_to_user = f"An error occurred during enhancement: {error_message}"
+            if error_message_llm:
+                logger.error(f"LLM enhancement stream error: {error_message_llm}")
+                final_error_message_to_user = (
+                    f"An error occurred during enhancement: {error_message_llm}"
+                )
                 error_occurred = True
                 break
             if text_chunk:
-                enhanced_prompt_text += text_chunk
+                enhanced_prompt_text_from_llm += text_chunk
             if finish_reason:
                 logger.info(f"LLM enhancement finished. Reason: {finish_reason}")
-                if finish_reason not in ["stop", "length", "end_turn", "FINISH_REASON_UNSPECIFIED"]:
-                    logger.warning(f"Unexpected finish reason from LLM: {finish_reason}")
+                if finish_reason not in [
+                    "stop",
+                    "length",
+                    "end_turn",
+                    "FINISH_REASON_UNSPECIFIED",
+                ]:
+                    logger.warning(
+                        f"Unexpected finish reason from LLM: {finish_reason}"
+                    )
                 break
-        
+
         if error_occurred:
-            await interaction.followup.send(final_error_message_to_user, ephemeral=True)
+            await send_response(content=final_error_message_to_user, ephemeral=True)
             return
 
-        if not enhanced_prompt_text.strip():
+        if not enhanced_prompt_text_from_llm.strip():
             logger.warning("LLM returned an empty enhanced prompt.")
-            await interaction.followup.send("The LLM returned an empty enhanced prompt. Please try again.", ephemeral=True)
+            await send_response(
+                content="The LLM returned an empty enhanced prompt. Please try again.",
+                ephemeral=True,
+            )
             return
 
-        response_content = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(prompt)}\n```\n**Enhanced Prompt (Model: {provider}/{model_name}):**\n```\n{discord.utils.escape_markdown(enhanced_prompt_text.strip())}\n```"
-        
-        if len(response_content) > 1990: # Adjusted for safety margin
-            available_space = 1990 - (len(response_content) - len(enhanced_prompt_text.strip()))
-            if available_space > 50:
-                 enhanced_prompt_text = enhanced_prompt_text.strip()[:available_space] + "..."
-                 response_content = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(prompt)}\n```\n**Enhanced Prompt (Model: {provider}/{model_name}) (truncated):**\n```\n{discord.utils.escape_markdown(enhanced_prompt_text)}\n```"
-            else:
-                await interaction.followup.send("The enhanced prompt is too long to display.", ephemeral=True)
-                return
+        # --- Response Formatting and Sending ---
+        original_prompt_display_str = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(original_prompt_text)}\n```\n"
+        model_info_display_str = f"**(Enhanced by Model: {provider}/{model_name})**"
+        full_enhanced_prompt_text_for_file = (
+            enhanced_prompt_text_from_llm.strip()
+        )  # Raw for file
 
-        await interaction.followup.send(response_content)
-        logger.info(f"User {interaction.user.id} ({interaction.user.name}) successfully used /enhanceprompt for: \"{prompt[:50]}...\" with model {provider}/{model_name}")
+        escaped_full_enhanced_text_for_display = discord.utils.escape_markdown(
+            full_enhanced_prompt_text_for_file
+        )
+
+        # Prepare the button view
+        simple_view_for_button = discord.ui.View(timeout=None)
+        simple_view_for_button.add_item(ResponseActionView.GetTextFileButton(row=0))
+        simple_view_for_button.full_response_text = full_enhanced_prompt_text_for_file
+        simple_view_for_button.model_name = f"{provider}_{model_name}_enhanced_prompt"
+
+        sent_message_for_button_hook: Optional[discord.Message] = None
+
+        # Check if the combined initial parts + header + full enhanced text fits
+        combined_message_for_single_send = (
+            f"{original_prompt_display_str}"
+            f"**Enhanced Prompt {model_info_display_str}:**\n"
+            f"```\n{escaped_full_enhanced_text_for_display}\n```"
+        )
+
+        if len(combined_message_for_single_send) <= MAX_PLAIN_TEXT_LENGTH:
+            sent_message_for_button_hook = await send_response(
+                content=combined_message_for_single_send,
+                view=simple_view_for_button,
+                initial=True,
+            )
+        else:
+            # Content is too long, split it
+            messages_to_send_parts_list = []
+
+            # Define a helper for splitting text meant for code blocks
+            def split_text_for_code_blocks(
+                text_content: str,
+            ) -> List[str]:  # Removed header param, it's handled outside
+                parts = []
+                safety_margin = 30
+                code_block_wrapper_len = len("```\n\n```")
+                max_text_in_chunk = (
+                    MAX_PLAIN_TEXT_LENGTH - code_block_wrapper_len - safety_margin
+                )
+
+                if max_text_in_chunk <= 10:
+                    logger.warning(
+                        f"Cannot effectively split text for code blocks, max_text_in_chunk: {max_text_in_chunk}. Sending truncated."
+                    )
+                    if text_content:
+                        parts.append(
+                            f"```\n{text_content[: max_text_in_chunk - len('...')] if max_text_in_chunk > len('...') else ''}...\n```"
+                        )
+                    else:
+                        parts.append(
+                            "```\n...\n```"
+                        )  # Should not happen if text_content is not empty
+                    return parts
+
+                idx = 0
+                while idx < len(text_content):
+                    chunk = text_content[idx : idx + max_text_in_chunk]
+                    parts.append(f"```\n{chunk}\n```")
+                    idx += len(chunk)
+                return parts
+
+            # 1. Handle Original Prompt Display
+            original_prompt_header_text = "**Original Prompt:**"
+            messages_to_send_parts_list.append(original_prompt_header_text)
+            escaped_original_content = discord.utils.escape_markdown(
+                original_prompt_text
+            )
+            messages_to_send_parts_list.extend(
+                split_text_for_code_blocks(escaped_original_content)
+            )
+
+            # 2. Enhanced Prompt Header
+            messages_to_send_parts_list.append(
+                f"**Enhanced Prompt {model_info_display_str}:**"
+            )
+
+            # 3. Enhanced Prompt Content (already escaped as escaped_full_enhanced_text_for_display)
+            messages_to_send_parts_list.extend(
+                split_text_for_code_blocks(escaped_full_enhanced_text_for_display)
+            )
+
+            # Sending logic
+            last_sent_msg_obj = None
+            for i, part_content_split in enumerate(messages_to_send_parts_list):
+                is_last_part_split = i == len(messages_to_send_parts_list) - 1
+                current_view_for_this_part = (
+                    simple_view_for_button if is_last_part_split else None
+                )
+
+                send_kwargs_split = {}
+                if current_view_for_this_part:
+                    send_kwargs_split["view"] = current_view_for_this_part
+
+                if not part_content_split.strip():
+                    logger.warning(
+                        f"Skipping empty message part at index {i} during enhance prompt split."
+                    )
+                    if (
+                        is_last_part_split
+                        and last_sent_msg_obj
+                        and not last_sent_msg_obj.view
+                    ):
+                        try:
+                            await last_sent_msg_obj.edit(view=simple_view_for_button)
+                            sent_message_for_button_hook = last_sent_msg_obj
+                        except discord.HTTPException as e_edit:
+                            logger.error(
+                                f"Failed to attach view to previous message on empty last part: {e_edit}"
+                            )
+                    continue
+
+                last_sent_msg_obj = await send_response(
+                    content=part_content_split,
+                    **send_kwargs_split,
+                    initial=(
+                        i == 0 and isinstance(response_target, discord.Interaction)
+                    ),
+                )
+
+                if is_last_part_split:
+                    sent_message_for_button_hook = last_sent_msg_obj
+
+        # Hook the sent message to the view if necessary
+        if sent_message_for_button_hook and simple_view_for_button.children:
+            # The view itself (simple_view_for_button) is what the button's callback will access via self.view
+            # If the button's logic needs self.view.message, it should be set on simple_view_for_button
+            if hasattr(simple_view_for_button, "message"):
+                simple_view_for_button.message = sent_message_for_button_hook
+            # For the GetTextFileButton, it accesses self.view.full_response_text and self.view.model_name,
+            # which are already set on simple_view_for_button directly.
+            # The `item.message = sent_message` was more for ResponseActionView's on_timeout, which is disabled here.
+
+        logger.info(
+            f'User {user_obj.id} ({user_obj.name}) successfully used enhanceprompt for: "{original_prompt_text[:50]}..." with model {provider}/{model_name}'
+        )
 
     except Exception as e:
-        logger.error(f"Critical error in enhance_prompt_command for user {interaction.user.id}: {e}", exc_info=True)
-        if not interaction.response.is_done():
-             await interaction.followup.send(final_error_message_to_user,ephemeral=True)
+        logger.error(
+            f"Critical error in _execute_enhance_prompt_logic for user {user_obj.id}: {e}",
+            exc_info=True,
+        )
+        try:
+            if isinstance(response_target, discord.Interaction):
+                if not response_target.response.is_done():
+                    await response_target.response.send_message(
+                        final_error_message_to_user, ephemeral=True
+                    )
+                else:
+                    await response_target.followup.send(
+                        final_error_message_to_user, ephemeral=True
+                    )
+            elif isinstance(response_target, discord.Message):
+                await response_target.reply(
+                    final_error_message_to_user, mention_author=False
+                )
+        except discord.HTTPException as http_err:
+            logger.error(
+                f"Failed to send error message for _execute_enhance_prompt_logic: {http_err}"
+            )
+
+
+@app_commands.describe(prompt="The prompt you want to enhance.")
+async def enhance_prompt_command(interaction: discord.Interaction, prompt: str):
+    """
+    Enhances a given prompt using an LLM based on predefined strategies.
+    """
+    if not hasattr(interaction.client, "config"):  # Basic check before defer
+        logger.error(
+            "Client object does not have a 'config' attribute for enhance_prompt_command."
+        )
+        await interaction.response.send_message(
+            "Bot configuration error.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=False, thinking=True)
+    await _execute_enhance_prompt_logic(interaction, prompt, interaction.client)
