@@ -771,7 +771,29 @@ async def generate_search_queries_with_custom_prompt(
     current_day_of_week_str = now.strftime("%A")
     current_time_str = now.strftime("%I:%M %p")  # e.g., "02:30 PM"
 
+    # Insert previous_query if available (second-to-last user message)
+    previous_query = ""
+    if len(chat_history) > 1:
+        # Find the last user message before the latest_query
+        for entry in reversed(chat_history[:-1]):
+            if entry.get("role") == "user" and isinstance(entry.get("content"), (str, list, dict)):
+                # If content is a list (OpenAI format), try to extract text
+                if isinstance(entry["content"], list):
+                    for part in entry["content"]:
+                        if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                            previous_query = part["text"]
+                            break
+                    if previous_query:
+                        break
+                elif isinstance(entry["content"], dict):
+                    if entry["content"].get("type") == "text" and entry["content"].get("text"):
+                        previous_query = entry["content"]["text"]
+                        break
+                elif isinstance(entry["content"], str):
+                    previous_query = entry["content"]
+                    break
     formatted_prompt = prompt_template.replace("{latest_query}", latest_query)
+    formatted_prompt = formatted_prompt.replace("{previous_query}", previous_query)
     formatted_prompt = formatted_prompt.replace("{current_date}", current_date_str)
     formatted_prompt = formatted_prompt.replace(
         "{current_day_of_week}", current_day_of_week_str
