@@ -1238,6 +1238,7 @@ async def enhance_prompt_with_llm(
     prompt_to_enhance: str,
     prompt_design_strategies_doc: str,
     prompt_guide_2_doc: str,
+    prompt_guide_3_doc: str,
     provider: str,
     model_name: str,
     provider_config: Dict[str, Any],
@@ -1253,6 +1254,7 @@ async def enhance_prompt_with_llm(
         prompt_to_enhance: The user's original prompt.
         prompt_design_strategies_doc: Content of the 'prompt design strategies' document.
         prompt_guide_2_doc: Content of the 'prompt guide 2' document.
+        prompt_guide_3_doc: Content of the 'prompt guide 3' document.
         provider: The LLM provider.
         model_name: The LLM model name.
         provider_config: Configuration for the provider.
@@ -1262,7 +1264,7 @@ async def enhance_prompt_with_llm(
     Yields:
         Same as generate_response_stream.
     """
-    enhancement_user_prompt_content = f"""Improve the following user prompt so it follows the prompt design strategies and prompt guide provided below.
+    enhancement_user_prompt_content = f"""Improve the following user prompt so it follows the prompt design strategies and prompt guides provided below.
 Output only the improved prompt, without any preamble or explanation.
 
 <my prompt>
@@ -1276,6 +1278,10 @@ Output only the improved prompt, without any preamble or explanation.
 <prompt guide 2>
 {prompt_guide_2_doc}
 </prompt guide 2>
+
+<prompt guide 3>
+{prompt_guide_3_doc}
+</prompt guide 3>
 
 Improved Prompt:"""
 

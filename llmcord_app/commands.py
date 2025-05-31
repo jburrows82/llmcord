@@ -439,12 +439,15 @@ async def _execute_enhance_prompt_logic(
         doc_path_base = "prompt_data"
         strategies_doc_path = os.path.join(doc_path_base, "prompt_design_strategies.md")
         guide_2_doc_path = os.path.join(doc_path_base, "prompt_guide_2.md")
+        guide_3_doc_path = os.path.join(doc_path_base, "prompt_guide_3.md")
 
         try:
             async with aiofiles.open(strategies_doc_path, "r", encoding="utf-8") as f:
                 prompt_design_strategies_doc = await f.read()
             async with aiofiles.open(guide_2_doc_path, "r", encoding="utf-8") as f:
                 prompt_guide_2_doc = await f.read()
+            async with aiofiles.open(guide_3_doc_path, "r", encoding="utf-8") as f:
+                prompt_guide_3_doc = await f.read()
         except FileNotFoundError as fnf_err:
             logger.error(f"Prompt enhancement document not found: {fnf_err}")
             await send_response(
@@ -496,6 +499,7 @@ async def _execute_enhance_prompt_logic(
             prompt_to_enhance=original_prompt_text,
             prompt_design_strategies_doc=prompt_design_strategies_doc,
             prompt_guide_2_doc=prompt_guide_2_doc,
+            prompt_guide_3_doc=prompt_guide_3_doc,
             provider=provider,
             model_name=model_name,
             provider_config=provider_config_from_app,
