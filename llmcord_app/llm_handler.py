@@ -853,69 +853,73 @@ async def generate_response_stream(
                                             )
 
                                             img = Image.open(io.BytesIO(image_bytes))
-                                            original_format = img.format or (
-                                                mime_type.split("/")[-1].upper()
-                                                if "/" in mime_type
-                                                else "PNG"
-                                            )
+                                            try:
+                                                original_format = img.format or (
+                                                    mime_type.split("/")[-1].upper()
+                                                    if "/" in mime_type
+                                                    else "PNG"
+                                                )
 
-                                            # Apply resizing
-                                            if current_resize_factor < 1.0:
-                                                new_width = int(
-                                                    img.width * current_resize_factor
-                                                )
-                                                new_height = int(
-                                                    img.height * current_resize_factor
-                                                )
-                                                if (
-                                                    new_width > 0 and new_height > 0
-                                                ):  # Ensure dimensions are positive
-                                                    logging.debug(
-                                                        f"Resizing image from {img.size} to ({new_width}, {new_height})"
+                                                # Apply resizing
+                                                if current_resize_factor < 1.0:
+                                                    new_width = int(
+                                                        img.width
+                                                        * current_resize_factor
                                                     )
-                                                    img = img.resize(
-                                                        (new_width, new_height),
-                                                        Image.Resampling.LANCZOS,
+                                                    new_height = int(
+                                                        img.height
+                                                        * current_resize_factor
                                                     )
+                                                    if (
+                                                        new_width > 0 and new_height > 0
+                                                    ):  # Ensure dimensions are positive
+                                                        logging.debug(
+                                                            f"Resizing image from {img.size} to ({new_width}, {new_height})"
+                                                        )
+                                                        img = img.resize(
+                                                            (new_width, new_height),
+                                                            Image.Resampling.LANCZOS,
+                                                        )
+                                                        history_was_modified_by_compression = True
+
+                                                output_buffer = io.BytesIO()
+                                                save_params = {}
+                                                target_format = original_format
+
+                                                if original_format in ["JPEG", "WEBP"]:
+                                                    save_params["quality"] = (
+                                                        current_compression_quality
+                                                    )
+                                                    target_format = "JPEG"  # Prefer JPEG for quality adjustments
+                                                    if (
+                                                        img.mode == "RGBA"
+                                                        or img.mode == "LA"
+                                                        or (
+                                                            img.mode == "P"
+                                                            and "transparency"
+                                                            in img.info
+                                                        )
+                                                    ):
+                                                        logging.debug(
+                                                            f"Image has alpha, converting to RGB for JPEG. Original mode: {img.mode}"
+                                                        )
+                                                        img = img.convert("RGB")
                                                     history_was_modified_by_compression = True
+                                                elif original_format == "PNG":
+                                                    save_params["optimize"] = True
+                                                    # Could also consider reducing colors for PNG if size is still an issue: img = img.quantize(colors=128)
+                                                    # For now, rely on resize and potential future conversion to JPEG if PNGs are too large.
 
-                                            output_buffer = io.BytesIO()
-                                            save_params = {}
-                                            target_format = original_format
-
-                                            if original_format in ["JPEG", "WEBP"]:
-                                                save_params["quality"] = (
-                                                    current_compression_quality
+                                                img.save(
+                                                    output_buffer,
+                                                    format=target_format,
+                                                    **save_params,
                                                 )
-                                                target_format = "JPEG"  # Prefer JPEG for quality adjustments
-                                                if (
-                                                    img.mode == "RGBA"
-                                                    or img.mode == "LA"
-                                                    or (
-                                                        img.mode == "P"
-                                                        and "transparency" in img.info
-                                                    )
-                                                ):
-                                                    logging.debug(
-                                                        f"Image has alpha, converting to RGB for JPEG. Original mode: {img.mode}"
-                                                    )
-                                                    img = img.convert("RGB")
-                                                history_was_modified_by_compression = (
-                                                    True
+                                                compressed_image_bytes = (
+                                                    output_buffer.getvalue()
                                                 )
-                                            elif original_format == "PNG":
-                                                save_params["optimize"] = True
-                                                # Could also consider reducing colors for PNG if size is still an issue: img = img.quantize(colors=128)
-                                                # For now, rely on resize and potential future conversion to JPEG if PNGs are too large.
-
-                                            img.save(
-                                                output_buffer,
-                                                format=target_format,
-                                                **save_params,
-                                            )
-                                            compressed_image_bytes = (
-                                                output_buffer.getvalue()
-                                            )
+                                            finally:
+                                                img.close()
 
                                             new_mime_type = (
                                                 f"image/{target_format.lower()}"
@@ -1065,60 +1069,63 @@ async def generate_response_stream(
                                     try:
                                         image_bytes = part.inline_data.data
                                         img = Image.open(io.BytesIO(image_bytes))
-                                        original_format = img.format or (
-                                            part.inline_data.mime_type.split("/")[
-                                                -1
-                                            ].upper()
-                                            if "/" in part.inline_data.mime_type
-                                            else "PNG"
-                                        )
+                                        try:
+                                            original_format = img.format or (
+                                                part.inline_data.mime_type.split("/")[
+                                                    -1
+                                                ].upper()
+                                                if "/" in part.inline_data.mime_type
+                                                else "PNG"
+                                            )
 
-                                        if current_resize_factor < 1.0:
-                                            new_width = int(
-                                                img.width * current_resize_factor
-                                            )
-                                            new_height = int(
-                                                img.height * current_resize_factor
-                                            )
-                                            if new_width > 0 and new_height > 0:
-                                                img = img.resize(
-                                                    (new_width, new_height),
-                                                    Image.Resampling.LANCZOS,
+                                            if current_resize_factor < 1.0:
+                                                new_width = int(
+                                                    img.width * current_resize_factor
                                                 )
+                                                new_height = int(
+                                                    img.height * current_resize_factor
+                                                )
+                                                if new_width > 0 and new_height > 0:
+                                                    img = img.resize(
+                                                        (new_width, new_height),
+                                                        Image.Resampling.LANCZOS,
+                                                    )
+                                                    history_was_modified_by_compression = True
+
+                                            output_buffer = io.BytesIO()
+                                            save_params = {}
+                                            target_format = original_format
+
+                                            if original_format in ["JPEG", "WEBP"]:
+                                                save_params["quality"] = (
+                                                    current_compression_quality
+                                                )
+                                                target_format = "JPEG"
+                                                if (
+                                                    img.mode == "RGBA"
+                                                    or img.mode == "LA"
+                                                    or (
+                                                        img.mode == "P"
+                                                        and "transparency" in img.info
+                                                    )
+                                                ):
+                                                    img = img.convert("RGB")
                                                 history_was_modified_by_compression = (
                                                     True
                                                 )
+                                            elif original_format == "PNG":
+                                                save_params["optimize"] = True
 
-                                        output_buffer = io.BytesIO()
-                                        save_params = {}
-                                        target_format = original_format
-
-                                        if original_format in ["JPEG", "WEBP"]:
-                                            save_params["quality"] = (
-                                                current_compression_quality
+                                            img.save(
+                                                output_buffer,
+                                                format=target_format,
+                                                **save_params,
                                             )
-                                            target_format = "JPEG"
-                                            if (
-                                                img.mode == "RGBA"
-                                                or img.mode == "LA"
-                                                or (
-                                                    img.mode == "P"
-                                                    and "transparency" in img.info
-                                                )
-                                            ):
-                                                img = img.convert("RGB")
-                                            history_was_modified_by_compression = True
-                                        elif original_format == "PNG":
-                                            save_params["optimize"] = True
-
-                                        img.save(
-                                            output_buffer,
-                                            format=target_format,
-                                            **save_params,
-                                        )
-                                        compressed_image_bytes = (
-                                            output_buffer.getvalue()
-                                        )
+                                            compressed_image_bytes = (
+                                                output_buffer.getvalue()
+                                            )
+                                        finally:
+                                            img.close()
 
                                         new_mime_type = f"image/{target_format.lower()}"
                                         new_gemini_parts.append(

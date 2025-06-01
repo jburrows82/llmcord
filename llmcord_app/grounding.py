@@ -303,8 +303,14 @@ async def fetch_and_format_searxng_results(
                     f"Source {item_idx + 1}: {item_url} (Type: {item_source_type})"
                 )
 
-                if item.get("processed_successfully") and item.get("data") and not item.get("error"):
-                    successful_api_results_count += 1 # Increment count for successful items
+                if (
+                    item.get("processed_successfully")
+                    and item.get("data")
+                    and not item.get("error")
+                ):
+                    successful_api_results_count += (
+                        1  # Increment count for successful items
+                    )
                     data = item["data"]
 
                     if item_source_type == "youtube":
@@ -718,7 +724,7 @@ async def fetch_and_format_searxng_results(
             "Answer the user's query based on the following:\n\n"
             + "\n\n".join(formatted_query_blocks)
         )
-        return final_context.strip(), 0 # 0 successful API results for SearxNG path
+        return final_context.strip(), 0  # 0 successful API results for SearxNG path
 
     logging.info(
         "No content successfully fetched and formatted from SearxNG result URLs."
@@ -780,17 +786,25 @@ async def generate_search_queries_with_custom_prompt(
     if len(chat_history) > 1:
         # Find the last user message before the latest_query
         for entry in reversed(chat_history[:-1]):
-            if entry.get("role") == "user" and isinstance(entry.get("content"), (str, list, dict)):
+            if entry.get("role") == "user" and isinstance(
+                entry.get("content"), (str, list, dict)
+            ):
                 # If content is a list (OpenAI format), try to extract text
                 if isinstance(entry["content"], list):
                     for part in entry["content"]:
-                        if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                        if (
+                            isinstance(part, dict)
+                            and part.get("type") == "text"
+                            and part.get("text")
+                        ):
                             previous_query = part["text"]
                             break
                     if previous_query:
                         break
                 elif isinstance(entry["content"], dict):
-                    if entry["content"].get("type") == "text" and entry["content"].get("text"):
+                    if entry["content"].get("type") == "text" and entry["content"].get(
+                        "text"
+                    ):
                         previous_query = entry["content"]["text"]
                         break
                 elif isinstance(entry["content"], str):
@@ -925,9 +939,8 @@ async def generate_search_queries_with_custom_prompt(
             ):
                 if parsed_response["web_search_required"]:
                     search_queries = parsed_response.get("search_queries")
-                    if (
-                        isinstance(search_queries, list)
-                        and all(isinstance(q, str) for q in search_queries)
+                    if isinstance(search_queries, list) and all(
+                        isinstance(q, str) for q in search_queries
                     ):
                         logging.info(
                             f"Successfully generated {len(search_queries)} search queries via custom prompt."

@@ -27,7 +27,7 @@ class ResponseActionView(ui.View):
         model_name: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,  # Added app_config
         # timeout=300): # Default timeout 5 minutes - OLD VALUE
-        timeout=None,
+        timeout=3600,  # 1 hour
     ):  # Set timeout to None for persistent view - NEW VALUE
         super().__init__(timeout=timeout)
         self.grounding_metadata = grounding_metadata
@@ -95,7 +95,7 @@ class ResponseActionView(ui.View):
                 # Check if the view hasn't already been replaced or removed
                 # Fetch the message again to ensure we have the latest state
                 message = await self.message.channel.fetch_message(self.message.id)
-                if message.view is self:  # Only edit if this view is still attached
+                if hasattr(message, 'view') and message.view is self:  # Only edit if this view is still attached
                     for item in self.children:
                         if isinstance(item, ui.Button):
                             item.disabled = True

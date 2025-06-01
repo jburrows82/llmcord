@@ -617,8 +617,8 @@ class LLMCordClient(discord.Client):
         combined_context = ""
         url_fetch_results = []
         custom_search_performed = False  # Flag to track if new search path was taken
-        custom_search_queries_generated_flag = False # New flag for footer
-        successful_api_results_count = 0 # New counter for footer
+        custom_search_queries_generated_flag = False  # New flag for footer
+        successful_api_results_count = 0  # New counter for footer
 
         all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
         user_has_provided_urls = bool(all_urls_in_cleaned_content)
@@ -726,18 +726,21 @@ class LLMCordClient(discord.Client):
                 ):
                     if custom_search_queries_result["web_search_required"]:
                         queries = custom_search_queries_result.get("search_queries", [])
-                        if queries: # Check if queries list is not empty
-                            custom_search_queries_generated_flag = True # Set flag
+                        if queries:  # Check if queries list is not empty
+                            custom_search_queries_generated_flag = True  # Set flag
                             logging.info(
                                 f"Custom prompt generated {len(queries)} search queries: {queries}"
                             )
-                            searxng_derived_context, count = await fetch_and_format_searxng_results(
+                            (
+                                searxng_derived_context,
+                                count,
+                            ) = await fetch_and_format_searxng_results(
                                 queries,
                                 cleaned_content,  # user_query_for_log
                                 self.config,
                                 self.httpx_client,
                             )
-                            successful_api_results_count = count # Store count
+                            successful_api_results_count = count  # Store count
                             if searxng_derived_context:
                                 combined_context = searxng_derived_context
                                 logging.info(
@@ -747,16 +750,20 @@ class LLMCordClient(discord.Client):
                                 logging.info(
                                     "Custom queries generated, but no content fetched/formatted from SearxNG."
                                 )
-                        else: # web_search_required is true, but no queries
+                        else:  # web_search_required is true, but no queries
                             logging.info(
                                 "web_search_required is true but no search queries were generated."
                             )
                             # custom_search_queries_generated_flag remains false
-                    else: # web_search_required is false
-                        logging.info("Custom prompt indicated no web search is needed (web_search_required: false).")
+                    else:  # web_search_required is false
+                        logging.info(
+                            "Custom prompt indicated no web search is needed (web_search_required: false)."
+                        )
                         # custom_search_queries_generated_flag remains false
-                else: # Unexpected structure or failure
-                    logging.warning("Custom search query generation returned unexpected structure or failed.")
+                else:  # Unexpected structure or failure
+                    logging.warning(
+                        "Custom search query generation returned unexpected structure or failed."
+                    )
                     # custom_search_queries_generated_flag remains false
             else:
                 logging.warning(
@@ -835,14 +842,17 @@ class LLMCordClient(discord.Client):
                 )
                 if web_search_queries:
                     # This path implies Gemini grounding, so internet was used if queries exist
-                    custom_search_queries_generated_flag = True # Set flag
-                    searxng_derived_context, count = await fetch_and_format_searxng_results(
+                    custom_search_queries_generated_flag = True  # Set flag
+                    (
+                        searxng_derived_context,
+                        count,
+                    ) = await fetch_and_format_searxng_results(
                         web_search_queries,
                         cleaned_content,
                         self.config,
                         self.httpx_client,
                     )
-                    successful_api_results_count = count # Store count
+                    successful_api_results_count = count  # Store count
                     if searxng_derived_context:
                         combined_context = searxng_derived_context
                     else:
@@ -970,8 +980,8 @@ class LLMCordClient(discord.Client):
             initial_user_warnings=user_warnings,
             use_plain_responses_config=use_plain_responses,
             split_limit_config=split_limit,
-            custom_search_queries_generated=custom_search_queries_generated_flag, # New
-            successful_api_results_count=successful_api_results_count, # New
+            custom_search_queries_generated=custom_search_queries_generated_flag,  # New
+            successful_api_results_count=successful_api_results_count,  # New
         )
 
         try:
@@ -987,14 +997,9 @@ class LLMCordClient(discord.Client):
                 if response_msg and response_msg.id in self.msg_nodes:
                     node = self.msg_nodes[response_msg.id]
                     if llm_call_successful:
-                        node.full_response_text = final_text
-                    if node.lock.locked():
-                        try:
-                            node.lock.release()
-                        except RuntimeError:
-                            logging.warning(
-                                f"Attempted to release an already unlocked lock for node {response_msg.id}"
-                            )
+                        async with node.lock:
+                            node.full_response_text = final_text
+                    # Explicit lock release removed as context manager handles it.
                 elif response_msg:
                     logging.warning(
                         f"Response message {response_msg.id} not found in msg_nodes during cleanup."
@@ -1006,16 +1011,9 @@ class LLMCordClient(discord.Client):
                     : num_nodes - max_nodes_from_config
                 ]
                 for msg_id in nodes_to_delete:
-                    node_to_delete = self.msg_nodes.get(msg_id)
-                    if (
-                        node_to_delete
-                        and hasattr(node_to_delete, "lock")
-                        and node_to_delete.lock.locked()
-                    ):
-                        try:
-                            node_to_delete.lock.release()
-                        except RuntimeError:
-                            pass
+                    # Lock handling removed here. If a node is being deleted,
+                    # any operations holding its lock should have completed or been cancelled.
+                    # The context manager at the point of lock acquisition would handle release.
                     self.msg_nodes.pop(msg_id, None)
 
             end_time = time.time()

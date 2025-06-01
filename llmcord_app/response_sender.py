@@ -155,17 +155,12 @@ async def handle_llm_response_stream(
                     finally:
                         # Clean up from msg_nodes cache
                         if msg_to_delete.id in client.msg_nodes:
-                            node_to_delete = client.msg_nodes.pop(
-                                msg_to_delete.id, None
-                            )
-                            if node_to_delete and node_to_delete.lock.locked():
-                                try:
-                                    node_to_delete.lock.release()
-                                except RuntimeError:
-                                    logging.debug(
-                                        f"Lock for node {msg_to_delete.id} was already released."
-                                    )
-                                    pass  # Lock already released
+                            client.msg_nodes.pop(msg_to_delete.id, None)
+                            # Lock handling removed here, as it's managed by the context manager
+                            # where the lock was acquired. If a node is deleted, its lock should
+                            # ideally be released if held, or the task using it cancelled.
+                            # For simplicity, we assume locks are released before node deletion,
+                            # or that the context manager handles this implicitly upon task completion/cancellation.
                         # If the original processing_msg was one of the deleted messages, nullify the variable
                         if (
                             deleted_processing_msg_original_id
@@ -623,18 +618,22 @@ async def handle_llm_response_stream(
                                     footer_text_final = f"Model: {current_model_name}"
                                     if attempt_num == 1:  # This is for retry logic
                                         footer_text_final += f" (Retried from {original_model_name_param})"
-                                    
+
                                     internet_info_parts = []
                                     if custom_search_queries_generated:
                                         internet_info_parts.append("Internet used")
                                         # This will correctly show "0 search results processed" if count is 0
-                                        internet_info_parts.append(f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed")
+                                        internet_info_parts.append(
+                                            f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed"
+                                        )
                                     else:
                                         internet_info_parts.append("Internet not used")
-                                    
+
                                     if internet_info_parts:
-                                        footer_text_final += " | " + ", ".join(internet_info_parts)
-                                    
+                                        footer_text_final += " | " + ", ".join(
+                                            internet_info_parts
+                                        )
+
                                     current_segment_embed.set_footer(
                                         text=footer_text_final
                                     )
@@ -710,9 +709,9 @@ async def handle_llm_response_stream(
                                     client.msg_nodes[target_msg_for_node_update.id] = (
                                         models.MsgNode(parent_msg=new_msg)
                                     )
-                                    await client.msg_nodes[
-                                        target_msg_for_node_update.id
-                                    ].lock.acquire()
+                                    # Lock acquisition will be handled by a context manager if needed
+                                    # around operations that require exclusive access to the node.
+                                    # For now, direct acquire/release is removed.
                                 if view_to_attach:
                                     view_to_attach.message = response_msg
                             elif response_msgs and current_msg_idx < len(
@@ -760,9 +759,9 @@ async def handle_llm_response_stream(
                                     client.msg_nodes[target_msg_for_node_update.id] = (
                                         models.MsgNode(parent_msg=new_msg)
                                     )
-                                    await client.msg_nodes[
-                                        target_msg_for_node_update.id
-                                    ].lock.acquire()
+                                    # Lock acquisition will be handled by a context manager if needed
+                                    # around operations that require exclusive access to the node.
+                                    # For now, direct acquire/release is removed.
                                 if view_to_attach:
                                     view_to_attach.message = response_msg
 
@@ -829,8 +828,8 @@ async def handle_llm_response_stream(
                                 parent_msg=new_msg,
                                 full_response_text=final_text_to_return,
                             )
-                            await client.msg_nodes[processing_msg.id].lock.acquire()
-                        start_index_plain = 1
+                        # await client.msg_nodes[processing_msg.id].lock.acquire() # Temporarily commented out for refactoring
+                    start_index_plain = 1
 
                     reply_target_plain = (
                         temp_response_msgs_plain[-1]
@@ -852,7 +851,7 @@ async def handle_llm_response_stream(
                             parent_msg=new_msg
                         )
                         node_plain = client.msg_nodes[response_msg_plain.id]
-                        await node_plain.lock.acquire()
+                        # Lock acquisition will be handled by a context manager if needed
                         if i == len(final_messages_content) - 1:
                             node_plain.full_response_text = final_text_to_return
                         reply_target_plain = response_msg_plain
