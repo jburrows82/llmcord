@@ -664,17 +664,23 @@ class LLMCordClient(discord.Client):
 
         if is_enabled:
             current_model_id = final_provider_slash_model  # Alias for clarity
-            try:
-                # Extract provider from "provider/model_name"
-                provider_part = current_model_id.split("/", 1)[0]
-                if provider_part != "google":
-                    trigger_alternative_search = True
-            except IndexError:
-                # Log if format is unexpected
-                logging.warning(
-                    f"Could not parse provider from model ID: {current_model_id} "
-                    f"for alternative search check. Defaulting to not triggering alternative search."
+            if user_has_provided_urls:
+                logging.info(
+                    "User query contains URLs. Skipping alternative search query generation."
                 )
+                # trigger_alternative_search remains False, as initialized
+            else:
+                try:
+                    # Extract provider from "provider/model_name"
+                    provider_part = current_model_id.split("/", 1)[0]
+                    if provider_part != "google":
+                        trigger_alternative_search = True
+                except IndexError:
+                    # Log if format is unexpected
+                    logging.warning(
+                        f"Could not parse provider from model ID: {current_model_id} "
+                        f"for alternative search check. Defaulting to not triggering alternative search."
+                    )
 
         # The block that was previously under the 'elif' now runs if 'trigger_alternative_search' is True
         if trigger_alternative_search:
