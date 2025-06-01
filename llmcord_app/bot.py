@@ -617,6 +617,9 @@ class LLMCordClient(discord.Client):
         combined_context = ""
         url_fetch_results = []
         custom_search_performed = False  # Flag to track if new search path was taken
+        custom_search_queries_generated_flag = False # New flag for footer
+        successful_api_results_count = 0 # New counter for footer
+
         all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
         user_has_provided_urls = bool(all_urls_in_cleaned_content)
         has_only_backticked_urls = False
@@ -707,7 +710,7 @@ class LLMCordClient(discord.Client):
 
             if history_for_custom_prompt:
                 image_urls = [att.url for att in image_attachments]
-                custom_search_queries = await generate_search_queries_with_custom_prompt(
+                custom_search_queries_result = await generate_search_queries_with_custom_prompt(
                     latest_query=cleaned_content,
                     chat_history=history_for_custom_prompt,
                     config=self.config,
@@ -718,21 +721,23 @@ class LLMCordClient(discord.Client):
                 )
 
                 if (
-                    isinstance(custom_search_queries, dict)
-                    and "web_search_required" in custom_search_queries
+                    isinstance(custom_search_queries_result, dict)
+                    and "web_search_required" in custom_search_queries_result
                 ):
-                    if custom_search_queries["web_search_required"]:
-                        queries = custom_search_queries.get("search_queries", [])
-                        logging.info(
-                            f"Custom prompt generated {len(queries)} search queries: {queries}"
-                        )
-                        if queries:
-                            searxng_derived_context = await fetch_and_format_searxng_results(
+                    if custom_search_queries_result["web_search_required"]:
+                        queries = custom_search_queries_result.get("search_queries", [])
+                        if queries: # Check if queries list is not empty
+                            custom_search_queries_generated_flag = True # Set flag
+                            logging.info(
+                                f"Custom prompt generated {len(queries)} search queries: {queries}"
+                            )
+                            searxng_derived_context, count = await fetch_and_format_searxng_results(
                                 queries,
                                 cleaned_content,  # user_query_for_log
                                 self.config,
                                 self.httpx_client,
                             )
+                            successful_api_results_count = count # Store count
                             if searxng_derived_context:
                                 combined_context = searxng_derived_context
                                 logging.info(
@@ -742,14 +747,17 @@ class LLMCordClient(discord.Client):
                                 logging.info(
                                     "Custom queries generated, but no content fetched/formatted from SearxNG."
                                 )
-                        else:
+                        else: # web_search_required is true, but no queries
                             logging.info(
                                 "web_search_required is true but no search queries were generated."
                             )
-                    else:
+                            # custom_search_queries_generated_flag remains false
+                    else: # web_search_required is false
                         logging.info("Custom prompt indicated no web search is needed (web_search_required: false).")
-                else:
+                        # custom_search_queries_generated_flag remains false
+                else: # Unexpected structure or failure
                     logging.warning("Custom search query generation returned unexpected structure or failed.")
+                    # custom_search_queries_generated_flag remains false
             else:
                 logging.warning(
                     "Could not build history for custom search query generation. Skipping."
@@ -826,12 +834,15 @@ class LLMCordClient(discord.Client):
                     generate_response_stream,
                 )
                 if web_search_queries:
-                    searxng_derived_context = await fetch_and_format_searxng_results(
+                    # This path implies Gemini grounding, so internet was used if queries exist
+                    custom_search_queries_generated_flag = True # Set flag
+                    searxng_derived_context, count = await fetch_and_format_searxng_results(
                         web_search_queries,
                         cleaned_content,
                         self.config,
                         self.httpx_client,
                     )
+                    successful_api_results_count = count # Store count
                     if searxng_derived_context:
                         combined_context = searxng_derived_context
                     else:
@@ -858,6 +869,8 @@ class LLMCordClient(discord.Client):
             )
             if url_fetch_results:
                 combined_context = format_external_content(url_fetch_results)
+                # For this path, we don't set custom_search_queries_generated_flag or successful_api_results_count
+                # as it's direct URL processing, not query-based search.
 
         if url_fetch_results:
             successfully_fetched_image_urls = {
@@ -957,6 +970,8 @@ class LLMCordClient(discord.Client):
             initial_user_warnings=user_warnings,
             use_plain_responses_config=use_plain_responses,
             split_limit_config=split_limit,
+            custom_search_queries_generated=custom_search_queries_generated_flag, # New
+            successful_api_results_count=successful_api_results_count, # New
         )
 
         try:

@@ -77,6 +77,8 @@ async def handle_llm_response_stream(
     initial_user_warnings: Set[str],
     use_plain_responses_config: bool,
     split_limit_config: int,
+    custom_search_queries_generated: bool,  # New parameter
+    successful_api_results_count: int,  # New parameter
 ):
     """Handles the streaming, editing, and sending of LLM responses."""
     response_msgs: List[discord.Message] = []
@@ -327,12 +329,7 @@ async def handle_llm_response_stream(
             should_retry_due_to_all_keys_failed = False
 
         base_embed = discord.Embed()
-        footer_text = f"Model: {current_model_name}"
-        if attempt_num == 1:
-            footer_text += f" (Retried from {original_model_name_param})"
-        # Footer is now set on the final message segment, not on the base_embed initially.
-        # The footer_text variable defined on L330-L332 is no longer used here.
-        # Logic to construct footer_text_final is now within the stream loop for the final segment.
+        # Footer text construction moved to where it's set on the final segment
         for warning_text in sorted(
             list(initial_user_warnings)
         ):  # Use list() for sorting a set
@@ -549,9 +546,7 @@ async def handle_llm_response_stream(
                             current_segment_embed = (
                                 discord.Embed()
                             )  # Start with a fresh embed for the segment
-                            current_segment_embed.set_footer(
-                                text=base_embed.footer.text if base_embed.footer else ""
-                            )
+                            # Footer from base_embed is not copied here anymore, it's constructed later if needed.
                             for (
                                 field
                             ) in base_embed.fields:  # Copy warnings from base_embed
@@ -628,6 +623,18 @@ async def handle_llm_response_stream(
                                     footer_text_final = f"Model: {current_model_name}"
                                     if attempt_num == 1:  # This is for retry logic
                                         footer_text_final += f" (Retried from {original_model_name_param})"
+                                    
+                                    internet_info_parts = []
+                                    if custom_search_queries_generated:
+                                        internet_info_parts.append("Internet used")
+                                        # This will correctly show "0 search results processed" if count is 0
+                                        internet_info_parts.append(f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed")
+                                    else:
+                                        internet_info_parts.append("Internet not used")
+                                    
+                                    if internet_info_parts:
+                                        footer_text_final += " | " + ", ".join(internet_info_parts)
+                                    
                                     current_segment_embed.set_footer(
                                         text=footer_text_final
                                     )

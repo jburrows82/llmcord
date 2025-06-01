@@ -214,15 +214,17 @@ async def fetch_and_format_searxng_results(
     user_query_for_log: str,  # For logging context
     config: Dict[str, Any],
     httpx_client: httpx.AsyncClient,
-) -> Optional[str]:
+) -> Tuple[Optional[str], int]:
     """
     Fetches search results from SearxNG for given queries,
     then fetches content of those URLs (uniquely) and formats them.
     Uses specific fetchers for YouTube and Reddit URLs.
+    Returns the formatted context string and the count of successfully processed API results.
     """
     if not queries:
-        return None
+        return None, 0
 
+    successful_api_results_count = 0
     # --- External Web Content API Integration ---
     api_enabled = config.get(
         WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY,
@@ -301,7 +303,8 @@ async def fetch_and_format_searxng_results(
                     f"Source {item_idx + 1}: {item_url} (Type: {item_source_type})"
                 )
 
-                if item.get("processed_successfully") and item.get("data"):
+                if item.get("processed_successfully") and item.get("data") and not item.get("error"):
+                    successful_api_results_count += 1 # Increment count for successful items
                     data = item["data"]
 
                     if item_source_type == "youtube":
@@ -441,20 +444,21 @@ async def fetch_and_format_searxng_results(
             logging.info(
                 f"Aggregated formatted context from External Web Content API for {len(all_formatted_contexts_from_api)} queries: {final_api_context[:500]}..."
             )
-            return final_api_context.strip()
+            return final_api_context.strip(), successful_api_results_count
         else:
             logging.info(
                 "External Web Content API processing completed for all queries, but no processable content was gathered."
             )
-            return None
+            return None, successful_api_results_count
 
     # --- Original SearXNG and content fetching logic (if external API is not enabled or fails to return content) ---
+    # successful_api_results_count will remain 0 if this path is taken.
     searxng_base_url = config.get(SEARXNG_BASE_URL_CONFIG_KEY)
     if not searxng_base_url:
         logging.warning(
             "SearxNG base URL not configured. Skipping web search enhancement."
         )
-        return None
+        return None, 0
 
     logging.info(
         f"Fetching SearxNG results for {len(queries)} queries related to user query: '{user_query_for_log[:100]}...'"
@@ -485,7 +489,7 @@ async def fetch_and_format_searxng_results(
         )
     except Exception:
         logging.exception("Error gathering SearxNG results.")
-        return None
+        return None, 0
 
     # Collect all unique URLs from all queries
     unique_urls_to_fetch_content = set()
@@ -507,7 +511,7 @@ async def fetch_and_format_searxng_results(
         logging.info(
             "No unique URLs found from SearxNG results to process content for."
         )
-        return None
+        return None, 0
 
     # Fetch content for all unique URLs concurrently using appropriate fetchers
     url_content_processing_tasks = []
@@ -581,7 +585,7 @@ async def fetch_and_format_searxng_results(
         )
     except Exception:
         logging.exception("Error gathering content from unique SearxNG URLs.")
-        return None
+        return None, 0
 
     url_to_content_map: Dict[str, models.UrlFetchResult] = {}
     for result_or_exc in fetched_unique_content_results:
@@ -714,12 +718,12 @@ async def fetch_and_format_searxng_results(
             "Answer the user's query based on the following:\n\n"
             + "\n\n".join(formatted_query_blocks)
         )
-        return final_context.strip()
+        return final_context.strip(), 0 # 0 successful API results for SearxNG path
 
     logging.info(
         "No content successfully fetched and formatted from SearxNG result URLs."
     )
-    return None
+    return None, 0
 
 
 async def generate_search_queries_with_custom_prompt(
