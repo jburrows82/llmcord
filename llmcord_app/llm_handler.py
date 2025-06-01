@@ -4,6 +4,7 @@ import random
 import json
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 import io
+import datetime
 from PIL import Image
 
 # OpenAI specific imports
@@ -1307,7 +1308,10 @@ Improved Prompt:"""
         provider=provider,
         model_name=model_name,
         history_for_llm=history_for_enhancement_llm,
-        system_prompt_text=app_config.get(PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY),
+        system_prompt_text=(
+            f"{app_config.get(PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY, '')}\n"
+            f"Current date: {datetime.date.today().strftime('%Y-%m-%d')}"
+        ),
         provider_config=provider_config,
         extra_params=extra_params,
         app_config=app_config,
