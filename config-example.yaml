@@ -326,14 +326,14 @@ gemini_safety_settings:
 # ==============================================================================
 # Output Sharing Settings (Optional)
 # ==============================================================================
-# Enables sharing LLM output via a public ngrok URL, rendered with Grip.
+# Enables sharing LLM output via a public text.is URL.
 output_sharing:
-  ngrok_enabled: false # Set to true to enable this feature.
-  ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Your ngrok authtoken (optional but recommended).
-  grip_port: 6419 # Port for the Python HTTP server (formerly Grip server).
-  ngrok_static_domain: null # Example: your-reserved-domain.ngrok-free.app (requires ngrok account).
-  cleanup_on_shutdown: true # Set to false to keep shared HTML files across bot restarts.
-  url_shortener_enabled: false # Set to true to use a URL shortener for the ngrok link.
+  textis_enabled: false # Set to true to enable sharing LLM output via text.is.
+  # ngrok_authtoken: YOUR_NGROK_AUTHTOKEN # Removed
+  # grip_port: 6419 # Removed
+  # ngrok_static_domain: null # Removed
+  # cleanup_on_shutdown: true # Removed
+  url_shortener_enabled: false # Set to true to use a URL shortener for the text.is link.
   url_shortener_service: "tinyurl" # Currently supported: "tinyurl".
   # Optional: API key for URL shortener service. Comment out to disable.
   # For future services that might require an API key.

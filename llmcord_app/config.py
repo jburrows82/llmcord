@@ -15,12 +15,12 @@ from .constants import (
     SEARXNG_DEFAULT_URL_CONTENT_MAX_LENGTH,
     # Output Sharing Constants
     OUTPUT_SHARING_CONFIG_KEY,
-    NGROK_ENABLED_CONFIG_KEY,
-    NGROK_AUTHTOKEN_CONFIG_KEY,
-    GRIP_PORT_CONFIG_KEY,
-    DEFAULT_GRIP_PORT,
-    NGROK_STATIC_DOMAIN_CONFIG_KEY,
-    CLEANUP_ON_SHUTDOWN_CONFIG_KEY,
+    TEXTIS_ENABLED_CONFIG_KEY,  # Renamed from NGROK_ENABLED_CONFIG_KEY
+    # NGROK_AUTHTOKEN_CONFIG_KEY, # Removed
+    # GRIP_PORT_CONFIG_KEY, # Removed
+    # DEFAULT_GRIP_PORT, # Removed
+    # NGROK_STATIC_DOMAIN_CONFIG_KEY, # Removed
+    # CLEANUP_ON_SHUTDOWN_CONFIG_KEY, # Removed
     URL_SHORTENER_ENABLED_CONFIG_KEY,
     URL_SHORTENER_SERVICE_CONFIG_KEY,
     FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,
@@ -714,83 +714,18 @@ async def get_config(filename="config.yaml"):
                 output_sharing_cfg = {}  # Reset to empty dict to ensure defaults are applied
                 config_data[OUTPUT_SHARING_CONFIG_KEY] = output_sharing_cfg
 
-            if NGROK_ENABLED_CONFIG_KEY not in output_sharing_cfg:
-                output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY] = False
+            if TEXTIS_ENABLED_CONFIG_KEY not in output_sharing_cfg:
+                output_sharing_cfg[TEXTIS_ENABLED_CONFIG_KEY] = False
                 logging.info(
-                    f"'{NGROK_ENABLED_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to False."
+                    f"'{TEXTIS_ENABLED_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to False."
                 )
-            elif not isinstance(output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY], bool):
+            elif not isinstance(output_sharing_cfg[TEXTIS_ENABLED_CONFIG_KEY], bool):
                 logging.warning(
-                    f"'{NGROK_ENABLED_CONFIG_KEY}' is not a boolean. Defaulting to False."
+                    f"'{TEXTIS_ENABLED_CONFIG_KEY}' is not a boolean. Defaulting to False."
                 )
-                output_sharing_cfg[NGROK_ENABLED_CONFIG_KEY] = False
-
-            if NGROK_AUTHTOKEN_CONFIG_KEY not in output_sharing_cfg:
-                output_sharing_cfg[NGROK_AUTHTOKEN_CONFIG_KEY] = (
-                    None  # Default to None if not present
-                )
-                logging.info(
-                    f"'{NGROK_AUTHTOKEN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to None."
-                )
-            # No specific validation for authtoken string format, user responsibility
-
-            if GRIP_PORT_CONFIG_KEY not in output_sharing_cfg:
-                output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
-                logging.info(
-                    f"'{GRIP_PORT_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Using default: {DEFAULT_GRIP_PORT}"
-                )
-            else:
-                try:
-                    port_val = int(output_sharing_cfg[GRIP_PORT_CONFIG_KEY])
-                    if not (1024 <= port_val <= 65535):
-                        logging.warning(
-                            f"'{GRIP_PORT_CONFIG_KEY}' ({port_val}) is outside the valid range (1024-65535). "
-                            f"Using default: {DEFAULT_GRIP_PORT}"
-                        )
-                        output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
-                    else:
-                        output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = port_val
-                except ValueError:
-                    logging.warning(
-                        f"'{GRIP_PORT_CONFIG_KEY}' is not a valid integer. "
-                        f"Using default: {DEFAULT_GRIP_PORT}"
-                    )
-                    output_sharing_cfg[GRIP_PORT_CONFIG_KEY] = DEFAULT_GRIP_PORT
-
-            if NGROK_STATIC_DOMAIN_CONFIG_KEY not in output_sharing_cfg:
-                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = (
-                    None  # Default to None
-                )
-                logging.info(
-                    f"'{NGROK_STATIC_DOMAIN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to None."
-                )
-            elif (
-                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] == ""
-            ):  # Treat empty string as None
-                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = None
-            elif not isinstance(
-                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY], (str, type(None))
-            ):
-                logging.warning(
-                    f"'{NGROK_STATIC_DOMAIN_CONFIG_KEY}' is not a string or null. Defaulting to None."
-                )
-                output_sharing_cfg[NGROK_STATIC_DOMAIN_CONFIG_KEY] = None
-
-            if CLEANUP_ON_SHUTDOWN_CONFIG_KEY not in output_sharing_cfg:
-                output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY] = (
-                    True  # Default to True
-                )
-                logging.info(
-                    f"'{CLEANUP_ON_SHUTDOWN_CONFIG_KEY}' not found in '{OUTPUT_SHARING_CONFIG_KEY}'. Defaulting to True."
-                )
-            elif not isinstance(
-                output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY], bool
-            ):
-                logging.warning(
-                    f"'{CLEANUP_ON_SHUTDOWN_CONFIG_KEY}' is not a boolean. Defaulting to True."
-                )
-                output_sharing_cfg[CLEANUP_ON_SHUTDOWN_CONFIG_KEY] = True
-
+                output_sharing_cfg[TEXTIS_ENABLED_CONFIG_KEY] = False
+            # NGROK_AUTHTOKEN_CONFIG_KEY, GRIP_PORT_CONFIG_KEY, NGROK_STATIC_DOMAIN_CONFIG_KEY, CLEANUP_ON_SHUTDOWN_CONFIG_KEY removed
+ 
             if URL_SHORTENER_ENABLED_CONFIG_KEY not in output_sharing_cfg:
                 output_sharing_cfg[URL_SHORTENER_ENABLED_CONFIG_KEY] = (
                     False  # Default to False

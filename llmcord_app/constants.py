@@ -140,13 +140,13 @@ USER_MODEL_PREFS_FILENAME = "user_model_prefs.json"
 
 # --- Output Sharing Settings ---
 OUTPUT_SHARING_CONFIG_KEY = "output_sharing"
-NGROK_ENABLED_CONFIG_KEY = "ngrok_enabled"
-NGROK_AUTHTOKEN_CONFIG_KEY = "ngrok_authtoken"
-GRIP_PORT_CONFIG_KEY = "grip_port"
-DEFAULT_GRIP_PORT = 6419
-# OUTPUT_FILENAME = "llm_output.md" # No longer a single output file, individual HTML files now
-NGROK_STATIC_DOMAIN_CONFIG_KEY = "ngrok_static_domain"
-CLEANUP_ON_SHUTDOWN_CONFIG_KEY = "cleanup_on_shutdown"
+TEXTIS_ENABLED_CONFIG_KEY = "textis_enabled"  # Repurposed from NGROK_ENABLED_CONFIG_KEY
+# NGROK_AUTHTOKEN_CONFIG_KEY = "ngrok_authtoken" # Removed
+# GRIP_PORT_CONFIG_KEY = "grip_port" # Removed
+# DEFAULT_GRIP_PORT = 6419 # Removed
+# OUTPUT_FILENAME = "llm_output.md" # No longer a single output file
+# NGROK_STATIC_DOMAIN_CONFIG_KEY = "ngrok_static_domain" # Removed
+# CLEANUP_ON_SHUTDOWN_CONFIG_KEY = "cleanup_on_shutdown" # Removed
 RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY = "rate_limit_cooldown_hours"
 URL_SHORTENER_ENABLED_CONFIG_KEY = "url_shortener_enabled"
 URL_SHORTENER_SERVICE_CONFIG_KEY = "url_shortener_service"
