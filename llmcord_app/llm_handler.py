@@ -26,6 +26,7 @@ from .constants import (
     AllKeysFailedError,
     PROVIDERS_SUPPORTING_USERNAMES,
     GEMINI_SAFETY_SETTINGS_CONFIG_KEY,  # New
+    PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY, # New
 )
 from .rate_limiter import get_db_manager, get_available_keys
 from .utils import _truncate_base64_in_payload, default_serializer
@@ -1306,7 +1307,7 @@ Improved Prompt:"""
         provider=provider,
         model_name=model_name,
         history_for_llm=history_for_enhancement_llm,
-        system_prompt_text=None,  # System prompt is not used for this specific call
+        system_prompt_text=app_config.get(PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY),
         provider_config=provider_config,
         extra_params=extra_params,
         app_config=app_config,

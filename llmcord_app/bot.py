@@ -614,8 +614,12 @@ class LLMCordClient(discord.Client):
                 )
             return
 
-        combined_context = ""
-        url_fetch_results = []
+        # Initialize formatted content strings
+        formatted_user_urls_content = ""
+        formatted_google_lens_content = ""
+        searxng_derived_context_str = "" # For search results
+        url_fetch_results = [] # To store raw fetch results for image processing later
+        
         custom_search_performed = False  # Flag to track if new search path was taken
         custom_search_queries_generated_flag = False  # New flag for footer
         successful_api_results_count = 0  # New counter for footer
@@ -650,11 +654,20 @@ class LLMCordClient(discord.Client):
                 self.httpx_client,
             )
             if url_fetch_results:
-                combined_context = format_external_content(url_fetch_results)
+                # format_external_content now returns a dict: {'user_urls': '...', 'lens': '...'}
+                formatted_parts = format_external_content(url_fetch_results)
+                formatted_user_urls_content = formatted_parts.get("user_urls", "")
+                formatted_google_lens_content = formatted_parts.get("lens", "")
+                if formatted_user_urls_content:
+                    logging.info(f"Formatted content from user-provided URLs (Lens path): {len(formatted_user_urls_content)} chars")
+                if formatted_google_lens_content:
+                    logging.info(f"Formatted content from Google Lens: {len(formatted_google_lens_content)} chars")
+
             logging.info(
-                "Skipping Gemini grounding/SearxNG step because Google Lens is active."
+                "Google Lens was active. User-provided URLs and Lens content (if any) have been processed."
             )
-        # --- NEW: Alternative Search Query Generation ---
+            # SearxNG/grounding is skipped if Lens is active.
+        # --- External Content Fetching Logic (Non-Lens Paths) ---
         # Determine if alternative search query generation should be triggered
         alt_search_config_dict = self.config.get(
             "alternative_search_query_generation", {}
@@ -692,17 +705,19 @@ class LLMCordClient(discord.Client):
             history_for_custom_prompt = await build_message_history(
                 new_msg=new_msg,
                 initial_cleaned_content=cleaned_content,  # latest_query for the prompt
-                combined_context="",  # No prior context for query generation step itself
+                current_formatted_user_urls="", # No user URLs for this specific call's context
+                current_formatted_google_lens="",   # No Lens for this specific call's context
+                current_formatted_search_results="", # No search results for this specific call's context
                 max_messages=max_messages,
                 max_tokens_for_text=max_tokens_for_text_config,
                 max_files_per_message=max_files_per_message,
                 accept_files=accept_files,  # Based on the current final_provider_slash_model
-                use_google_lens=False,
+                use_google_lens_for_current=False, # Not using lens for query gen
                 is_target_provider_gemini=current_provider_is_gemini_for_history,
                 target_provider_name=provider,  # Provider of the current model
                 target_model_name=model_name,  # Name of the current model
                 user_warnings=user_warnings,
-                current_message_url_fetch_results=None,
+                current_message_url_fetch_results=None, # No separate URL results for this specific call
                 msg_nodes_cache=self.msg_nodes,
                 bot_user_obj=self.user,
                 httpx_async_client=self.httpx_client,
@@ -712,6 +727,7 @@ class LLMCordClient(discord.Client):
                 at_ai_pattern_re=AT_AI_PATTERN,
                 providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
                 system_prompt_text_for_budgeting=None,  # Custom prompt is a user message
+                config=self.config,
             )
 
             if history_for_custom_prompt:
@@ -748,9 +764,9 @@ class LLMCordClient(discord.Client):
                             )
                             successful_api_results_count = count  # Store count
                             if searxng_derived_context:
-                                combined_context = searxng_derived_context
+                                searxng_derived_context_str = searxng_derived_context # Store search results
                                 logging.info(
-                                    "Successfully fetched and formatted search results from custom queries."
+                                    f"Successfully fetched and formatted search results from custom queries: {len(searxng_derived_context_str)} chars"
                                 )
                             else:
                                 logging.info(
@@ -794,12 +810,14 @@ class LLMCordClient(discord.Client):
             history_for_gemini_grounding = await build_message_history(
                 new_msg=new_msg,
                 initial_cleaned_content=cleaned_content,
-                combined_context="",
+                current_formatted_user_urls="", # No user URLs for this specific call's context
+                current_formatted_google_lens="",   # No Lens for this specific call's context
+                current_formatted_search_results="", # No search results for this specific call's context
                 max_messages=max_messages,
                 max_tokens_for_text=max_tokens_for_text_config,
                 max_files_per_message=max_files_per_message,
                 accept_files=True,
-                use_google_lens=False,
+                use_google_lens_for_current=False, # Not using lens for query gen
                 is_target_provider_gemini=True,  # Grounding model is assumed to be Gemini-like for now
                 target_provider_name=self.config.get(
                     GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
@@ -808,10 +826,9 @@ class LLMCordClient(discord.Client):
                     GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
                 ).split("/", 1)[1],
                 user_warnings=user_warnings,
-                current_message_url_fetch_results=None,
+                current_message_url_fetch_results=None, # No separate URL results for this specific call
                 msg_nodes_cache=self.msg_nodes,
                 bot_user_obj=self.user,
-                # Pass the grounding system prompt for budgeting
                 httpx_async_client=self.httpx_client,
                 models_module=models,
                 google_types_module=google_types,
@@ -826,6 +843,7 @@ class LLMCordClient(discord.Client):
                     ).split("/", 1)[0],
                     self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY),
                 ),
+                config=self.config,
             )
             if history_for_gemini_grounding:
                 grounding_sp_text_from_config = self.config.get(
@@ -860,10 +878,11 @@ class LLMCordClient(discord.Client):
                     )
                     successful_api_results_count = count  # Store count
                     if searxng_derived_context:
-                        combined_context = searxng_derived_context
+                        searxng_derived_context_str = searxng_derived_context # Store search results
+                        logging.info(f"Formatted SearXNG results obtained (Gemini grounding path): {len(searxng_derived_context_str)} chars")
                     else:
                         logging.info(
-                            "Failed to generate context from SearxNG, or no results found."
+                            "Failed to generate context from SearxNG (Gemini grounding path), or no results found."
                         )
                 else:
                     logging.info(
@@ -884,10 +903,19 @@ class LLMCordClient(discord.Client):
                 self.httpx_client,
             )
             if url_fetch_results:
-                combined_context = format_external_content(url_fetch_results)
-                # For this path, we don't set custom_search_queries_generated_flag or successful_api_results_count
-                # as it's direct URL processing, not query-based search.
+                # This path is for when user provides URLs and custom_search_performed is False
+                # (and Google Lens was not active, handled earlier)
+                formatted_parts = format_external_content(url_fetch_results)
+                formatted_user_urls_content = formatted_parts.get("user_urls", "")
+                # Lens content would not be generated here if use_google_lens was false
+                # but format_external_content handles the 'lens' key regardless.
+                # formatted_google_lens_content = formatted_parts.get("lens", "") # This should be empty if use_google_lens is false
 
+                if formatted_user_urls_content:
+                     logging.info(f"Formatted content from user-provided URLs (direct path): {len(formatted_user_urls_content)} chars")
+                # No custom_search_queries_generated_flag or successful_api_results_count here.
+        
+        # This check for url_fetch_results is now primarily for image URL removal from cleaned_content
         if url_fetch_results:
             successfully_fetched_image_urls = {
                 res.url
@@ -906,19 +934,19 @@ class LLMCordClient(discord.Client):
         history_for_llm = await build_message_history(
             new_msg=new_msg,
             initial_cleaned_content=cleaned_content,
-            combined_context=combined_context,
+            current_formatted_user_urls=formatted_user_urls_content,
+            current_formatted_google_lens=formatted_google_lens_content,
+            current_formatted_search_results=searxng_derived_context_str,
             max_messages=max_messages,
             max_tokens_for_text=max_tokens_for_text_config,
             max_files_per_message=max_files_per_message,
             accept_files=accept_files,
-            use_google_lens=use_google_lens,
+            use_google_lens_for_current=use_google_lens,
             is_target_provider_gemini=is_gemini,
             target_provider_name=provider,
-            target_model_name=model_name,  # Uses the final model_name for tokenizer
+            target_model_name=model_name,
             user_warnings=user_warnings,
-            current_message_url_fetch_results=url_fetch_results
-            if not use_google_lens
-            else [],
+            current_message_url_fetch_results=url_fetch_results,
             msg_nodes_cache=self.msg_nodes,
             bot_user_obj=self.user,
             httpx_async_client=self.httpx_client,
@@ -927,7 +955,6 @@ class LLMCordClient(discord.Client):
             extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
             at_ai_pattern_re=AT_AI_PATTERN,
             providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
-            # Pass the main system prompt for budgeting
             system_prompt_text_for_budgeting=prepare_system_prompt(
                 is_gemini,
                 provider,
@@ -935,6 +962,7 @@ class LLMCordClient(discord.Client):
                     new_msg.author.id, self.config.get("system_prompt")
                 ),
             ),
+            config=self.config,
         )
 
         if not history_for_llm:

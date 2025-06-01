@@ -30,9 +30,15 @@ class MsgNode:
     full_response_text: Optional[str] = (
         None  # Stores the complete text from the LLM for this node (if it's an assistant response)
     )
-    # --- ADDED FIELD ---
-    external_content: Optional[str] = (
-        None  # Stores formatted fetched content (URLs, Lens) for this node
+    # --- Specific Formatted Content Fields for History Persistence ---
+    user_provided_url_formatted_content: Optional[str] = (
+        None  # Formatted content from URLs provided by the user in their message
+    )
+    google_lens_formatted_content: Optional[str] = (
+        None  # Formatted content from Google Lens analysis
+    )
+    search_results_formatted_content: Optional[str] = (
+        None  # Formatted content from web search results (e.g., SearxNG)
     )
 
 

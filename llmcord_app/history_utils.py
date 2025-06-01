@@ -8,8 +8,16 @@ import tiktoken  # Added tiktoken
 
 import discord
 
-from .constants import AT_AI_PATTERN, STREAMING_INDICATOR
+from .constants import (
+    AT_AI_PATTERN,
+    STREAMING_INDICATOR,
+    STAY_IN_CHAT_HISTORY_CONFIG_KEY,
+    STAY_IN_HISTORY_USER_URLS_KEY,
+    STAY_IN_HISTORY_SEARCH_RESULTS_KEY,
+    STAY_IN_HISTORY_GOOGLE_LENS_KEY,
+)
 from . import models
+
 # Assuming google.genai.types will be passed as google_types_module
 # Assuming extract_text_from_pdf_bytes will be passed as a function
 
@@ -142,12 +150,15 @@ async def find_parent_message(
 async def build_message_history(
     new_msg: discord.Message,
     initial_cleaned_content: str,
-    combined_context: str,
+    # combined_context: str, # Replaced by specific formatted content types
+    current_formatted_user_urls: Optional[str],
+    current_formatted_google_lens: Optional[str],
+    current_formatted_search_results: Optional[str],
     max_messages: int,
     max_tokens_for_text: int,  # This is the TOTAL history token limit from config's "max_text"
     max_files_per_message: int,
     accept_files: bool,
-    use_google_lens: bool,
+    use_google_lens_for_current: bool, # Renamed for clarity
     is_target_provider_gemini: bool,
     target_provider_name: str,
     target_model_name: str,
@@ -162,13 +173,14 @@ async def build_message_history(
     at_ai_pattern_re: Any,
     providers_supporting_usernames_const: tuple,
     system_prompt_text_for_budgeting: Optional[str] = None,
+    config: Dict[str, Any] = None,  # Added config parameter
 ) -> List[Dict[str, Any]]:
     raw_history_entries_reversed = []  # Oldest last initially, will be reversed
 
     # 1. Populate MsgNodes and collect raw message data (reversed chronological)
     #    Loop backwards from new_msg to gather messages up to max_messages.
     #    MsgNode.text will store full, untruncated text.
-    #    MsgNode.external_content is set only for the new_msg's node.
+    #    MsgNode's specific formatted content fields are set only for the new_msg's node.
 
     _curr_msg_for_loop = new_msg
     is_dm_current_msg_channel = isinstance(new_msg.channel, discord.DMChannel)
@@ -220,12 +232,15 @@ async def build_message_history(
                 # Reset api_file_parts only for the current message node to avoid reprocessing old ones if they were already processed
                 if is_current_message_node:
                     curr_node.api_file_parts = []
-                    # Set external_content only for the current message node
-                    curr_node.external_content = (
-                        combined_context if combined_context else None
-                    )
+                    # Store the distinct formatted content types for the current message node
+                    curr_node.user_provided_url_formatted_content = current_formatted_user_urls
+                    curr_node.google_lens_formatted_content = current_formatted_google_lens
+                    curr_node.search_results_formatted_content = current_formatted_search_results
                     logging.debug(
-                        f"Set external_content for node {current_msg_id} to {'present' if combined_context else 'None'}."
+                        f"Stored formatted content for current node {current_msg_id}: "
+                        f"UserURLs: {'present' if current_formatted_user_urls else 'None'}, "
+                        f"Lens: {'present' if current_formatted_google_lens else 'None'}, "
+                        f"Search: {'present' if current_formatted_search_results else 'None'}."
                     )
 
                 content_to_store = ""
@@ -283,7 +298,7 @@ async def build_message_history(
                             is_relevant_for_download = True
                         elif att.content_type.startswith("image/"):
                             if accept_files or (
-                                is_current_message_node and use_google_lens
+                                is_current_message_node and use_google_lens_for_current # Updated variable name
                             ):
                                 is_relevant_for_download = True
                         elif att.content_type == "application/pdf":
@@ -386,7 +401,7 @@ async def build_message_history(
 
                 temp_api_file_parts = []  # Build fresh for this scope
                 files_processed_for_api_count = 0
-                is_lens_trigger_message = is_current_message_node and use_google_lens
+                is_lens_trigger_message = is_current_message_node and use_google_lens_for_current # Updated variable name
                 should_process_files_for_api = (
                     current_role == "user" or is_lens_trigger_message
                 ) and (accept_files or is_lens_trigger_message)
@@ -538,21 +553,41 @@ async def build_message_history(
                     curr_node.parent_msg = parent
 
             # Add to raw_history_entries_reversed (oldest will be at the end)
-            # Only include external_content for the current message being processed
+            # Construct external_content based on persistence settings for historical,
+            # and use all available for current.
+            
+            node_external_content_parts = []
+            history_persistence_settings = config.get(STAY_IN_CHAT_HISTORY_CONFIG_KEY, {})
+
+            if is_current_message_node:
+                # For the current message, always include all fetched external content
+                if curr_node.user_provided_url_formatted_content:
+                    node_external_content_parts.append(curr_node.user_provided_url_formatted_content)
+                if curr_node.google_lens_formatted_content:
+                    node_external_content_parts.append(curr_node.google_lens_formatted_content)
+                if curr_node.search_results_formatted_content:
+                    node_external_content_parts.append(curr_node.search_results_formatted_content)
+            else:
+                # For historical messages, check config for persistence
+                if history_persistence_settings.get(STAY_IN_HISTORY_USER_URLS_KEY, True) and curr_node.user_provided_url_formatted_content:
+                    node_external_content_parts.append(curr_node.user_provided_url_formatted_content)
+                if history_persistence_settings.get(STAY_IN_HISTORY_GOOGLE_LENS_KEY, True) and curr_node.google_lens_formatted_content:
+                    node_external_content_parts.append(curr_node.google_lens_formatted_content)
+                if history_persistence_settings.get(STAY_IN_HISTORY_SEARCH_RESULTS_KEY, False) and curr_node.search_results_formatted_content: # Default False for search results
+                    node_external_content_parts.append(curr_node.search_results_formatted_content)
+
+            final_node_external_content = None
+            if node_external_content_parts:
+                final_node_external_content = "External Content:\n" + "\n\n".join(filter(None, node_external_content_parts))
+
             history_entry = {
                 "id": current_msg_id,
                 "role": curr_node.role,
-                "text": curr_node.text,
+                "text": curr_node.text, # This is the user's message text or bot's response text
                 "files": curr_node.api_file_parts,
                 "user_id": curr_node.user_id,
+                "external_content": final_node_external_content, # This is the combined external data
             }
-
-            # Only add external_content for the current message node
-            # This ensures it's used for the current request but not saved in history
-            if is_current_message_node:
-                history_entry["external_content"] = curr_node.external_content
-            else:
-                history_entry["external_content"] = None
 
             raw_history_entries_reversed.append(history_entry)
             if curr_node.has_bad_attachments:
@@ -836,14 +871,17 @@ async def build_message_history(
     for entry in final_api_message_parts:
         # Construct the text content that goes into the API call for this message
         # Only include external_content if it's the current message
-        is_current_message = entry.get("id") == new_msg.id
+        # is_current_message = entry.get("id") == new_msg.id # No longer needed for this logic
         text_content_for_api = entry["text"] or ""
 
-        # Only use external_content for the new message, even if somehow it got saved in history
-        if is_current_message and entry.get("external_content"):
+        # If this entry is a user message and has external_content, incorporate it.
+        # This applies to both current and historical user messages.
+        if entry.get("role") == "user" and entry.get("external_content"):
+            # text_content_for_api at this point is (entry["text"] or "")
+            # We are augmenting it with the external content.
             text_content_for_api = (
                 "User's query:\n"
-                + text_content_for_api
+                + (entry["text"] or "") # Use the original text of the message
                 + "\n\nExternal Content:\n"
                 + entry["external_content"]
             )

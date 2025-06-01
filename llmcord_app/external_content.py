@@ -337,78 +337,83 @@ async def fetch_external_content(
     return url_fetch_results
 
 
-def format_external_content(url_fetch_results: List[models.UrlFetchResult]) -> str:
-    """Formats fetched URL/Lens content into a string for the LLM."""
+def format_external_content(
+    url_fetch_results: List[models.UrlFetchResult],
+) -> Dict[str, str]:
+    """
+    Formats fetched URL and Google Lens content into separate strings.
+    Returns a dictionary with keys 'user_urls' and 'lens'.
+    Search results (SearxNG) are handled separately and not formatted by this function.
+    """
+    formatted_content_dict = {"user_urls": "", "lens": ""}
     if not url_fetch_results:
-        return ""
+        return formatted_content_dict
 
-    google_lens_parts = []
-    other_url_parts = []
-    other_url_counter = 1
+    google_lens_parts_list = []
+    user_provided_url_parts_list = []
+    url_counter = 1  # Counter for user-provided URLs
 
-    # Sort results by original position
+    # Sort results by original position to maintain order
     url_fetch_results.sort(key=lambda r: r.original_index)
 
     for result in url_fetch_results:
         if result.content:  # Only include successful fetches
             if result.type == "google_lens_serpapi":
-                header = f"SerpAPI Google Lens results for image {result.original_index + 1}:\n"
-                google_lens_parts.append(header + str(result.content))
-            elif result.type == "youtube":
-                content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
-                if isinstance(result.content, dict):
-                    content_str += f"  title: {result.content.get('title', 'N/A')}\n"
-                    content_str += (
-                        f"  channel: {result.content.get('channel_name', 'N/A')}\n"
-                    )
-                    desc = result.content.get("description", "N/A")
-                    content_str += f"  description: {desc}\n"
-                    transcript = result.content.get("transcript")
-                    if transcript:
-                        content_str += f"  transcript: {transcript}\n"
-                    comments = result.content.get("comments")
-                    if comments:
+                header = (
+                    f"Google Lens results for image {result.original_index + 1}:\n"
+                )
+                google_lens_parts_list.append(header + str(result.content))
+            elif result.type in [
+                "youtube",
+                "reddit",
+                "general",
+                "general_crawl4ai",
+                "general_jina",
+            ]:
+                # These are considered user-provided URLs for the purpose of this formatting
+                content_str = f"URL {url_counter} ({result.type} - {result.url}):\n"
+                if isinstance(result.content, dict):  # YouTube or Reddit
+                    if result.type == "youtube":
                         content_str += (
-                            "  top comments:\n"
-                            + "\n".join([f"    - {c}" for c in comments])
-                            + "\n"
+                            f"  Title: {result.content.get('title', 'N/A')}\n"
                         )
-                other_url_parts.append(content_str)
-                other_url_counter += 1
-            elif result.type == "reddit":
-                content_str = f"\nurl {other_url_counter}: {result.url}\nurl {other_url_counter} content:\n"
-                if isinstance(result.content, dict):
-                    content_str += f"  title: {result.content.get('title', 'N/A')}\n"
-                    selftext = result.content.get("selftext")
-                    if selftext:
-                        content_str += f"  content: {selftext}\n"
-                    comments = result.content.get("comments")
-                    if comments:
+                        content_str += f"  Channel: {result.content.get('channel_name', 'N/A')}\n"
+                        desc = result.content.get("description", "N/A")
+                        content_str += f"  Description: {desc}\n"
+                        transcript = result.content.get("transcript")
+                        if transcript:
+                            content_str += f"  Transcript: {transcript}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += "  Top Comments:\n" + "\n".join(
+                                [f"    - {c}" for c in comments]
+                            )
+                    elif result.type == "reddit":
                         content_str += (
-                            "  top comments:\n"
-                            + "\n".join([f"    - {c}" for c in comments])
-                            + "\n"
+                            f"  Title: {result.content.get('title', 'N/A')}\n"
                         )
-                other_url_parts.append(content_str)
-                other_url_counter += 1
-            elif (
-                result.type == "general"
-                or result.type == "general_crawl4ai"
-                or result.type == "general_jina"
-            ):
-                content_str = f"\nurl {other_url_counter}: {result.url} (source type: {result.type})\nurl {other_url_counter} content:\n"
-                if isinstance(result.content, str):
-                    content_str += f"  {result.content}\n"
-                other_url_parts.append(content_str)
-                other_url_counter += 1
-            # image_url_content types are handled as binary data and not formatted into combined_context text
+                        selftext = result.content.get("selftext")
+                        if selftext:
+                            content_str += f"  Content: {selftext}\n"
+                        comments = result.content.get("comments")
+                        if comments:
+                            content_str += "  Top Comments:\n" + "\n".join(
+                                [f"    - {c}" for c in comments]
+                            )
+                elif isinstance(result.content, str):  # General web page
+                    content_str += f"  Content: {result.content}\n"
+                
+                user_provided_url_parts_list.append(content_str)
+                url_counter += 1
+            # image_url_content types are handled as binary data for API parts,
+            # not formatted into text here for history persistence.
 
-    combined_context = ""
-    if google_lens_parts or other_url_parts:
-        combined_context = "Answer the user's query based on the following:\n\n"
-        if google_lens_parts:
-            combined_context += "\n\n".join(google_lens_parts) + "\n\n"
-        if other_url_parts:
-            combined_context += "".join(other_url_parts)
+    if google_lens_parts_list:
+        formatted_content_dict["lens"] = "\n\n".join(google_lens_parts_list)
 
-    return combined_context.strip()
+    if user_provided_url_parts_list:
+        formatted_content_dict["user_urls"] = "\n\n".join(
+            user_provided_url_parts_list
+        )
+
+    return formatted_content_dict

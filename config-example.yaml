@@ -238,6 +238,13 @@ grounding_system_prompt: |
 # If commented out or empty, a default prompt emphasizing brevity will be used.
 fallback_model_system_prompt: |
   You are a very concise assistant. The previous model failed. Briefly answer the user's query.
+ 
+# Optional: System prompt for the /enhanceprompt command.
+# If commented out or empty, a default prompt will be used.
+prompt_enhancer_system_prompt: |
+  You are an expert prompt engineer. Your task is to refine a user's input to make it a more effective prompt for a large language model.
+  Follow the provided prompt design strategies and guides to improve the user's original prompt.
+  Output *only* the improved prompt, without any preamble, explanation, or markdown formatting.
 
 # --- Rate Limiting ---
 # Cooldown period in hours for API keys that hit a rate limit.
@@ -468,3 +475,16 @@ alternative_search_query_generation:
     <query>
     {{latest_query}}
     </query>
+
+# ==============================================================================
+# Chat History Persistence Settings
+# ==============================================================================
+# Configure which types of external content should be persisted in the chat history
+# and re-sent to the LLM in subsequent turns.
+# For the *current* message being processed, all fetched external content (user URLs,
+# search results, Google Lens) will be sent to the LLM.
+# These settings only affect what is included from *past* messages in the history.
+stay_in_chat_history:
+  user_provided_urls: true # Content from URLs directly provided by the user in their message.
+  search_results: false    # Content derived from web searches (e.g., SearxNG results).
+  google_lens: true        # Content from Google Lens image analysis.

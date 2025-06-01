@@ -67,8 +67,9 @@ from .constants import (
     DEFAULT_GROUNDING_MODEL_TOP_K,
     GROUNDING_MODEL_TOP_P_CONFIG_KEY,
     DEFAULT_GROUNDING_MODEL_TOP_P,
+    PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY,  # New
 )
-
+ 
 # Alternative Search Query Generation Config Keys
 ALT_SEARCH_SECTION_KEY = "alternative_search_query_generation"
 ALT_SEARCH_ENABLED_KEY = "enabled"
@@ -216,8 +217,13 @@ If the user is discussing a topic, formulate queries that would find recent deve
 Do not generate more than 5 search queries.
 Output only the search queries, each on a new line. Do not add any other text, preamble, or explanation.
 """.strip()
-
-
+ 
+DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT = """
+You are an expert prompt engineer. Your task is to refine a user's input to make it a more effective prompt for a large language model.
+Follow the provided prompt design strategies and guides to improve the user's original prompt.
+Output *only* the improved prompt, without any preamble, explanation, or markdown formatting.
+""".strip()
+ 
 async def get_config(filename="config.yaml"):
     """Loads, validates, and returns the configuration from a YAML file asynchronously."""
     try:
@@ -1089,8 +1095,27 @@ async def get_config(filename="config.yaml"):
                     DEFAULT_ALT_SEARCH_PROMPT_TEMPLATE
                 )
 
+            # --- Load Prompt Enhancer System Prompt ---
+            if (
+                PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY not in config_data
+                or not config_data.get(PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY)
+            ):
+                logging.info(
+                    f"'{PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY}' not found or empty in {filename}. Using default."
+                )
+                config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY] = (
+                    DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT
+                )
+            elif not isinstance(config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY], str):
+                logging.warning(
+                    f"'{PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY}' is not a string. Using default."
+                )
+                config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY] = (
+                    DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT
+                )
+ 
             return config_data
-
+ 
     except FileNotFoundError:
         logging.error(
             f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it."
