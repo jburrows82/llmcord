@@ -1,4 +1,5 @@
 import logging
+import json # Added for payload printing
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 
 from google import genai as google_genai
@@ -6,6 +7,7 @@ from google.genai import types as google_types
 from google.api_core import exceptions as google_api_exceptions
 
 from ..constants import GEMINI_SAFETY_SETTINGS_CONFIG_KEY # Relative import
+from ..utils import _truncate_base64_in_payload, default_serializer # Added for payload printing
 
 async def generate_gemini_stream(
     api_key: str,
@@ -133,6 +135,38 @@ async def generate_gemini_stream(
     # system_instruction is now part of GenerateContentConfig
     if system_instruction_text:
         api_generation_config.system_instruction = google_types.Part.from_text(text=system_instruction_text)
+
+    # --- Payload Logging ---
+    try:
+        payload_to_log = {
+            "model": model_name,
+            "contents": gemini_contents,
+            "config": api_generation_config,
+        }
+        # system_instruction is part of api_generation_config and will be logged
+        # when api_generation_config is processed below. No need to add it separately.
+
+        truncated_payload = _truncate_base64_in_payload(payload_to_log)
+        
+        # Attempt to serialize complex objects within the config for better readability
+        # Specifically, safety_settings and tools might contain complex objects
+        if "config" in truncated_payload and isinstance(truncated_payload["config"], google_types.GenerateContentConfig):
+            config_dict = {}
+            # Iterate over known attributes of GenerateContentConfig
+            for attr_name in ["candidate_count", "stop_sequences", "max_output_tokens", "temperature", "top_p", "top_k", "safety_settings", "tools", "tool_config", "system_instruction", "thinking_config"]:
+                if hasattr(truncated_payload["config"], attr_name):
+                    attr_value = getattr(truncated_payload["config"], attr_name)
+                    if attr_value is not None: # Only include if not None
+                        config_dict[attr_name] = attr_value
+            truncated_payload["config"] = config_dict
+
+
+        logging.info(
+            f"--- Gemini Payload ---\n{json.dumps(truncated_payload, indent=2, default=default_serializer)}\n----------------------"
+        )
+    except Exception as e_log:
+        logging.error(f"Error during Gemini payload logging: {e_log}", exc_info=True)
+    # --- End Payload Logging ---
 
     try:
         stream_response = await llm_client.aio.models.generate_content_stream(

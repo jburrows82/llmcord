@@ -1,9 +1,11 @@
 import logging
+import json # Added for payload printing
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 
 from openai import AsyncOpenAI, APIError, APIConnectionError, BadRequestError, UnprocessableEntityError # Removed RateLimitError
 
 from ..constants import PROVIDERS_SUPPORTING_USERNAMES # Relative import
+from ..utils import _truncate_base64_in_payload, default_serializer # Added for payload printing
 
 async def generate_openai_stream(
     api_key: Optional[str], # Key can be None for keyless local providers
@@ -57,6 +59,26 @@ async def generate_openai_stream(
 
     api_call_params = extra_params.copy()
     api_call_params["stream"] = True # Ensure streaming is enabled
+
+    # --- Payload Logging ---
+    try:
+        # Construct the payload that will be sent to the API
+        payload_to_log = {
+            "model": model_name,
+            "messages": openai_messages,
+            **api_call_params, # Spread other parameters like temperature, max_tokens, etc.
+        }
+        # The 'stream' parameter is already in api_call_params if set, otherwise defaults in create()
+
+        truncated_payload = _truncate_base64_in_payload(payload_to_log)
+        logging.info(
+            f"--- OpenAI Payload (Provider: {current_provider_name}, Base URL: {base_url}) ---\n"
+            f"{json.dumps(truncated_payload, indent=2, default=default_serializer)}\n"
+            f"----------------------"
+        )
+    except Exception as e_log:
+        logging.error(f"Error during OpenAI payload logging: {e_log}", exc_info=True)
+    # --- End Payload Logging ---
 
     try:
         stream_response = await llm_client.chat.completions.create(
