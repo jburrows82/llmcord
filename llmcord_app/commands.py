@@ -408,19 +408,21 @@ async def _execute_enhance_prompt_logic(
         initial: bool = False,
     ):
         if isinstance(response_target, discord.Interaction):
+            _kwargs = {"ephemeral": ephemeral}
+            if content is not None:
+                _kwargs["content"] = content
+            if view is not None:
+                _kwargs["view"] = view
+            
+            # The original conditional for 'initial' existed, though both branches made the same type of call.
+            # We'll maintain the conditional structure but use the corrected kwargs.
             if (
                 initial
                 and hasattr(response_target, "response")
                 and not response_target.response.is_done()
             ):
-                # This case is tricky with defer. For now, all interaction responses use followup.
-                # If defer was called, followup is needed.
-                return await response_target.followup.send(
-                    content=content, view=view, ephemeral=ephemeral
-                )
-            return await response_target.followup.send(
-                content=content, view=view, ephemeral=ephemeral
-            )
+                return await response_target.followup.send(**_kwargs)
+            return await response_target.followup.send(**_kwargs)
         elif isinstance(response_target, discord.Message):
             # For message commands, typically reply or send to channel.
             # Let's use reply for subsequent messages if an initial one was sent, else channel.send or reply.
