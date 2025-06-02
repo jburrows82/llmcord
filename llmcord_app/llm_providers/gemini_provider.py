@@ -125,16 +125,17 @@ async def generate_gemini_stream(
             ]
         ]
 
+    system_instruction_part = None
+    if system_instruction_text:
+        system_instruction_part = google_types.Part.from_text(text=system_instruction_text)
+
     api_generation_config = google_types.GenerateContentConfig(
         **gemini_extra_params,
         safety_settings=safety_settings_list,
         tools=[google_types.Tool(google_search=google_types.GoogleSearch())],
         thinking_config=thinking_config,
+        system_instruction=system_instruction_part, # Added here
     )
-    
-    # system_instruction is now part of GenerateContentConfig
-    if system_instruction_text:
-        api_generation_config.system_instruction = google_types.Part.from_text(text=system_instruction_text)
 
     # --- Payload Logging ---
     try:
@@ -172,8 +173,7 @@ async def generate_gemini_stream(
         stream_response = await llm_client.aio.models.generate_content_stream(
             model=model_name,
             contents=gemini_contents,
-            config=api_generation_config, # Changed from generation_config and removed system_instruction
-            # system_instruction=system_instruction_part, # Removed, it's in api_generation_config
+            config=api_generation_config,
         )
 
         async for chunk in stream_response:
