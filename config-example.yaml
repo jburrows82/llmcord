@@ -355,135 +355,90 @@ alternative_search_query_generation:
   # Note: If images are attached to the user's message, they will be sent to the LLM with this prompt.
   search_query_generation_prompt_template: |
     <task>
-    Determine if web search is required to answer a user query and generate appropriate search queries if needed.
+    Analyze the latest query to determine if it requires web search. Consider the chat history for context.
     </task>
 
-    <context>
-    You are a search query generator that determines when web search is necessary to answer questions accurately. You can handle both standalone queries and follow-up requests that reference specific platforms or general web searches.
-    </context>
+    <criteria>
+    Web search IS required when the query asks about:
+    - Current events, news, or recent developments
+    - Real-time information (prices, weather, stock data)
+    - Specific facts that may have changed recently
+    - Information about new products, services, or updates
+    - People, places, or organizations where current status matters
 
-    <web_search_criteria>
-    Web search is REQUIRED when:
-
-    1. **Local Information**: Questions requiring location-specific data (weather, local businesses, events, traffic)
-    2. **Freshness**: Topics where information changes frequently or where your knowledge cutoff prevents accurate answers
-    3. **Niche Information**: Highly specific details not commonly known (small businesses, local regulations, specialized products)
-    4. **Accuracy-Critical**: Questions where outdated information could be harmful (software versions, prices, schedules, current events)
-    5. **Platform-Specific Requests**: When users request searches on specific platforms (Reddit, YouTube, Twitter, etc.)
-    6. **Explicit Web Search Requests**: When users explicitly ask to "search the net", "search the web", "google it", etc.
-    </web_search_criteria>
+    Web search is NOT required when the query asks about:
+    - General knowledge or established facts
+    - Conceptual explanations or definitions
+    - Personal opinions or advice
+    - Mathematical calculations or logic problems
+    - Analysis of provided information
+    </criteria>
 
     <instructions>
-    1. Analyze the user's query to determine if web search is needed based on the criteria above
-    2. Handle explicit web search requests:
-      - If query contains web search indicators (e.g., "search the net", "search online", "google"), ALWAYS require web search
-      - If query is ONLY a web search request, combine with previous query
-      - If query contains both content AND web search request, create search for the content
-    3. Handle platform-specific requests:
-      - If query is ONLY a platform reference (e.g., "search reddit", "youtube"), combine with previous query
-      - If query contains both content AND platform, create appropriate platform-specific search
-    4. If web search is NOT needed AND no explicit search request, return: {"web_search_required": false}
-    5. If web search IS needed:
-      - Identify all entities that need separate searches
-      - Create focused, specific search queries
-      - Return results in the specified JSON format
+    1. Analyze the latest query in the context of the chat history
+    2. Determine if web search is required based on the criteria above
+    3. If web search is required, generate specific search queries that would find the needed information
+    4. For queries with multiple distinct subjects, create separate search queries for each
+    5. Return your response in the exact JSON format shown in the examples
     </instructions>
 
     <examples>
     <example>
-    Input: "What's the weather like in Seattle today?"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["Seattle weather today"]
-    }
+    <chat_history>
+    User: What is machine learning?
+    Assistant: Machine learning is a subset of artificial intelligence...
+    </chat_history>
+    <latest_query>Can you explain deep learning?</latest_query>
+    <output>
+    {"web_search_required": false}
+    </output>
     </example>
 
     <example>
-    Input: "What is the capital of France?"
-    Output: {"web_search_required": false}
+    <chat_history>
+    User: I'm interested in electric vehicles
+    Assistant: Electric vehicles are becoming increasingly popular...
+    </chat_history>
+    <latest_query>What are Tesla's latest Model 3 prices and what new features did Apple announce for iPhone 15?</latest_query>
+    <output>
+    {
+      "web_search_required": true,
+      "search_queries": [
+        "Tesla Model 3 prices 2024",
+        "Apple iPhone 15 new features announcement"
+      ]
+    }
+    </output>
     </example>
 
     <example>
-    Previous query: "what does 'serendipity' mean"
-    Latest query: "search the net"
-    Output: {
+    <chat_history>
+    User: Tell me about climate change
+    Assistant: Climate change refers to long-term shifts in global temperatures...
+    </chat_history>
+    <latest_query>What were the key outcomes of the latest UN climate summit?</latest_query>
+    <output>
+    {
       "web_search_required": true,
-      "search_queries": ["serendipity meaning definition"]
+      "search_queries": ["UN climate summit latest outcomes 2024"]
     }
-    </example>
-
-    <example>
-    Input: "what does 'hi' mean search the net"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["hi meaning definition"]
-    }
-    </example>
-
-    <example>
-    Previous query: "how to make sourdough starter"
-    Latest query: "google it"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["how to make sourdough starter"]
-    }
-    </example>
-
-    <example>
-    Input: "explain quantum computing search online"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["quantum computing explanation"]
-    }
-    </example>
-
-    <example>
-    Previous query: "best gaming phones 2025"
-    Latest query: "search reddit"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["best gaming phones 2025 reddit", "best gaming phones 2025 site:reddit.com"]
-    }
-    </example>
-
-    <example>
-    Input: "best budget laptops reddit"
-    Output: {
-      "web_search_required": true,
-      "search_queries": ["best budget laptops reddit", "best budget laptops site:reddit.com"]
-    }
+    </output>
     </example>
     </examples>
 
-    <search_indicators>
-    Generic web search indicators that FORCE web search:
-    - "search the net", "search the web", "search online"
-    - "google it", "google", "search google"
-    - "look it up", "look online", "search for it"
-    - "find online", "check online", "search internet"
+    <chat_history>
+    {chat_history}
+    </chat_history>
 
-    Platform-specific indicators:
-    - "reddit", "search reddit", "on reddit", "r/"
-    - "youtube", "search youtube", "yt"
-    - "twitter", "x.com", "tweets"
-    - "stackoverflow", "stack overflow"
-    - "github", "search github"
-    - "linkedin", "search linkedin"
-    </search_indicators>
+    <latest_query>
+    {latest_query}
+    </latest_query>
 
     <output_format>
     Return ONLY valid JSON in one of these formats:
-    - If web search needed: {"web_search_required": true, "search_queries": ["query1", "query2"]}
-    - If web search NOT needed: {"web_search_required": false}
+    - If no search needed: {"web_search_required": false}
+    - If search needed: {"web_search_required": true, "search_queries": ["query1", "query2", ...]}
     </output_format>
-
-    <previous_query>
-    {{previous_query}}
-    </previous_query>
-
-    <query>
-    {{latest_query}}
-    </query>
 
 # ==============================================================================
 # Chat History Persistence Settings

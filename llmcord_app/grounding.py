@@ -808,88 +808,100 @@ async def generate_search_queries_with_custom_prompt(
     current_day_of_week_str = now.strftime("%A")
     current_time_str = now.strftime("%I:%M %p")  # e.g., "02:30 PM"
 
-    # Insert previous_query if available (second-to-last user message)
-    previous_query = ""
-    if len(chat_history) > 1:
-        # Find the last user message before the latest_query
-        for entry in reversed(chat_history[:-1]):
-            if entry.get("role") == "user" and isinstance(
-                entry.get("content"), (str, list, dict)
-            ):
-                # If content is a list (OpenAI format), try to extract text
-                if isinstance(entry["content"], list):
-                    for part in entry["content"]:
-                        if (
-                            isinstance(part, dict)
-                            and part.get("type") == "text"
-                            and part.get("text")
-                        ):
-                            previous_query = part["text"]
-                            break
-                    if previous_query:
-                        break
-                elif isinstance(entry["content"], dict):
-                    if entry["content"].get("type") == "text" and entry["content"].get(
-                        "text"
-                    ):
-                        previous_query = entry["content"]["text"]
-                        break
-                elif isinstance(entry["content"], str):
-                    previous_query = entry["content"]
+    # 1. Format Chat History (from chat_history[:-1])
+    formatted_chat_history_parts = []
+    history_to_format = chat_history[:-1]  # History leading up to the latest query
+
+    for message_dict in history_to_format:
+        role = message_dict.get("role")
+        text_content = ""
+
+        if role == "model" or role == "assistant":
+            role_for_display = "assistant"
+        elif role == "user":
+            role_for_display = "user"
+        else:
+            continue  # Skip unknown roles
+
+        # Extract text content from message_dict
+        # message_dict structure can be like:
+        # Gemini: {"role": "user/model", "parts": [Part(text="..."), Part(inline_data=...)]}
+        # OpenAI: {"role": "user/assistant", "content": "text_string" or [{"type":"text", "text":"..."}, {"type":"image_url", ...}]}
+        if "parts" in message_dict:  # Likely Gemini-style from build_message_history
+            for part in message_dict["parts"]:
+                if hasattr(part, "text") and part.text:
+                    text_content = part.text
                     break
-    formatted_prompt = prompt_template.replace("{latest_query}", latest_query)
-    formatted_prompt = formatted_prompt.replace("{previous_query}", previous_query)
-    formatted_prompt = formatted_prompt.replace("{current_date}", current_date_str)
-    formatted_prompt = formatted_prompt.replace(
+        elif "content" in message_dict:  # Likely OpenAI-style
+            if isinstance(message_dict["content"], str):
+                text_content = message_dict["content"]
+            elif isinstance(message_dict["content"], list):
+                for item_part in message_dict["content"]:
+                    if isinstance(item_part, dict) and item_part.get("type") == "text":
+                        text_content = item_part.get("text", "")
+                        break
+        
+        if text_content.strip():
+            formatted_chat_history_parts.append(f"{role_for_display}: {text_content.strip()}")
+
+    formatted_chat_history_string = "\n\n".join(formatted_chat_history_parts)
+
+    # 2. Prepare the Single Prompt Text
+    # Replace basic placeholders first
+    current_prompt_text = prompt_template.replace("{latest_query}", latest_query)
+    current_prompt_text = current_prompt_text.replace("{current_date}", current_date_str)
+    current_prompt_text = current_prompt_text.replace(
         "{current_day_of_week}", current_day_of_week_str
     )
-    formatted_prompt = formatted_prompt.replace("{current_time}", current_time_str)
+    current_prompt_text = current_prompt_text.replace("{current_time}", current_time_str)
 
-    # Exclude the last message from chat_history as it's the latest_query,
-    # already embedded in formatted_prompt.
-    # chat_history[:-1] correctly handles empty or single-element lists.
+    # Inject formatted chat history
+    if "{chat_history}" in current_prompt_text:
+        final_prompt_text = current_prompt_text.replace("{chat_history}", formatted_chat_history_string)
+    else:
+        logging.warning("'{chat_history}' placeholder not found in search_query_generation_prompt_template. Chat history will not be textually injected as a block.")
+        # Optionally, append if placeholder is missing and history exists
+        # if formatted_chat_history_string:
+        #     final_prompt_text = current_prompt_text + "\n\nChat History:\n" + formatted_chat_history_string
+        # else:
+        #     final_prompt_text = current_prompt_text
+        final_prompt_text = current_prompt_text # Default to not appending if placeholder missing
 
+    # 3. Process Images (same as before)
     processed_image_data_urls = []
-    if image_urls and httpx_client:  # Ensure client is available
+    if image_urls and httpx_client:
         for img_url in image_urls:
             try:
-                response = await httpx_client.get(img_url, timeout=10)  # Added timeout
-                response.raise_for_status()  # Raise HTTPStatusError for bad responses (4xx or 5xx)
+                response = await httpx_client.get(img_url, timeout=10)
+                response.raise_for_status()
                 image_bytes = await response.aread()
-                mime_type = response.headers.get(
-                    "Content-Type", "image/jpeg"
-                )  # Default to jpeg if not found
-
-                # Ensure mime_type is a valid image type if necessary, or log warning
+                mime_type = response.headers.get("Content-Type", "image/jpeg")
                 if not mime_type.startswith("image/"):
                     logging.warning(
                         f"Content-Type '{mime_type}' from {img_url} is not an image type. Skipping image."
                     )
-                    continue  # Or handle as an error
-
+                    continue
                 base64_encoded_image = base64.b64encode(image_bytes).decode("utf-8")
                 data_url = f"data:{mime_type};base64,{base64_encoded_image}"
                 processed_image_data_urls.append(data_url)
-                logging.info(
-                    f"Successfully processed and added image as data URL: {img_url[:50]}..."
-                )
-            except httpx.HTTPStatusError as e:
-                logging.error(f"HTTP error fetching image {img_url}: {e}")
-                # Optionally, decide if you want to skip this image or stop the process
-            except httpx.TimeoutException as e:
-                logging.error(f"Timeout fetching image {img_url}: {e}")
             except Exception as e:
-                logging.error(f"Error processing image {img_url}: {e}")
+                logging.error(f"Error processing image {img_url} for search query gen: {e}")
 
-    user_prompt_content_parts = [{"type": "text", "text": formatted_prompt}]
-    if processed_image_data_urls:  # Use the new list of data URIs
+    # 4. Construct user_prompt_content_parts for the API call
+    # This will be a list of parts, e.g., [{"type": "text", "text": "..."}, {"type": "image_url", ...}]
+    # This structure is generally for OpenAI-like models; llm_handler will adapt it for Gemini if needed.
+    user_prompt_content_parts_for_api = []
+    user_prompt_content_parts_for_api.append({"type": "text", "text": final_prompt_text})
+
+    if processed_image_data_urls:
         for data_url in processed_image_data_urls:
-            user_prompt_content_parts.append(
+            user_prompt_content_parts_for_api.append(
                 {"type": "image_url", "image_url": {"url": data_url}}
             )
-
-    messages_for_llm = chat_history[:-1] + [
-        {"role": "user", "content": user_prompt_content_parts}
+    
+    # 5. Construct messages_for_llm as a single user turn
+    messages_for_llm = [
+        {"role": "user", "content": user_prompt_content_parts_for_api}
     ]
 
     try:
