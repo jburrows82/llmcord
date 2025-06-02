@@ -7,7 +7,17 @@ client_id: YOUR_DISCORD_CLIENT_ID # Replace with your bot's client ID
 status_message: "Listening to your commands!" # Message displayed as the bot's status
 
 # --- Message & Interaction Configuration ---
-max_text: 2000       # Max TOTAL tokens for the LLM prompt (system, history, content, images). Uses tiktoken.
+# max_text: 2000       # This is replaced by max_text_limits below.
+max_text_limits:
+  default: 128000 # Default max_text in tokens for LLM prompt (system, history, content, images). Uses tiktoken.
+  models:
+    "openai/gpt-4.1": 128000
+    "google/gemini-2.5-flash-preview-05-20": 250000
+    "anthropic/claude-3.7-sonnet": 90000
+    "anthropic/claude-3.7-sonnet-thought": 90000
+    "anthropic/claude-sonnet-4": 80000
+max_text_safety_margin: 5000 # Tokens to subtract from max_text_limits for a safety buffer.
+min_token_limit_after_safety_margin: 1000 # Minimum token limit after applying the safety margin.
 max_images: 5        # Max number of images allowed in a single message.
 max_messages: 25     # Max number of messages to include in the history sent to the LLM.
 max_message_node_cache: 500 # Max messages stored in the internal bot cache for quick history retrieval.

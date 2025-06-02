@@ -25,6 +25,7 @@ from .constants import (
 
 from . import models
 from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
+from .config import get_max_text_for_model # New
 from .utils import (
     extract_urls_with_indices,
     is_image_url,
@@ -375,9 +376,10 @@ class LLMCordClient(discord.Client):
 
         # --- Configuration Values based on final model selection ---
         max_files_per_message = self.config.get("max_images", 5)
-        max_tokens_for_text_config = self.config.get(
-            "max_text", 2000
-        )  # Default to 2000 tokens if not in config
+        # Use the new helper function to get model-specific max_text
+        max_tokens_for_text_config = get_max_text_for_model(
+            self.config, final_provider_slash_model
+        )
         max_messages = self.config.get("max_messages", 25)
         use_plain_responses = self.config.get("use_plain_responses", False)
         split_limit = (

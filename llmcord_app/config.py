@@ -41,6 +41,11 @@ from .constants import (
     DEFAULT_JINA_TIMEOUT,  # Added
     # New config keys
     MAX_MESSAGE_NODES_CONFIG_KEY,
+    MAX_TEXT_LIMITS_CONFIG_KEY, # New
+    DEFAULT_MAX_TEXT_KEY, # New
+    MODEL_SPECIFIC_MAX_TEXT_KEY, # New
+    MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY, # New
+    MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY, # New
     EDIT_DELAY_SECONDS_CONFIG_KEY,
     RATE_LIMIT_COOLDOWN_HOURS_CONFIG_KEY,
     SEARXNG_NUM_RESULTS_CONFIG_KEY,
@@ -1070,7 +1075,131 @@ async def get_config(filename="config.yaml"):
                 config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY] = (
                     DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT
                 )
+            
+            # --- Load Max Text Limits ---
+            if MAX_TEXT_LIMITS_CONFIG_KEY not in config_data:
+                logging.warning(
+                    f"'{MAX_TEXT_LIMITS_CONFIG_KEY}' section not found in {filename}. "
+                    f"Using hardcoded default of 128000 for all models."
+                )
+                config_data[MAX_TEXT_LIMITS_CONFIG_KEY] = {
+                    DEFAULT_MAX_TEXT_KEY: 128000,
+                    MODEL_SPECIFIC_MAX_TEXT_KEY: {}
+                }
+            else:
+                limits_config = config_data[MAX_TEXT_LIMITS_CONFIG_KEY]
+                if not isinstance(limits_config, dict):
+                    logging.warning(
+                        f"'{MAX_TEXT_LIMITS_CONFIG_KEY}' is not a dictionary. "
+                        f"Using hardcoded default of 128000."
+                    )
+                    config_data[MAX_TEXT_LIMITS_CONFIG_KEY] = {
+                        DEFAULT_MAX_TEXT_KEY: 128000,
+                        MODEL_SPECIFIC_MAX_TEXT_KEY: {}
+                    }
+                    limits_config = config_data[MAX_TEXT_LIMITS_CONFIG_KEY]
 
+                if DEFAULT_MAX_TEXT_KEY not in limits_config:
+                    logging.warning(
+                        f"'{DEFAULT_MAX_TEXT_KEY}' not found in '{MAX_TEXT_LIMITS_CONFIG_KEY}'. "
+                        f"Using 128000 as default."
+                    )
+                    limits_config[DEFAULT_MAX_TEXT_KEY] = 128000
+                else:
+                    try:
+                        default_val = int(limits_config[DEFAULT_MAX_TEXT_KEY])
+                        if default_val <= 0:
+                            logging.warning(
+                                f"Default max_text '{default_val}' must be positive. Using 128000."
+                            )
+                            limits_config[DEFAULT_MAX_TEXT_KEY] = 128000
+                        else:
+                             limits_config[DEFAULT_MAX_TEXT_KEY] = default_val
+                    except ValueError:
+                        logging.warning(
+                            f"Default max_text '{limits_config[DEFAULT_MAX_TEXT_KEY]}' is not a valid integer. Using 128000."
+                        )
+                        limits_config[DEFAULT_MAX_TEXT_KEY] = 128000
+
+                if MODEL_SPECIFIC_MAX_TEXT_KEY not in limits_config:
+                    limits_config[MODEL_SPECIFIC_MAX_TEXT_KEY] = {}
+                elif not isinstance(limits_config[MODEL_SPECIFIC_MAX_TEXT_KEY], dict):
+                    logging.warning(
+                        f"'{MODEL_SPECIFIC_MAX_TEXT_KEY}' in '{MAX_TEXT_LIMITS_CONFIG_KEY}' is not a dictionary. "
+                        f"No model-specific limits will be applied."
+                    )
+                    limits_config[MODEL_SPECIFIC_MAX_TEXT_KEY] = {}
+                else:
+                    # Validate model-specific limits
+                    model_limits = limits_config[MODEL_SPECIFIC_MAX_TEXT_KEY]
+                    for model_id, limit_val in list(model_limits.items()): # Iterate over a copy for safe deletion
+                        try:
+                            val = int(limit_val)
+                            if val <= 0:
+                                logging.warning(
+                                    f"Max_text for model '{model_id}' ('{val}') must be positive. Removing specific limit."
+                                )
+                                del model_limits[model_id]
+                            else:
+                                model_limits[model_id] = val
+                        except ValueError:
+                            logging.warning(
+                                f"Max_text for model '{model_id}' ('{limit_val}') is not a valid integer. Removing specific limit."
+                            )
+                            del model_limits[model_id]
+            
+            # Remove old top-level max_text if it exists, to avoid confusion
+            if "max_text" in config_data:
+                logging.warning(
+                    f"Old 'max_text' setting found in {filename}. It is now ignored. "
+                    f"Please use '{MAX_TEXT_LIMITS_CONFIG_KEY}' instead."
+                )
+                # del config_data["max_text"] # Optionally remove it from the loaded config
+
+            # --- Load Max Text Safety Margin ---
+            if MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY not in config_data:
+                config_data[MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY] = 5000 # Default value
+                logging.info(
+                    f"'{MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY}' not found. Using default: 5000"
+                )
+            else:
+                try:
+                    val = int(config_data[MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY])
+                    if val < 0: # Can be 0 for no margin
+                        logging.warning(
+                            f"'{MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY}' ({val}) cannot be negative. Using default: 5000"
+                        )
+                        config_data[MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY] = 5000
+                    else:
+                        config_data[MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY}' is not a valid integer. Using default: 5000"
+                    )
+                    config_data[MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY] = 5000
+
+            # --- Load Min Token Limit After Safety Margin ---
+            if MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY not in config_data:
+                config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY] = 1000 # Default value
+                logging.info(
+                    f"'{MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY}' not found. Using default: 1000"
+                )
+            else:
+                try:
+                    val = int(config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY}' ({val}) must be positive. Using default: 1000"
+                        )
+                        config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY] = 1000
+                    else:
+                        config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY}' is not a valid integer. Using default: 1000"
+                    )
+                    config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY] = 1000
+            
             return config_data
 
     except FileNotFoundError:
@@ -1085,3 +1214,57 @@ async def get_config(filename="config.yaml"):
     except Exception as e:
         logging.error(f"CRITICAL: Unexpected error loading config from {filename}: {e}")
         raise  # Or return None / raise specific error
+
+def get_max_text_for_model(config: dict, model_identifier: str) -> int:
+    """
+    Retrieves the max_text token limit for a given model_identifier,
+    applies a configurable safety margin, and falls back to the default limit if needed.
+    """
+    safety_margin = config.get(MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY, 5000)
+    min_limit_after_margin = config.get(MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY, 1000)
+
+    limits_config = config.get(MAX_TEXT_LIMITS_CONFIG_KEY)
+    raw_limit = 0
+
+    if not limits_config or not isinstance(limits_config, dict):
+        logging.warning(
+            f"'{MAX_TEXT_LIMITS_CONFIG_KEY}' not found or invalid in config. Using hardcoded default of 128000 before safety margin."
+        )
+        raw_limit = 128000  # Hardcoded fallback
+    else:
+        model_specific_limits = limits_config.get(MODEL_SPECIFIC_MAX_TEXT_KEY, {})
+        if not isinstance(model_specific_limits, dict):
+            model_specific_limits = {}
+
+        if model_identifier in model_specific_limits:
+            specific_limit_val = model_specific_limits[model_identifier]
+            if isinstance(specific_limit_val, int) and specific_limit_val > 0:
+                raw_limit = specific_limit_val
+            else:
+                logging.warning(f"Invalid specific limit for '{model_identifier}': {specific_limit_val}. Falling back to default.")
+                # Fall through to use default if specific is invalid
+
+        if raw_limit == 0:  # If no valid specific limit was found
+            default_limit_val = limits_config.get(DEFAULT_MAX_TEXT_KEY, 128000)  # Default to 128k if key missing
+            if isinstance(default_limit_val, int) and default_limit_val > 0:
+                raw_limit = default_limit_val
+            else:
+                logging.warning(f"Invalid default limit: {default_limit_val}. Using hardcoded default of 128000 before safety margin.")
+                raw_limit = 128000  # Hardcoded fallback
+
+    # Apply safety margin
+    adjusted_limit = raw_limit - safety_margin
+    
+    # Ensure the limit doesn't go below the minimum
+    final_limit = max(adjusted_limit, min_limit_after_margin)
+
+    if final_limit != raw_limit - safety_margin : # Log if minimum cap was hit or if it's different from simple subtraction
+        logging.info(
+            f"Applied safety margin ({safety_margin}) to '{model_identifier}'. Raw: {raw_limit}, Adjusted (raw - margin): {adjusted_limit}, Final (after min check with {min_limit_after_margin}): {final_limit}"
+        )
+    else:
+        logging.debug(
+             f"Applied safety margin ({safety_margin}) to '{model_identifier}'. Raw: {raw_limit}, Final: {final_limit}"
+        )
+            
+    return final_limit
