@@ -353,6 +353,13 @@ alternative_search_query_generation:
   # Prompt to send to non-Gemini models for search query generation.
   # {latest_query} will be replaced with the user's latest message.
   # Note: If images are attached to the user's message, they will be sent to the LLM with this prompt.
+# Optional: System prompt for the search query generation model.
+  # {current_date} will be replaced with the current date.
+  # If commented out or empty, no system prompt will be used for this specific LLM call.
+  search_query_generation_system_prompt: |
+    You are an AI assistant that analyzes user queries and chat history to determine if a web search is necessary.
+    If a web search is needed, you generate concise and effective search queries.
+    Today's date is {current_date}.
   search_query_generation_prompt_template: |
     <task>
     Analyze the latest query to determine if it requires web search. Consider the chat history for context.

@@ -793,6 +793,9 @@ async def generate_search_queries_with_custom_prompt(
     prompt_template = alt_search_config_dict.get(
         "search_query_generation_prompt_template", ""
     )
+    system_prompt_template = alt_search_config_dict.get( # New: Get system prompt template
+        "search_query_generation_system_prompt", ""
+    )
 
     if not prompt_template:
         # This condition covers both missing 'alternative_search_query_generation' key
@@ -807,6 +810,15 @@ async def generate_search_queries_with_custom_prompt(
     current_date_str = now.strftime("%Y-%m-%d")
     current_day_of_week_str = now.strftime("%A")
     current_time_str = now.strftime("%I:%M %p")  # e.g., "02:30 PM"
+
+    # Prepare system prompt
+    final_system_prompt_text = None
+    if system_prompt_template:
+        final_system_prompt_text = system_prompt_template.replace("{current_date}", current_date_str)
+        # Add other placeholders if needed for system prompt, e.g., {current_day_of_week}, {current_time}
+        # final_system_prompt_text = final_system_prompt_text.replace("{current_day_of_week}", current_day_of_week_str)
+        # final_system_prompt_text = final_system_prompt_text.replace("{current_time}", current_time_str)
+        logging.info(f"Using system prompt for search query generation: {final_system_prompt_text}")
 
     # 1. Format Chat History (from chat_history[:-1])
     formatted_chat_history_parts = []
@@ -931,7 +943,7 @@ async def generate_search_queries_with_custom_prompt(
             provider=provider_name,
             model_name=model_name,
             history_for_llm=messages_for_llm,
-            system_prompt_text=None,  # Custom prompt is part of user message
+            system_prompt_text=final_system_prompt_text,  # Use the prepared system prompt
             provider_config=provider_config,
             extra_params=extra_params,
             app_config=config,  # Pass app_config
