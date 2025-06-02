@@ -158,7 +158,7 @@ async def build_message_history(
     max_tokens_for_text: int,  # This is the TOTAL history token limit from config's "max_text"
     max_files_per_message: int,
     accept_files: bool,
-    use_google_lens_for_current: bool, # Renamed for clarity
+    use_google_lens_for_current: bool,  # Renamed for clarity
     is_target_provider_gemini: bool,
     target_provider_name: str,
     target_model_name: str,
@@ -233,9 +233,15 @@ async def build_message_history(
                 if is_current_message_node:
                     curr_node.api_file_parts = []
                     # Store the distinct formatted content types for the current message node
-                    curr_node.user_provided_url_formatted_content = current_formatted_user_urls
-                    curr_node.google_lens_formatted_content = current_formatted_google_lens
-                    curr_node.search_results_formatted_content = current_formatted_search_results
+                    curr_node.user_provided_url_formatted_content = (
+                        current_formatted_user_urls
+                    )
+                    curr_node.google_lens_formatted_content = (
+                        current_formatted_google_lens
+                    )
+                    curr_node.search_results_formatted_content = (
+                        current_formatted_search_results
+                    )
                     logging.debug(
                         f"Stored formatted content for current node {current_msg_id}: "
                         f"UserURLs: {'present' if current_formatted_user_urls else 'None'}, "
@@ -298,7 +304,8 @@ async def build_message_history(
                             is_relevant_for_download = True
                         elif att.content_type.startswith("image/"):
                             if accept_files or (
-                                is_current_message_node and use_google_lens_for_current # Updated variable name
+                                is_current_message_node
+                                and use_google_lens_for_current  # Updated variable name
                             ):
                                 is_relevant_for_download = True
                         elif att.content_type == "application/pdf":
@@ -401,7 +408,9 @@ async def build_message_history(
 
                 temp_api_file_parts = []  # Build fresh for this scope
                 files_processed_for_api_count = 0
-                is_lens_trigger_message = is_current_message_node and use_google_lens_for_current # Updated variable name
+                is_lens_trigger_message = (
+                    is_current_message_node and use_google_lens_for_current
+                )  # Updated variable name
                 should_process_files_for_api = (
                     current_role == "user" or is_lens_trigger_message
                 ) and (accept_files or is_lens_trigger_message)
@@ -555,38 +564,69 @@ async def build_message_history(
             # Add to raw_history_entries_reversed (oldest will be at the end)
             # Construct external_content based on persistence settings for historical,
             # and use all available for current.
-            
+
             node_external_content_parts = []
-            history_persistence_settings = config.get(STAY_IN_CHAT_HISTORY_CONFIG_KEY, {})
+            history_persistence_settings = config.get(
+                STAY_IN_CHAT_HISTORY_CONFIG_KEY, {}
+            )
 
             if is_current_message_node:
                 # For the current message, always include all fetched external content
                 if curr_node.user_provided_url_formatted_content:
-                    node_external_content_parts.append(curr_node.user_provided_url_formatted_content)
+                    node_external_content_parts.append(
+                        curr_node.user_provided_url_formatted_content
+                    )
                 if curr_node.google_lens_formatted_content:
-                    node_external_content_parts.append(curr_node.google_lens_formatted_content)
+                    node_external_content_parts.append(
+                        curr_node.google_lens_formatted_content
+                    )
                 if curr_node.search_results_formatted_content:
-                    node_external_content_parts.append(curr_node.search_results_formatted_content)
+                    node_external_content_parts.append(
+                        curr_node.search_results_formatted_content
+                    )
             else:
                 # For historical messages, check config for persistence
-                if history_persistence_settings.get(STAY_IN_HISTORY_USER_URLS_KEY, True) and curr_node.user_provided_url_formatted_content:
-                    node_external_content_parts.append(curr_node.user_provided_url_formatted_content)
-                if history_persistence_settings.get(STAY_IN_HISTORY_GOOGLE_LENS_KEY, True) and curr_node.google_lens_formatted_content:
-                    node_external_content_parts.append(curr_node.google_lens_formatted_content)
-                if history_persistence_settings.get(STAY_IN_HISTORY_SEARCH_RESULTS_KEY, False) and curr_node.search_results_formatted_content: # Default False for search results
-                    node_external_content_parts.append(curr_node.search_results_formatted_content)
+                if (
+                    history_persistence_settings.get(
+                        STAY_IN_HISTORY_USER_URLS_KEY, True
+                    )
+                    and curr_node.user_provided_url_formatted_content
+                ):
+                    node_external_content_parts.append(
+                        curr_node.user_provided_url_formatted_content
+                    )
+                if (
+                    history_persistence_settings.get(
+                        STAY_IN_HISTORY_GOOGLE_LENS_KEY, True
+                    )
+                    and curr_node.google_lens_formatted_content
+                ):
+                    node_external_content_parts.append(
+                        curr_node.google_lens_formatted_content
+                    )
+                if (
+                    history_persistence_settings.get(
+                        STAY_IN_HISTORY_SEARCH_RESULTS_KEY, False
+                    )
+                    and curr_node.search_results_formatted_content
+                ):  # Default False for search results
+                    node_external_content_parts.append(
+                        curr_node.search_results_formatted_content
+                    )
 
             final_node_external_content = None
             if node_external_content_parts:
-                final_node_external_content = "External Content:\n" + "\n\n".join(filter(None, node_external_content_parts))
+                final_node_external_content = "External Content:\n" + "\n\n".join(
+                    filter(None, node_external_content_parts)
+                )
 
             history_entry = {
                 "id": current_msg_id,
                 "role": curr_node.role,
-                "text": curr_node.text, # This is the user's message text or bot's response text
+                "text": curr_node.text,  # This is the user's message text or bot's response text
                 "files": curr_node.api_file_parts,
                 "user_id": curr_node.user_id,
-                "external_content": final_node_external_content, # This is the combined external data
+                "external_content": final_node_external_content,  # This is the combined external data
             }
 
             raw_history_entries_reversed.append(history_entry)
@@ -881,7 +921,7 @@ async def build_message_history(
             # We are augmenting it with the external content.
             text_content_for_api = (
                 "User's query:\n"
-                + (entry["text"] or "") # Use the original text of the message
+                + (entry["text"] or "")  # Use the original text of the message
                 + "\n\nExternal Content:\n"
                 + entry["external_content"]
             )

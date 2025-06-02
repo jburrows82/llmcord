@@ -86,6 +86,13 @@ GROUNDING_MODEL_TOP_K_CONFIG_KEY = "grounding_model_top_k"
 DEFAULT_GROUNDING_MODEL_TOP_K = 40
 GROUNDING_MODEL_TOP_P_CONFIG_KEY = "grounding_model_top_p"
 DEFAULT_GROUNDING_MODEL_TOP_P = 0.95
+# Grounding Model Thinking Budget (Imported from below, but belongs with other grounding params)
+GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY = "grounding_model_use_thinking_budget"
+GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY = (
+    "grounding_model_thinking_budget_value"
+)
+GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET = False
+GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE = 0
 
 # --- General URL Content Extraction ---
 MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY = "main_general_url_content_extractor"
@@ -134,6 +141,17 @@ GEMINI_DEFAULT_USE_THINKING_BUDGET = False
 GEMINI_DEFAULT_THINKING_BUDGET_VALUE = 0
 GEMINI_MIN_THINKING_BUDGET_VALUE = 0
 GEMINI_MAX_THINKING_BUDGET_VALUE = 24576
+
+# --- Grounding Model Thinking Budget Specific Constants ---
+GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY = "grounding_model_use_thinking_budget"
+GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY = (
+    "grounding_model_thinking_budget_value"
+)
+GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET = False
+GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE = (
+    0  # Default to 0 (thinking disabled) for grounding
+)
+
 USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME = "user_gemini_thinking_budget_prefs.json"
 USER_SYSTEM_PROMPTS_FILENAME = "user_system_prompts.json"
 USER_MODEL_PREFS_FILENAME = "user_model_prefs.json"
@@ -204,15 +222,16 @@ DEEP_SEARCH_MODEL_CONFIG_KEY = "deep_search_model"
 # --- Gemini Safety Settings ---
 GEMINI_SAFETY_SETTINGS_CONFIG_KEY = "gemini_safety_settings"
 # Use google.genai.types (imported as google_types)
- 
+
 # --- Prompt Enhancer ---
 PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY = "prompt_enhancer_system_prompt"
- 
+
 # --- History Persistence Configuration Keys ---
 STAY_IN_CHAT_HISTORY_CONFIG_KEY = "stay_in_chat_history"
 STAY_IN_HISTORY_USER_URLS_KEY = "user_provided_urls"
 STAY_IN_HISTORY_SEARCH_RESULTS_KEY = "search_results"
 STAY_IN_HISTORY_GOOGLE_LENS_KEY = "google_lens"
+
 
 # --- Custom Exceptions ---
 class AllKeysFailedError(Exception):

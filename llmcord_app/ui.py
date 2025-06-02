@@ -10,7 +10,7 @@ from .constants import (
     EMBED_COLOR_COMPLETE,
     MAX_EMBED_FIELD_VALUE_LENGTH,
     OUTPUT_SHARING_CONFIG_KEY,
-    TEXTIS_ENABLED_CONFIG_KEY, # Changed from NGROK_ENABLED_CONFIG_KEY
+    TEXTIS_ENABLED_CONFIG_KEY,  # Changed from NGROK_ENABLED_CONFIG_KEY
 )
 from .utils import add_field_safely
 from .output_server import start_output_server
@@ -69,9 +69,11 @@ class ResponseActionView(ui.View):
             if self.app_config
             else {}
         )
-        textis_is_enabled = output_sharing_cfg.get(TEXTIS_ENABLED_CONFIG_KEY, False) # Changed variable name and key
+        textis_is_enabled = output_sharing_cfg.get(
+            TEXTIS_ENABLED_CONFIG_KEY, False
+        )  # Changed variable name and key
 
-        if self.full_response_text and textis_is_enabled: # Changed variable name
+        if self.full_response_text and textis_is_enabled:  # Changed variable name
             # Determine row for ViewRenderedOutputButton
             # If sources button exists, and text file button also exists, this goes to row 2
             # If only sources button exists, this goes to row 1 (same as text file would)
@@ -95,7 +97,9 @@ class ResponseActionView(ui.View):
                 # Check if the view hasn't already been replaced or removed
                 # Fetch the message again to ensure we have the latest state
                 message = await self.message.channel.fetch_message(self.message.id)
-                if hasattr(message, 'view') and message.view is self:  # Only edit if this view is still attached
+                if (
+                    hasattr(message, "view") and message.view is self
+                ):  # Only edit if this view is still attached
                     for item in self.children:
                         if isinstance(item, ui.Button):
                             item.disabled = True
@@ -356,11 +360,13 @@ class ResponseActionView(ui.View):
                 return
 
             output_sharing_cfg = view.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
-            textis_is_enabled = output_sharing_cfg.get(TEXTIS_ENABLED_CONFIG_KEY, False) # Changed variable name and key
+            textis_is_enabled = output_sharing_cfg.get(
+                TEXTIS_ENABLED_CONFIG_KEY, False
+            )  # Changed variable name and key
 
-            if not textis_is_enabled: # Changed variable name
+            if not textis_is_enabled:  # Changed variable name
                 await interaction.response.send_message(
-                    "Output sharing (text.is) is not enabled in the configuration.", # Changed message
+                    "Output sharing (text.is) is not enabled in the configuration.",  # Changed message
                     ephemeral=False,
                 )
                 return
@@ -375,13 +381,15 @@ class ResponseActionView(ui.View):
                 )
                 if public_url:
                     await interaction.followup.send(
-                        f"🔗 View output on text.is: {public_url}", # Changed message
+                        f"🔗 View output on text.is: {public_url}",  # Changed message
                         ephemeral=False,
                     )
-                    logging.info(f"Sent text.is public URL via button: {public_url}") # Changed log
+                    logging.info(
+                        f"Sent text.is public URL via button: {public_url}"
+                    )  # Changed log
                 else:
                     await interaction.followup.send(
-                        "Could not generate a public link via text.is for the output.", # Changed message
+                        "Could not generate a public link via text.is for the output.",  # Changed message
                         ephemeral=False,
                     )
             except Exception as e:

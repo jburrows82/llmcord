@@ -67,9 +67,14 @@ from .constants import (
     DEFAULT_GROUNDING_MODEL_TOP_K,
     GROUNDING_MODEL_TOP_P_CONFIG_KEY,
     DEFAULT_GROUNDING_MODEL_TOP_P,
+    # Grounding Model Thinking Budget
+    GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY,
+    GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET,
+    GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE,
     PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY,  # New
 )
- 
+
 # Alternative Search Query Generation Config Keys
 ALT_SEARCH_SECTION_KEY = "alternative_search_query_generation"
 ALT_SEARCH_ENABLED_KEY = "enabled"
@@ -217,13 +222,14 @@ If the user is discussing a topic, formulate queries that would find recent deve
 Do not generate more than 5 search queries.
 Output only the search queries, each on a new line. Do not add any other text, preamble, or explanation.
 """.strip()
- 
+
 DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT = """
 You are an expert prompt engineer. Your task is to refine a user's input to make it a more effective prompt for a large language model.
 Follow the provided prompt design strategies and guides to improve the user's original prompt.
 Output *only* the improved prompt, without any preamble, explanation, or markdown formatting.
 """.strip()
- 
+
+
 async def get_config(filename="config.yaml"):
     """Loads, validates, and returns the configuration from a YAML file asynchronously."""
     try:
@@ -669,6 +675,65 @@ async def get_config(filename="config.yaml"):
                         DEFAULT_GROUNDING_MODEL_TOP_P
                     )
 
+            # --- Load Grounding Model Thinking Budget Settings ---
+            if GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY not in config_data:
+                config_data[GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY] = (
+                    GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY}' not found. "
+                    f"Using default: {GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET}"
+                )
+            elif not isinstance(
+                config_data[GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY], bool
+            ):
+                logging.warning(
+                    f"'{GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY}' is not a boolean. "
+                    f"Using default: {GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET}"
+                )
+                config_data[GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY] = (
+                    GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET
+                )
+
+            if GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY not in config_data:
+                config_data[GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
+                    GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE
+                )
+                logging.info(
+                    f"'{GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY}' not found. "
+                    f"Using default: {GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE}"
+                )
+            else:
+                try:
+                    val = int(
+                        config_data[GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY]
+                    )
+                    if not (
+                        GEMINI_MIN_THINKING_BUDGET_VALUE  # Shared min/max with general Gemini budget
+                        <= val
+                        <= GEMINI_MAX_THINKING_BUDGET_VALUE
+                    ):
+                        logging.warning(
+                            f"'{GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY}' ({val}) is outside the valid range "
+                            f"({GEMINI_MIN_THINKING_BUDGET_VALUE}-{GEMINI_MAX_THINKING_BUDGET_VALUE}). "
+                            f"Using default: {GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE}"
+                        )
+                        config_data[
+                            GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY
+                        ] = GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE
+                    else:
+                        config_data[
+                            GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY
+                        ] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE}"
+                    )
+                    config_data[GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY] = (
+                        GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE
+                    )
+
             if (
                 FALLBACK_VISION_MODEL_CONFIG_KEY not in config_data
                 or not config_data.get(FALLBACK_VISION_MODEL_CONFIG_KEY)
@@ -725,7 +790,7 @@ async def get_config(filename="config.yaml"):
                 )
                 output_sharing_cfg[TEXTIS_ENABLED_CONFIG_KEY] = False
             # NGROK_AUTHTOKEN_CONFIG_KEY, GRIP_PORT_CONFIG_KEY, NGROK_STATIC_DOMAIN_CONFIG_KEY, CLEANUP_ON_SHUTDOWN_CONFIG_KEY removed
- 
+
             if URL_SHORTENER_ENABLED_CONFIG_KEY not in output_sharing_cfg:
                 output_sharing_cfg[URL_SHORTENER_ENABLED_CONFIG_KEY] = (
                     False  # Default to False
@@ -1041,16 +1106,18 @@ async def get_config(filename="config.yaml"):
                 config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY] = (
                     DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT
                 )
-            elif not isinstance(config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY], str):
+            elif not isinstance(
+                config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY], str
+            ):
                 logging.warning(
                     f"'{PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY}' is not a string. Using default."
                 )
                 config_data[PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY] = (
                     DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT
                 )
- 
+
             return config_data
- 
+
     except FileNotFoundError:
         logging.error(
             f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it."

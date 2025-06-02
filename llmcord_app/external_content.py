@@ -359,9 +359,7 @@ def format_external_content(
     for result in url_fetch_results:
         if result.content:  # Only include successful fetches
             if result.type == "google_lens_serpapi":
-                header = (
-                    f"Google Lens results for image {result.original_index + 1}:\n"
-                )
+                header = f"Google Lens results for image {result.original_index + 1}:\n"
                 google_lens_parts_list.append(header + str(result.content))
             elif result.type in [
                 "youtube",
@@ -377,7 +375,9 @@ def format_external_content(
                         content_str += (
                             f"  Title: {result.content.get('title', 'N/A')}\n"
                         )
-                        content_str += f"  Channel: {result.content.get('channel_name', 'N/A')}\n"
+                        content_str += (
+                            f"  Channel: {result.content.get('channel_name', 'N/A')}\n"
+                        )
                         desc = result.content.get("description", "N/A")
                         content_str += f"  Description: {desc}\n"
                         transcript = result.content.get("transcript")
@@ -402,7 +402,7 @@ def format_external_content(
                             )
                 elif isinstance(result.content, str):  # General web page
                     content_str += f"  Content: {result.content}\n"
-                
+
                 user_provided_url_parts_list.append(content_str)
                 url_counter += 1
             # image_url_content types are handled as binary data for API parts,
@@ -412,8 +412,6 @@ def format_external_content(
         formatted_content_dict["lens"] = "\n\n".join(google_lens_parts_list)
 
     if user_provided_url_parts_list:
-        formatted_content_dict["user_urls"] = "\n\n".join(
-            user_provided_url_parts_list
-        )
+        formatted_content_dict["user_urls"] = "\n\n".join(user_provided_url_parts_list)
 
     return formatted_content_dict

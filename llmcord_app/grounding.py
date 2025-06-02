@@ -19,6 +19,11 @@ from .constants import (
     DEFAULT_GROUNDING_MODEL_TEMPERATURE,  # Added
     DEFAULT_GROUNDING_MODEL_TOP_K,  # Added
     DEFAULT_GROUNDING_MODEL_TOP_P,  # Added
+    # Grounding Model Thinking Budget
+    GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY,
+    GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY,
+    GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET,
+    GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE,
     SEARXNG_NUM_RESULTS_CONFIG_KEY,
     AllKeysFailedError,
     # General URL Extractors
@@ -110,6 +115,28 @@ async def get_web_search_queries_from_gemini(
             "top_k": grounding_top_k,
             "top_p": grounding_top_p,
         }
+        # Add thinking budget if configured and model is Gemini
+        grounding_use_thinking_budget = config.get(
+            GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY,
+            GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET,
+        )
+        if grounding_use_thinking_budget and grounding_provider == "google":
+            grounding_thinking_budget_value = config.get(
+                GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY,
+                GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE,
+            )
+            # Ensure the model is Flash, as thinkingBudget is only supported in Gemini 2.5 Flash
+            if "flash" in grounding_model_name.lower():
+                grounding_extra_params["thinking_budget"] = (
+                    grounding_thinking_budget_value
+                )
+                logging.info(
+                    f"Applying thinking_budget: {grounding_thinking_budget_value} to Gemini grounding model {grounding_model_name}"
+                )
+            else:
+                logging.warning(
+                    f"Thinking budget is configured for grounding model {grounding_model_name}, but it's not a Gemini Flash model. Ignoring thinking_budget."
+                )
 
         stream_generator = generate_response_stream_func(
             provider=grounding_provider,

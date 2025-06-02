@@ -617,9 +617,9 @@ class LLMCordClient(discord.Client):
         # Initialize formatted content strings
         formatted_user_urls_content = ""
         formatted_google_lens_content = ""
-        searxng_derived_context_str = "" # For search results
-        url_fetch_results = [] # To store raw fetch results for image processing later
-        
+        searxng_derived_context_str = ""  # For search results
+        url_fetch_results = []  # To store raw fetch results for image processing later
+
         custom_search_performed = False  # Flag to track if new search path was taken
         custom_search_queries_generated_flag = False  # New flag for footer
         successful_api_results_count = 0  # New counter for footer
@@ -659,9 +659,13 @@ class LLMCordClient(discord.Client):
                 formatted_user_urls_content = formatted_parts.get("user_urls", "")
                 formatted_google_lens_content = formatted_parts.get("lens", "")
                 if formatted_user_urls_content:
-                    logging.info(f"Formatted content from user-provided URLs (Lens path): {len(formatted_user_urls_content)} chars")
+                    logging.info(
+                        f"Formatted content from user-provided URLs (Lens path): {len(formatted_user_urls_content)} chars"
+                    )
                 if formatted_google_lens_content:
-                    logging.info(f"Formatted content from Google Lens: {len(formatted_google_lens_content)} chars")
+                    logging.info(
+                        f"Formatted content from Google Lens: {len(formatted_google_lens_content)} chars"
+                    )
 
             logging.info(
                 "Google Lens was active. User-provided URLs and Lens content (if any) have been processed."
@@ -705,19 +709,19 @@ class LLMCordClient(discord.Client):
             history_for_custom_prompt = await build_message_history(
                 new_msg=new_msg,
                 initial_cleaned_content=cleaned_content,  # latest_query for the prompt
-                current_formatted_user_urls="", # No user URLs for this specific call's context
-                current_formatted_google_lens="",   # No Lens for this specific call's context
-                current_formatted_search_results="", # No search results for this specific call's context
+                current_formatted_user_urls="",  # No user URLs for this specific call's context
+                current_formatted_google_lens="",  # No Lens for this specific call's context
+                current_formatted_search_results="",  # No search results for this specific call's context
                 max_messages=max_messages,
                 max_tokens_for_text=max_tokens_for_text_config,
                 max_files_per_message=max_files_per_message,
                 accept_files=accept_files,  # Based on the current final_provider_slash_model
-                use_google_lens_for_current=False, # Not using lens for query gen
+                use_google_lens_for_current=False,  # Not using lens for query gen
                 is_target_provider_gemini=current_provider_is_gemini_for_history,
                 target_provider_name=provider,  # Provider of the current model
                 target_model_name=model_name,  # Name of the current model
                 user_warnings=user_warnings,
-                current_message_url_fetch_results=None, # No separate URL results for this specific call
+                current_message_url_fetch_results=None,  # No separate URL results for this specific call
                 msg_nodes_cache=self.msg_nodes,
                 bot_user_obj=self.user,
                 httpx_async_client=self.httpx_client,
@@ -764,7 +768,9 @@ class LLMCordClient(discord.Client):
                             )
                             successful_api_results_count = count  # Store count
                             if searxng_derived_context:
-                                searxng_derived_context_str = searxng_derived_context # Store search results
+                                searxng_derived_context_str = (
+                                    searxng_derived_context  # Store search results
+                                )
                                 logging.info(
                                     f"Successfully fetched and formatted search results from custom queries: {len(searxng_derived_context_str)} chars"
                                 )
@@ -810,14 +816,14 @@ class LLMCordClient(discord.Client):
             history_for_gemini_grounding = await build_message_history(
                 new_msg=new_msg,
                 initial_cleaned_content=cleaned_content,
-                current_formatted_user_urls="", # No user URLs for this specific call's context
-                current_formatted_google_lens="",   # No Lens for this specific call's context
-                current_formatted_search_results="", # No search results for this specific call's context
+                current_formatted_user_urls="",  # No user URLs for this specific call's context
+                current_formatted_google_lens="",  # No Lens for this specific call's context
+                current_formatted_search_results="",  # No search results for this specific call's context
                 max_messages=max_messages,
                 max_tokens_for_text=max_tokens_for_text_config,
                 max_files_per_message=max_files_per_message,
                 accept_files=True,
-                use_google_lens_for_current=False, # Not using lens for query gen
+                use_google_lens_for_current=False,  # Not using lens for query gen
                 is_target_provider_gemini=True,  # Grounding model is assumed to be Gemini-like for now
                 target_provider_name=self.config.get(
                     GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
@@ -826,7 +832,7 @@ class LLMCordClient(discord.Client):
                     GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
                 ).split("/", 1)[1],
                 user_warnings=user_warnings,
-                current_message_url_fetch_results=None, # No separate URL results for this specific call
+                current_message_url_fetch_results=None,  # No separate URL results for this specific call
                 msg_nodes_cache=self.msg_nodes,
                 bot_user_obj=self.user,
                 httpx_async_client=self.httpx_client,
@@ -878,8 +884,12 @@ class LLMCordClient(discord.Client):
                     )
                     successful_api_results_count = count  # Store count
                     if searxng_derived_context:
-                        searxng_derived_context_str = searxng_derived_context # Store search results
-                        logging.info(f"Formatted SearXNG results obtained (Gemini grounding path): {len(searxng_derived_context_str)} chars")
+                        searxng_derived_context_str = (
+                            searxng_derived_context  # Store search results
+                        )
+                        logging.info(
+                            f"Formatted SearXNG results obtained (Gemini grounding path): {len(searxng_derived_context_str)} chars"
+                        )
                     else:
                         logging.info(
                             "Failed to generate context from SearxNG (Gemini grounding path), or no results found."
@@ -912,9 +922,11 @@ class LLMCordClient(discord.Client):
                 # formatted_google_lens_content = formatted_parts.get("lens", "") # This should be empty if use_google_lens is false
 
                 if formatted_user_urls_content:
-                     logging.info(f"Formatted content from user-provided URLs (direct path): {len(formatted_user_urls_content)} chars")
+                    logging.info(
+                        f"Formatted content from user-provided URLs (direct path): {len(formatted_user_urls_content)} chars"
+                    )
                 # No custom_search_queries_generated_flag or successful_api_results_count here.
-        
+
         # This check for url_fetch_results is now primarily for image URL removal from cleaned_content
         if url_fetch_results:
             successfully_fetched_image_urls = {

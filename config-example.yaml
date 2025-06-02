@@ -180,6 +180,15 @@ grounding_model_top_k: 40
 # Must be a float between 0.0 and 1.0. Default: 0.95 (see llmcord_app/constants.py)
 grounding_model_top_p: 0.95
 
+# Optional: Enable thinking budget for the grounding model (if it's Gemini).
+# This is separate from the main 'gemini_use_thinking_budget' for user-facing responses.
+# Default: false (see llmcord_app/constants.py)
+grounding_model_use_thinking_budget: true
+
+# Optional: Value for the grounding model's thinking budget if enabled.
+# (0-24576). Default: 0 (thinking disabled) (see llmcord_app/constants.py)
+grounding_model_thinking_budget_value: 0
+
 # --- Extra API Parameters ---
 # These parameters are passed to the LLM API if supported by the provider and model.
 # They allow for fine-tuning model behavior beyond standard configurations.
