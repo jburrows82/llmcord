@@ -793,8 +793,10 @@ async def generate_search_queries_with_custom_prompt(
     prompt_template = alt_search_config_dict.get(
         "search_query_generation_prompt_template", ""
     )
-    system_prompt_template = alt_search_config_dict.get( # New: Get system prompt template
-        "search_query_generation_system_prompt", ""
+    system_prompt_template = (
+        alt_search_config_dict.get(  # New: Get system prompt template
+            "search_query_generation_system_prompt", ""
+        )
     )
 
     if not prompt_template:
@@ -814,11 +816,15 @@ async def generate_search_queries_with_custom_prompt(
     # Prepare system prompt
     final_system_prompt_text = None
     if system_prompt_template:
-        final_system_prompt_text = system_prompt_template.replace("{current_date}", current_date_str)
+        final_system_prompt_text = system_prompt_template.replace(
+            "{current_date}", current_date_str
+        )
         # Add other placeholders if needed for system prompt, e.g., {current_day_of_week}, {current_time}
         # final_system_prompt_text = final_system_prompt_text.replace("{current_day_of_week}", current_day_of_week_str)
         # final_system_prompt_text = final_system_prompt_text.replace("{current_time}", current_time_str)
-        logging.info(f"Using system prompt for search query generation: {final_system_prompt_text}")
+        logging.info(
+            f"Using system prompt for search query generation: {final_system_prompt_text}"
+        )
 
     # 1. Format Chat History (from chat_history[:-1])
     formatted_chat_history_parts = []
@@ -852,32 +858,44 @@ async def generate_search_queries_with_custom_prompt(
                     if isinstance(item_part, dict) and item_part.get("type") == "text":
                         text_content = item_part.get("text", "")
                         break
-        
+
         if text_content.strip():
-            formatted_chat_history_parts.append(f"{role_for_display}: {text_content.strip()}")
+            formatted_chat_history_parts.append(
+                f"{role_for_display}: {text_content.strip()}"
+            )
 
     formatted_chat_history_string = "\n\n".join(formatted_chat_history_parts)
 
     # 2. Prepare the Single Prompt Text
     # Replace basic placeholders first
     current_prompt_text = prompt_template.replace("{latest_query}", latest_query)
-    current_prompt_text = current_prompt_text.replace("{current_date}", current_date_str)
+    current_prompt_text = current_prompt_text.replace(
+        "{current_date}", current_date_str
+    )
     current_prompt_text = current_prompt_text.replace(
         "{current_day_of_week}", current_day_of_week_str
     )
-    current_prompt_text = current_prompt_text.replace("{current_time}", current_time_str)
+    current_prompt_text = current_prompt_text.replace(
+        "{current_time}", current_time_str
+    )
 
     # Inject formatted chat history
     if "{chat_history}" in current_prompt_text:
-        final_prompt_text = current_prompt_text.replace("{chat_history}", formatted_chat_history_string)
+        final_prompt_text = current_prompt_text.replace(
+            "{chat_history}", formatted_chat_history_string
+        )
     else:
-        logging.warning("'{chat_history}' placeholder not found in search_query_generation_prompt_template. Chat history will not be textually injected as a block.")
+        logging.warning(
+            "'{chat_history}' placeholder not found in search_query_generation_prompt_template. Chat history will not be textually injected as a block."
+        )
         # Optionally, append if placeholder is missing and history exists
         # if formatted_chat_history_string:
         #     final_prompt_text = current_prompt_text + "\n\nChat History:\n" + formatted_chat_history_string
         # else:
         #     final_prompt_text = current_prompt_text
-        final_prompt_text = current_prompt_text # Default to not appending if placeholder missing
+        final_prompt_text = (
+            current_prompt_text  # Default to not appending if placeholder missing
+        )
 
     # 3. Process Images (same as before)
     processed_image_data_urls = []
@@ -897,24 +915,26 @@ async def generate_search_queries_with_custom_prompt(
                 data_url = f"data:{mime_type};base64,{base64_encoded_image}"
                 processed_image_data_urls.append(data_url)
             except Exception as e:
-                logging.error(f"Error processing image {img_url} for search query gen: {e}")
+                logging.error(
+                    f"Error processing image {img_url} for search query gen: {e}"
+                )
 
     # 4. Construct user_prompt_content_parts for the API call
     # This will be a list of parts, e.g., [{"type": "text", "text": "..."}, {"type": "image_url", ...}]
     # This structure is generally for OpenAI-like models; llm_handler will adapt it for Gemini if needed.
     user_prompt_content_parts_for_api = []
-    user_prompt_content_parts_for_api.append({"type": "text", "text": final_prompt_text})
+    user_prompt_content_parts_for_api.append(
+        {"type": "text", "text": final_prompt_text}
+    )
 
     if processed_image_data_urls:
         for data_url in processed_image_data_urls:
             user_prompt_content_parts_for_api.append(
                 {"type": "image_url", "image_url": {"url": data_url}}
             )
-    
+
     # 5. Construct messages_for_llm as a single user turn
-    messages_for_llm = [
-        {"role": "user", "content": user_prompt_content_parts_for_api}
-    ]
+    messages_for_llm = [{"role": "user", "content": user_prompt_content_parts_for_api}]
 
     try:
         provider_name, model_name = current_model_id.split("/", 1)

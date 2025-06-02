@@ -1,5 +1,4 @@
 import logging
-import re
 import time
 from typing import Dict
 
@@ -15,20 +14,13 @@ from .constants import (
     MAX_EMBED_DESCRIPTION_LENGTH,
     AT_AI_PATTERN,
     GOOGLE_LENS_PATTERN,
-    VISION_MODEL_TAGS,
-    AVAILABLE_MODELS,
-    DEEP_SEARCH_KEYWORDS,
     PROVIDERS_SUPPORTING_USERNAMES,
     MAX_PLAIN_TEXT_LENGTH,
-    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
     EMBED_COLOR_ERROR,
     # New config keys
     MAX_MESSAGE_NODES_CONFIG_KEY,
-    GROUNDING_MODEL_CONFIG_KEY,
-    FALLBACK_VISION_MODEL_CONFIG_KEY,
-    DEEP_SEARCH_MODEL_CONFIG_KEY,
 )
 
 from . import models
@@ -38,10 +30,15 @@ from .utils import (
     is_image_url,
     extract_text_from_pdf_bytes,
 )
-from .llm_handler import generate_response_stream
+from .model_selector import determine_final_model  # Added import
+from .message_parser import (
+    should_process_message,
+    clean_message_content,
+    check_google_lens_trigger,
+)
+from .content_processor import process_content_and_grounding  # Added import
 from .commands import (
     set_model_command,
-    get_user_model_preference,
     set_system_prompt_command,
     get_user_system_prompt_preference,
     setgeminithinking,
@@ -52,15 +49,6 @@ from .commands import (
     _execute_enhance_prompt_logic,  # Added for prefix command
 )
 from .permissions import is_message_allowed
-from .external_content import (
-    fetch_external_content,
-    format_external_content,
-)
-from .grounding import (
-    get_web_search_queries_from_gemini,
-    fetch_and_format_searxng_results,
-    generate_search_queries_with_custom_prompt,  # Added import
-)
 from .prompt_utils import prepare_system_prompt
 from .response_sender import (
     send_initial_processing_message,
@@ -169,29 +157,10 @@ class LLMCordClient(discord.Client):
         is_dm = isinstance(new_msg.channel, discord.DMChannel)
         allow_dms = self.config.get("allow_dms", True)
 
-        # Determine if the bot should process this message
-        should_process = False
-        mentions_bot = self.user.mentioned_in(new_msg)
-        contains_at_ai = AT_AI_PATTERN.search(new_msg.content) is not None
-        original_content_for_processing = new_msg.content
-
-        if is_dm:
-            if allow_dms:
-                # In DMs, process unless it's a reply *not* to the bot and doesn't trigger
-                is_reply_to_user = (
-                    new_msg.reference
-                    and new_msg.reference.resolved
-                    and new_msg.reference.resolved.author != self.user
-                )
-
-                if is_reply_to_user and not (mentions_bot or contains_at_ai):
-                    should_process = False  # Don't process replies to other users unless explicitly triggered
-                else:
-                    should_process = True  # Process direct messages, replies to bot, or explicitly triggered replies
-            else:
-                return  # Block DMs if not allowed
-        elif mentions_bot or contains_at_ai:
-            should_process = True
+        # Determine if the bot should process this message using the new parser function
+        should_process, original_content_for_processing = should_process_message(
+            new_msg, self.user, allow_dms, is_dm
+        )
 
         if not should_process:
             # --- ADDED: Prefix command handling BEFORE should_process check for other types of messages ---
@@ -326,14 +295,14 @@ class LLMCordClient(discord.Client):
         )
 
         # --- Clean Content and Check for Google Lens ---
-        cleaned_content = original_content_for_processing
-        if not is_dm and mentions_bot:
-            cleaned_content = cleaned_content.replace(self.user.mention, "").strip()
-        cleaned_content = AT_AI_PATTERN.sub(" ", cleaned_content).strip()
-        cleaned_content = re.sub(r"\s{2,}", " ", cleaned_content).strip()
+        # Use the new parser functions
+        cleaned_content = clean_message_content(
+            original_content_for_processing,
+            self.user.mention if self.user else None,  # Pass bot mention if available
+            is_dm,
+        )
         logging.debug(f"Cleaned content for keyword/URL check: '{cleaned_content}'")
 
-        use_google_lens = False
         image_attachments = [
             att
             for att in new_msg.attachments
@@ -341,207 +310,70 @@ class LLMCordClient(discord.Client):
         ]
         user_warnings = set()
 
-        if GOOGLE_LENS_PATTERN.match(cleaned_content) and image_attachments:
-            serpapi_keys_ok = bool(self.config.get("serpapi_api_keys"))
-            if not serpapi_keys_ok:
-                # Updated log and warning messages
-                logging.warning(
-                    "Google Lens requested but SerpAPI keys are not configured."
-                )
-                user_warnings.add(
-                    "⚠️ Google Lens requested but requires SerpAPI key configuration."
-                )
-            else:
-                use_google_lens = True
-                cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
-                logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
-
-        # --- LLM Provider/Model Selection ---
-        user_id = new_msg.author.id
-        default_model_str = self.config.get("model", "google/gemini-2.0-flash")
-        provider_slash_model = get_user_model_preference(user_id, default_model_str)
-
-        # --- Override Model based on Keywords ---
-        final_provider_slash_model = provider_slash_model
-        if any(keyword in cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS):
-            target_model_str = self.config.get(
-                DEEP_SEARCH_MODEL_CONFIG_KEY, "x-ai/grok-3"
-            )
-            target_provider, target_model_name = target_model_str.split("/", 1)
-            if use_google_lens:
-                logging.warning(
-                    f"Both 'deepsearch'/'deepersearch' and 'googlelens' detected. Prioritizing deep search ('{target_model_str}'). Google Lens disabled."
-                )
-                use_google_lens = False
-
-            xai_provider_config = self.config.get("providers", {}).get(
-                target_provider, {}
-            )
-            xai_keys = xai_provider_config.get("api_keys", [])
-            is_target_available = (
-                target_provider in AVAILABLE_MODELS
-                and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
-            )
-
-            if xai_provider_config and xai_keys and is_target_available:
-                final_provider_slash_model = target_model_str
-                logging.info(
-                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected. Overriding model to {final_provider_slash_model}."
-                )
-            else:
-                warning_reason = ""
-                if not xai_provider_config:
-                    warning_reason = f"provider '{target_provider}' not configured"
-                elif not xai_keys:
-                    warning_reason = f"no API keys for provider '{target_provider}'"
-                elif not is_target_available:
-                    warning_reason = (
-                        f"model '{target_model_str}' not listed in AVAILABLE_MODELS"
-                    )
-                logging.warning(
-                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({warning_reason}). Using original: {provider_slash_model}"
-                )
-                user_warnings.add(
-                    f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({warning_reason})."
-                )
-
-        # --- Validate Final Model Selection ---
-        try:
-            provider, model_name = final_provider_slash_model.split("/", 1)
-            if (
-                provider not in AVAILABLE_MODELS
-                or model_name not in AVAILABLE_MODELS.get(provider, [])
-            ):
-                logging.warning(
-                    f"Final model '{final_provider_slash_model}' is invalid/unavailable. Falling back to default: {default_model_str}"
-                )
-                final_provider_slash_model = default_model_str
-                provider, model_name = final_provider_slash_model.split("/", 1)
-        except ValueError:
-            logging.error(
-                f"Invalid model format for final selection '{final_provider_slash_model}'. Using hardcoded default."
-            )
-            final_provider_slash_model = "google/gemini-2.0-flash"  # Fallback
-            provider, model_name = final_provider_slash_model.split("/", 1)
-
-        logging.info(
-            f"Final model selected for user {user_id}: '{final_provider_slash_model}'"
+        use_google_lens, cleaned_content, lens_warning = check_google_lens_trigger(
+            cleaned_content, image_attachments, self.config
         )
+        if lens_warning:
+            user_warnings.add(lens_warning)
+        if use_google_lens:
+            logging.info(f"Google Lens keyword detected for message {new_msg.id}.")
 
-        # --- Get Config for the FINAL Provider ---
-        provider_config = self.config.get("providers", {}).get(provider, {})
-        if not isinstance(provider_config, dict):
-            logging.error(
-                f"Configuration for provider '{provider}' is invalid or missing. Cannot proceed."
-            )
-            return
-        all_api_keys = provider_config.get("api_keys", [])
+        user_id = new_msg.author.id
 
-        is_gemini = provider == "google"
-        is_grok_model = provider == "x-ai"
-        keys_required = provider not in [
-            "ollama",
-            "lmstudio",
-            "vllm",
-            "oobabooga",
-            "jan",
-        ]
-
-        if keys_required and not all_api_keys:
-            logging.error(
-                f"No API keys configured for the selected provider '{provider}' in config.yaml."
-            )
-            return
-
-        # --- Configuration Values ---
-        accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
-        if provider == "openai" and provider_config.get("disable_vision", False):
-            accept_files = False
-            logging.info(
-                f"Vision explicitly disabled for OpenAI model '{model_name}' via config."
-            )
-
+        # --- Determine Potential Image URLs in Text (before model selection modifies cleaned_content further) ---
         has_potential_image_urls_in_text = False
-        if cleaned_content:
-            urls_in_text = extract_urls_with_indices(cleaned_content)
-            if any(is_image_url(url_info[0]) for url_info in urls_in_text):
+        if cleaned_content:  # Check if cleaned_content is not empty
+            urls_in_text_for_image_check = extract_urls_with_indices(cleaned_content)
+            if any(
+                is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check
+            ):
                 has_potential_image_urls_in_text = True
 
-        if (image_attachments or has_potential_image_urls_in_text) and not accept_files:
-            original_model_for_warning = final_provider_slash_model
-            fallback_model_str = self.config.get(
-                FALLBACK_VISION_MODEL_CONFIG_KEY,
-                "google/gemini-2.5-flash-preview-05-20",
-            )
-            logging.info(
-                f"Query has images, but current model '{final_provider_slash_model}' does not support vision. Switching to '{fallback_model_str}'."
-            )
-            user_warnings.add(
-                f"⚠️ Images detected. Switched from '{original_model_for_warning}' to '{fallback_model_str}'."
-            )
-            final_provider_slash_model = fallback_model_str
-            try:
-                provider, model_name = final_provider_slash_model.split("/", 1)
-                # Re-fetch provider_config and re-evaluate accept_files for the new model
-                provider_config = self.config.get("providers", {}).get(provider, {})
-                if not isinstance(
-                    provider_config, dict
-                ):  # Major issue if fallback model's provider is not configured
-                    logging.error(
-                        f"Fallback provider '{provider}' for model '{final_provider_slash_model}' not configured. This is a critical error."
-                    )
-                    return
-                all_api_keys = provider_config.get("api_keys", [])
-                is_gemini = provider == "google"
-                is_grok_model = provider == "x-ai"
-                keys_required = provider not in [
-                    "ollama",
-                    "lmstudio",
-                    "vllm",
-                    "oobabooga",
-                    "jan",
-                ]
-                if keys_required and not all_api_keys:
-                    user_warnings.add(
-                        f"⚠️ Fallback model '{final_provider_slash_model}' has no API keys configured."
-                    )
-                accept_files = any(x in model_name.lower() for x in VISION_MODEL_TAGS)
-                if provider == "openai" and provider_config.get(
-                    "disable_vision", False
-                ):
-                    accept_files = False
-                if not accept_files:  # If fallback STILL doesn't accept files
-                    user_warnings.add(
-                        f"⚠️ Fallback model '{final_provider_slash_model}' also cannot process images. Check configuration."
-                    )
-            except ValueError:  # Error splitting fallback model string
-                logging.error(
-                    f"Invalid format for FALLBACK_VISION_MODEL_PROVIDER_SLASH_MODEL: '{fallback_model_str}'."
-                )
-                user_warnings.add(
-                    f"⚠️ Error switching to vision model. Processing with '{original_model_for_warning}'."
-                )
-                # Revert to original provider/model if fallback string is bad
-                provider, model_name = original_model_for_warning.split("/", 1)
-                provider_config = self.config.get("providers", {}).get(provider, {})
-                all_api_keys = provider_config.get("api_keys", [])
-                is_gemini = provider == "google"
-                is_grok_model = provider == "x-ai"
-                keys_required = provider not in [
-                    "ollama",
-                    "lmstudio",
-                    "vllm",
-                    "oobabooga",
-                    "jan",
-                ]
-                accept_files = any(
-                    x in model_name.lower() for x in VISION_MODEL_TAGS
-                )  # Re-evaluate for original
-                if provider == "openai" and provider_config.get(
-                    "disable_vision", False
-                ):
-                    accept_files = False
+        # --- LLM Provider/Model Selection using the new selector function ---
+        (
+            final_provider_slash_model,
+            provider,
+            model_name,
+            provider_config,
+            all_api_keys,
+            is_gemini,
+            is_grok_model,
+            keys_required,
+            accept_files,
+        ) = determine_final_model(
+            user_id=user_id,
+            initial_cleaned_content=cleaned_content,  # Pass content before lens keyword removal
+            image_attachments=image_attachments,
+            has_potential_image_urls_in_text=has_potential_image_urls_in_text,
+            config=self.config,
+            user_warnings=user_warnings,
+        )
 
+        # If Google Lens was triggered, it might have modified cleaned_content.
+        # The model selection should ideally happen *before* lens keyword removal if lens influences model choice.
+        # For now, determine_final_model uses initial_cleaned_content.
+        # If deep_search was triggered by determine_final_model, and lens was also triggered,
+        # the model_selector's logic for deep_search might need to be aware of lens to avoid conflict,
+        # or the bot.py logic needs to ensure lens doesn't run if deep_search model is chosen and incompatible.
+        # Current determine_final_model doesn't explicitly disable lens if deep_search is chosen.
+        # We might need to re-evaluate `use_google_lens` if `determine_final_model` chose a non-vision model due to deep_search.
+        if (
+            use_google_lens and not accept_files
+        ):  # If lens was on, but final model is not vision capable
+            logging.warning(
+                f"Google Lens was active, but final model '{final_provider_slash_model}' does not support vision. Disabling Lens for this request."
+            )
+            use_google_lens = False  # Turn off lens if the final model (e.g. deep search override) can't use it.
+            # Remove lens keyword from content if it wasn't already by check_google_lens_trigger
+            # This is a bit redundant if check_google_lens_trigger already did it, but safe.
+            if GOOGLE_LENS_PATTERN.match(
+                cleaned_content
+            ):  # Check again on potentially already modified content
+                cleaned_content = GOOGLE_LENS_PATTERN.sub(
+                    "", cleaned_content
+                ).strip()  # Corrected indentation
+
+        # --- Configuration Values based on final model selection ---
         max_files_per_message = self.config.get("max_images", 5)
         max_tokens_for_text_config = self.config.get(
             "max_text", 2000
@@ -614,334 +446,37 @@ class LLMCordClient(discord.Client):
                 )
             return
 
-        # Initialize formatted content strings
-        formatted_user_urls_content = ""
-        formatted_google_lens_content = ""
-        searxng_derived_context_str = ""  # For search results
-        url_fetch_results = []  # To store raw fetch results for image processing later
-
-        custom_search_performed = False  # Flag to track if new search path was taken
-        custom_search_queries_generated_flag = False  # New flag for footer
-        successful_api_results_count = 0  # New counter for footer
-
-        all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
-        user_has_provided_urls = bool(all_urls_in_cleaned_content)
-        has_only_backticked_urls = False
-
-        if user_has_provided_urls:
-            all_backticked = True
-            for url, index_pos in all_urls_in_cleaned_content:
-                char_before_is_backtick = (
-                    index_pos > 0 and cleaned_content[index_pos - 1] == "`"
-                )
-                char_after_is_backtick = (index_pos + len(url)) < len(
-                    cleaned_content
-                ) and cleaned_content[index_pos + len(url)] == "`"
-                if not (char_before_is_backtick and char_after_is_backtick):
-                    all_backticked = False
-                    break
-            if all_backticked:
-                has_only_backticked_urls = True
-
-        if use_google_lens:
-            url_fetch_results = await fetch_external_content(
-                cleaned_content,
-                image_attachments,
-                True,
-                max_files_per_message,
-                user_warnings,
-                self.config,
-                self.httpx_client,
-            )
-            if url_fetch_results:
-                # format_external_content now returns a dict: {'user_urls': '...', 'lens': '...'}
-                formatted_parts = format_external_content(url_fetch_results)
-                formatted_user_urls_content = formatted_parts.get("user_urls", "")
-                formatted_google_lens_content = formatted_parts.get("lens", "")
-                if formatted_user_urls_content:
-                    logging.info(
-                        f"Formatted content from user-provided URLs (Lens path): {len(formatted_user_urls_content)} chars"
-                    )
-                if formatted_google_lens_content:
-                    logging.info(
-                        f"Formatted content from Google Lens: {len(formatted_google_lens_content)} chars"
-                    )
-
-            logging.info(
-                "Google Lens was active. User-provided URLs and Lens content (if any) have been processed."
-            )
-            # SearxNG/grounding is skipped if Lens is active.
-        # --- External Content Fetching Logic (Non-Lens Paths) ---
-        # Determine if alternative search query generation should be triggered
-        alt_search_config_dict = self.config.get(
-            "alternative_search_query_generation", {}
+        # --- Content Processing and Grounding ---
+        (
+            formatted_user_urls_content,
+            formatted_google_lens_content,
+            searxng_derived_context_str,
+            url_fetch_results,  # Contains results from fetch_external_content
+            custom_search_queries_generated_flag,
+            successful_api_results_count,
+            cleaned_content,  # Potentially modified by content_processor if image URLs were removed
+        ) = await process_content_and_grounding(
+            new_msg=new_msg,
+            cleaned_content=cleaned_content,  # Pass the already cleaned content
+            image_attachments=image_attachments,
+            use_google_lens=use_google_lens,
+            provider=provider,  # Pass current provider
+            model_name=model_name,  # Pass current model name
+            is_gemini_provider=is_gemini,  # Pass boolean for current provider
+            is_grok_model=is_grok_model,  # Pass boolean for current model
+            config=self.config,
+            user_warnings=user_warnings,
+            httpx_client=self.httpx_client,
+            max_messages=max_messages,
+            max_tokens_for_text_config=max_tokens_for_text_config,
+            max_files_per_message_config=max_files_per_message,
+            current_model_accepts_files=accept_files,
+            msg_nodes_cache=self.msg_nodes,
+            bot_user_obj=self.user,
+            models_module=models,
+            google_types_module=google_types,
         )
-        is_enabled = alt_search_config_dict.get("enabled", False)
-        trigger_alternative_search = False  # Initialize flag
-
-        if is_enabled:
-            current_model_id = final_provider_slash_model  # Alias for clarity
-            if user_has_provided_urls:
-                logging.info(
-                    "User query contains URLs. Skipping alternative search query generation."
-                )
-                # trigger_alternative_search remains False, as initialized
-            else:
-                try:
-                    # Extract provider from "provider/model_name"
-                    provider_part = current_model_id.split("/", 1)[0]
-                    if provider_part != "google":
-                        trigger_alternative_search = True
-                except IndexError:
-                    # Log if format is unexpected
-                    logging.warning(
-                        f"Could not parse provider from model ID: {current_model_id} "
-                        f"for alternative search check. Defaulting to not triggering alternative search."
-                    )
-
-        # The block that was previously under the 'elif' now runs if 'trigger_alternative_search' is True
-        if trigger_alternative_search:
-            logging.info(
-                f"Attempting alternative search query generation for model {final_provider_slash_model}"
-            )
-            current_provider_is_gemini_for_history = provider == "google"
-
-            history_for_custom_prompt = await build_message_history(
-                new_msg=new_msg,
-                initial_cleaned_content=cleaned_content,  # latest_query for the prompt
-                current_formatted_user_urls="",  # No user URLs for this specific call's context
-                current_formatted_google_lens="",  # No Lens for this specific call's context
-                current_formatted_search_results="",  # No search results for this specific call's context
-                max_messages=max_messages,
-                max_tokens_for_text=max_tokens_for_text_config,
-                max_files_per_message=max_files_per_message,
-                accept_files=accept_files,  # Based on the current final_provider_slash_model
-                use_google_lens_for_current=False,  # Not using lens for query gen
-                is_target_provider_gemini=current_provider_is_gemini_for_history,
-                target_provider_name=provider,  # Provider of the current model
-                target_model_name=model_name,  # Name of the current model
-                user_warnings=user_warnings,
-                current_message_url_fetch_results=None,  # No separate URL results for this specific call
-                msg_nodes_cache=self.msg_nodes,
-                bot_user_obj=self.user,
-                httpx_async_client=self.httpx_client,
-                models_module=models,
-                google_types_module=google_types,
-                extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
-                at_ai_pattern_re=AT_AI_PATTERN,
-                providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
-                system_prompt_text_for_budgeting=None,  # Custom prompt is a user message
-                config=self.config,
-            )
-
-            if history_for_custom_prompt:
-                image_urls = [att.url for att in image_attachments]
-                custom_search_queries_result = await generate_search_queries_with_custom_prompt(
-                    latest_query=cleaned_content,
-                    chat_history=history_for_custom_prompt,
-                    config=self.config,
-                    generate_response_stream_func=generate_response_stream,  # Pass the imported function
-                    current_model_id=final_provider_slash_model,
-                    httpx_client=self.httpx_client,  # Pass the httpx_client
-                    image_urls=image_urls,
-                )
-
-                if (
-                    isinstance(custom_search_queries_result, dict)
-                    and "web_search_required" in custom_search_queries_result
-                ):
-                    if custom_search_queries_result["web_search_required"]:
-                        queries = custom_search_queries_result.get("search_queries", [])
-                        if queries:  # Check if queries list is not empty
-                            custom_search_queries_generated_flag = True  # Set flag
-                            logging.info(
-                                f"Custom prompt generated {len(queries)} search queries: {queries}"
-                            )
-                            (
-                                searxng_derived_context,
-                                count,
-                            ) = await fetch_and_format_searxng_results(
-                                queries,
-                                cleaned_content,  # user_query_for_log
-                                self.config,
-                                self.httpx_client,
-                            )
-                            successful_api_results_count = count  # Store count
-                            if searxng_derived_context:
-                                searxng_derived_context_str = (
-                                    searxng_derived_context  # Store search results
-                                )
-                                logging.info(
-                                    f"Successfully fetched and formatted search results from custom queries: {len(searxng_derived_context_str)} chars"
-                                )
-                            else:
-                                logging.info(
-                                    "Custom queries generated, but no content fetched/formatted from SearxNG."
-                                )
-                        else:  # web_search_required is true, but no queries
-                            logging.info(
-                                "web_search_required is true but no search queries were generated."
-                            )
-                            # custom_search_queries_generated_flag remains false
-                    else:  # web_search_required is false
-                        logging.info(
-                            "Custom prompt indicated no web search is needed (web_search_required: false)."
-                        )
-                        # custom_search_queries_generated_flag remains false
-                else:  # Unexpected structure or failure
-                    logging.warning(
-                        "Custom search query generation returned unexpected structure or failed."
-                    )
-                    # custom_search_queries_generated_flag remains false
-            else:
-                logging.warning(
-                    "Could not build history for custom search query generation. Skipping."
-                )
-            custom_search_performed = True
-        # --- END: Alternative Search Query Generation ---
-        elif (  # Original Gemini grounding path, ensure it's skipped if custom search was done
-            (not user_has_provided_urls or has_only_backticked_urls)
-            and not is_gemini
-            and not is_grok_model
-            and not custom_search_performed  # Added condition
-        ):
-            if has_only_backticked_urls:
-                logging.info(
-                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, custom search not performed, and all user URLs are backticked. Attempting grounding pre-step for SearxNG."
-                )
-            else:  # No user URLs at all
-                logging.info(
-                    f"Target model '{final_provider_slash_model}' is non-Gemini/non-Grok, Google Lens is not active, custom search not performed, and no user URLs detected. Attempting grounding pre-step for SearxNG."
-                )
-            history_for_gemini_grounding = await build_message_history(
-                new_msg=new_msg,
-                initial_cleaned_content=cleaned_content,
-                current_formatted_user_urls="",  # No user URLs for this specific call's context
-                current_formatted_google_lens="",  # No Lens for this specific call's context
-                current_formatted_search_results="",  # No search results for this specific call's context
-                max_messages=max_messages,
-                max_tokens_for_text=max_tokens_for_text_config,
-                max_files_per_message=max_files_per_message,
-                accept_files=True,
-                use_google_lens_for_current=False,  # Not using lens for query gen
-                is_target_provider_gemini=True,  # Grounding model is assumed to be Gemini-like for now
-                target_provider_name=self.config.get(
-                    GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
-                ).split("/", 1)[0],
-                target_model_name=self.config.get(
-                    GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
-                ).split("/", 1)[1],
-                user_warnings=user_warnings,
-                current_message_url_fetch_results=None,  # No separate URL results for this specific call
-                msg_nodes_cache=self.msg_nodes,
-                bot_user_obj=self.user,
-                httpx_async_client=self.httpx_client,
-                models_module=models,
-                google_types_module=google_types,
-                extract_text_from_pdf_bytes_func=extract_text_from_pdf_bytes,
-                at_ai_pattern_re=AT_AI_PATTERN,
-                providers_supporting_usernames_const=PROVIDERS_SUPPORTING_USERNAMES,
-                system_prompt_text_for_budgeting=prepare_system_prompt(
-                    True,  # Grounding model is assumed to be Gemini-like
-                    self.config.get(
-                        GROUNDING_MODEL_CONFIG_KEY,
-                        "google/gemini-2.5-flash-preview-05-20",
-                    ).split("/", 1)[0],
-                    self.config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY),
-                ),
-                config=self.config,
-            )
-            if history_for_gemini_grounding:
-                grounding_sp_text_from_config = self.config.get(
-                    GROUNDING_SYSTEM_PROMPT_CONFIG_KEY
-                )
-                # This system_prompt_for_grounding is what's actually sent to the API
-                system_prompt_for_grounding = prepare_system_prompt(
-                    True,  # Grounding model is assumed to be Gemini-like
-                    self.config.get(
-                        GROUNDING_MODEL_CONFIG_KEY,
-                        "google/gemini-2.5-flash-preview-05-20",
-                    ).split("/", 1)[0],
-                    grounding_sp_text_from_config,
-                )
-                web_search_queries = await get_web_search_queries_from_gemini(
-                    history_for_gemini_grounding,
-                    system_prompt_for_grounding,  # This is the prompt sent to the API
-                    self.config,
-                    generate_response_stream,
-                )
-                if web_search_queries:
-                    # This path implies Gemini grounding, so internet was used if queries exist
-                    custom_search_queries_generated_flag = True  # Set flag
-                    (
-                        searxng_derived_context,
-                        count,
-                    ) = await fetch_and_format_searxng_results(
-                        web_search_queries,
-                        cleaned_content,
-                        self.config,
-                        self.httpx_client,
-                    )
-                    successful_api_results_count = count  # Store count
-                    if searxng_derived_context:
-                        searxng_derived_context_str = (
-                            searxng_derived_context  # Store search results
-                        )
-                        logging.info(
-                            f"Formatted SearXNG results obtained (Gemini grounding path): {len(searxng_derived_context_str)} chars"
-                        )
-                    else:
-                        logging.info(
-                            "Failed to generate context from SearxNG (Gemini grounding path), or no results found."
-                        )
-                else:
-                    logging.info(
-                        "Gemini grounding did not yield any web search queries."
-                    )
-            else:
-                logging.warning(
-                    "Could not build history for Gemini grounding step. Skipping SearxNG."
-                )
-        elif user_has_provided_urls and not custom_search_performed:  # Added condition
-            url_fetch_results = await fetch_external_content(
-                cleaned_content,
-                image_attachments,
-                False,
-                max_files_per_message,
-                user_warnings,
-                self.config,
-                self.httpx_client,
-            )
-            if url_fetch_results:
-                # This path is for when user provides URLs and custom_search_performed is False
-                # (and Google Lens was not active, handled earlier)
-                formatted_parts = format_external_content(url_fetch_results)
-                formatted_user_urls_content = formatted_parts.get("user_urls", "")
-                # Lens content would not be generated here if use_google_lens was false
-                # but format_external_content handles the 'lens' key regardless.
-                # formatted_google_lens_content = formatted_parts.get("lens", "") # This should be empty if use_google_lens is false
-
-                if formatted_user_urls_content:
-                    logging.info(
-                        f"Formatted content from user-provided URLs (direct path): {len(formatted_user_urls_content)} chars"
-                    )
-                # No custom_search_queries_generated_flag or successful_api_results_count here.
-
-        # This check for url_fetch_results is now primarily for image URL removal from cleaned_content
-        if url_fetch_results:
-            successfully_fetched_image_urls = {
-                res.url
-                for res in url_fetch_results
-                if res.type == "image_url_content" and res.content and not res.error
-            }
-            if successfully_fetched_image_urls:
-                temp_cleaned_content = cleaned_content
-                for img_url in successfully_fetched_image_urls:
-                    temp_cleaned_content = temp_cleaned_content.replace(img_url, "")
-                cleaned_content = re.sub(r"\s{2,}", " ", temp_cleaned_content).strip()
-                logging.info(
-                    f"Removed {len(successfully_fetched_image_urls)} successfully fetched image URLs from cleaned_content."
-                )
+        # `cleaned_content` is updated by the call above if image URLs were processed and removed.
 
         history_for_llm = await build_message_history(
             new_msg=new_msg,

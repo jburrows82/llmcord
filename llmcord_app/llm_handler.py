@@ -3,13 +3,14 @@ import logging
 import random
 import json
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
-import io
-import datetime
-from PIL import Image
+
+# import io # Moved to image_utils
+# import datetime # Not used directly here anymore for date, but enhance_prompt_with_llm uses it.
+from datetime import date  # Specifically for enhance_prompt_with_llm
+# from PIL import Image # Moved to image_utils
 
 # OpenAI specific imports
 from openai import (
-    AsyncOpenAI,
     APIError,
     RateLimitError,
     AuthenticationError,
@@ -19,18 +20,21 @@ from openai import (
 )
 
 # Google Gemini specific imports
-from google import genai as google_genai
-from google.genai import types as google_types
-from google.api_core import exceptions as google_api_exceptions
+from google.genai import (
+    types as google_types,
+)  # Re-add for type hints and internal logic
+from google.api_core import (
+    exceptions as google_api_exceptions,
+)  # Re-add for exception handling
 
 from .constants import (
     AllKeysFailedError,
-    PROVIDERS_SUPPORTING_USERNAMES,
-    GEMINI_SAFETY_SETTINGS_CONFIG_KEY,  # New
     PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY,  # New
 )
 from .rate_limiter import get_db_manager, get_available_keys
-from .utils import _truncate_base64_in_payload, default_serializer
+from .image_utils import compress_images_in_history
+from .llm_providers.gemini_provider import generate_gemini_stream  # Added import
+from .llm_providers.openai_provider import generate_openai_stream  # Added import
 
 
 async def generate_response_stream(
@@ -254,10 +258,10 @@ async def generate_response_stream(
         ]
 
         while compression_attempt < max_compression_attempts:
-            llm_client = None
-            api_config = None
-            api_content_kwargs = {}
-            payload_to_print = {}
+            # llm_client = None # No longer used directly here
+            # api_config = None # No longer used directly here
+            # api_content_kwargs = {} # No longer used directly here
+            # payload_to_print = {} # No longer used directly here
             is_blocked_by_safety = False
             is_stopped_by_recitation = False
             content_received = False
@@ -266,407 +270,174 @@ async def generate_response_stream(
             stream_grounding_metadata = None
 
             try:  # Innermost try for the specific API call attempt (with potentially compressed data)
-                # --- Initialize Client and Prepare Payload (using history_for_current_compression_cycle) ---
+                # --- Delegate to Provider-Specific Stream Generation ---
+                stream_generator_func = None
                 if is_gemini:
-                    if current_api_key == "dummy_key":
-                        raise ValueError("Gemini requires an API key.")
-                    llm_client = google_genai.Client(api_key=current_api_key)
-                    gemini_contents = []
-                    for msg_data in (
-                        history_for_current_compression_cycle
-                    ):  # Use the potentially compressed history
-                        role = msg_data["role"]
-                        parts_list = msg_data.get("parts", [])
-                        if not parts_list:
-                            continue
-                        try:
-                            gemini_contents.append(
-                                google_types.Content(role=role, parts=parts_list)
-                            )
-                        except Exception as content_creation_error:
-                            logging.error(
-                                f"FATAL: Failed to create google_types.Content! Role: {role}, Parts: {parts_list}",
-                                exc_info=True,
-                            )
-                            yield (
-                                None,
-                                None,
-                                None,
-                                f"Internal error creating Gemini content structure: {content_creation_error}",
-                            )
-                            return
-                    if not gemini_contents:
-                        logging.error(
-                            "Gemini contents list is empty. Cannot make API call."
-                        )
-                        yield (
-                            None,
-                            None,
-                            None,
-                            "Internal error: No valid content to send to Gemini.",
-                        )
-                        return
-                    api_content_kwargs["contents"] = gemini_contents
-                    gemini_extra_params = extra_params.copy()
-                    if "max_tokens" in gemini_extra_params:
-                        gemini_extra_params["max_output_tokens"] = (
-                            gemini_extra_params.pop("max_tokens")
-                        )
-                    gemini_thinking_budget_val = gemini_extra_params.pop(
-                        "thinking_budget", None
+                    stream_generator_func = generate_gemini_stream(
+                        api_key=current_api_key,
+                        model_name=model_name,
+                        history_for_api_call=history_for_current_compression_cycle,
+                        system_instruction_text=system_prompt_text,
+                        extra_params=extra_params,
+                        app_config=app_config,
                     )
-
-                    # Load safety settings from app_config
-                    gemini_safety_settings_from_config = app_config.get(
-                        GEMINI_SAFETY_SETTINGS_CONFIG_KEY, {}
-                    )
-                    gemini_safety_settings_list = []
-                    for (
-                        category_str,
-                        threshold_str,
-                    ) in gemini_safety_settings_from_config.items():
-                        try:
-                            category_enum = getattr(
-                                google_types.HarmCategory, category_str.upper(), None
-                            )
-                            threshold_enum = getattr(
-                                google_types.HarmBlockThreshold,
-                                threshold_str.upper(),
-                                None,
-                            )
-                            if category_enum and threshold_enum:
-                                gemini_safety_settings_list.append(
-                                    google_types.SafetySetting(
-                                        category=category_enum, threshold=threshold_enum
-                                    )
-                                )
-                            else:
-                                logging.warning(
-                                    f"Invalid Gemini safety category ('{category_str}') or threshold ('{threshold_str}') in config. Skipping."
-                                )
-                        except Exception as e_safety:
-                            logging.warning(
-                                f"Error processing Gemini safety setting {category_str}={threshold_str}: {e_safety}"
-                            )
-
-                    # Use default if no valid settings were parsed from config
-                    if not gemini_safety_settings_list:
-                        logging.warning(
-                            "No valid Gemini safety settings found in config, using BLOCK_NONE for all."
-                        )
-                        gemini_safety_settings_list = [
-                            google_types.SafetySetting(
-                                category=c,
-                                threshold=google_types.HarmBlockThreshold.BLOCK_NONE,
-                            )
-                            for c in [
-                                google_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                                google_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                                google_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                                google_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                            ]
-                        ]
-
-                    # Process thinking_budget if provided
-                    thinking_config = None
-                    if gemini_thinking_budget_val is not None:
-                        budget_to_apply: Optional[int] = None
-                        if isinstance(gemini_thinking_budget_val, int):
-                            budget_to_apply = gemini_thinking_budget_val
-                        elif isinstance(gemini_thinking_budget_val, str):
-                            try:
-                                budget_to_apply = int(gemini_thinking_budget_val)
-                            except ValueError:
-                                logging.warning(
-                                    f"Non-integer string for thinking_budget ('{gemini_thinking_budget_val}') for Gemini. Ignoring."
-                                )
-                        else:
-                            logging.warning(
-                                f"Unsupported type for thinking_budget ('{type(gemini_thinking_budget_val).__name__}') for Gemini. Ignoring."
-                            )
-                        if (
-                            budget_to_apply is not None
-                            and 0 <= budget_to_apply <= 24576
-                        ):
-                            thinking_config = google_types.ThinkingConfig(
-                                thinking_budget=budget_to_apply
-                            )
-                            logging.debug(
-                                f"Applied thinking_budget: {budget_to_apply} to Gemini ThinkingConfig"
-                            )
-                        elif budget_to_apply is not None:
-                            logging.warning(
-                                f"Invalid thinking_budget value ({budget_to_apply}) for Gemini. Must be 0-24576. Ignoring."
-                            )
-
-                    # Create GenerateContentConfig with thinking_config if available
-                    api_config = google_types.GenerateContentConfig(
-                        **gemini_extra_params,
-                        safety_settings=gemini_safety_settings_list,
-                        tools=[
-                            google_types.Tool(google_search=google_types.GoogleSearch())
-                        ],
-                        thinking_config=thinking_config,
-                    )
-                    if system_prompt_text:
-                        api_config.system_instruction = google_types.Part.from_text(
-                            text=system_prompt_text
-                        )
-                    payload_to_print = {
-                        "model": model_name,
-                        "contents": [
-                            c.model_dump(mode="json", exclude_none=True)
-                            for c in api_content_kwargs["contents"]
-                        ],
-                        "generationConfig": api_config.model_dump(
-                            mode="json", exclude_none=True
-                        )
-                        if api_config
-                        else {},
-                    }
-                    payload_to_print["generationConfig"] = {
-                        k: v
-                        for k, v in payload_to_print["generationConfig"].items()
-                        if v
-                    }
-
                 else:  # OpenAI compatible
-                    api_key_to_use = (
-                        current_api_key if current_api_key != "dummy_key" else None
-                    )
-                    if not base_url:
-                        raise ValueError(
-                            f"base_url is required for OpenAI-compatible provider '{provider}' but not found in config."
-                        )
-                    llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key_to_use)
-                    openai_messages = [
-                        msg.copy() for msg in history_for_current_compression_cycle
-                    ]  # Use the potentially compressed history
-                    if system_prompt_text:
-                        if (
-                            not openai_messages
-                            or openai_messages[0].get("role") != "system"
-                        ):
-                            openai_messages.insert(
-                                0, {"role": "system", "content": system_prompt_text}
-                            )
-                        elif openai_messages[0].get("role") == "system":
-                            openai_messages[0]["content"] = system_prompt_text
-                    if provider not in PROVIDERS_SUPPORTING_USERNAMES:
-                        for msg_data in openai_messages:
-                            if msg_data.get("role") == "user" and "name" in msg_data:
-                                del msg_data["name"]
-                                logging.debug(
-                                    f"Removed 'name' field for user message for provider '{provider}'"
-                                )
-                    api_content_kwargs["messages"] = openai_messages
-                    api_config = extra_params.copy()
-                    api_config["stream"] = True
-                    payload_to_print = {
-                        "model": model_name,
-                        "messages": api_content_kwargs["messages"],
-                        **api_config,
-                    }
-
-                # --- Print Payload ---
-                try:
-                    print(
-                        f"\n--- LLM Request Payload (Provider: {provider}, Model: {model_name}, Key: {key_display}, Attempt: {compression_attempt + 1}) ---"
-                    )
-                    payload_for_printing = _truncate_base64_in_payload(payload_to_print)
-                    print(
-                        json.dumps(
-                            payload_for_printing, indent=2, default=default_serializer
-                        )
-                    )
-                    print("--- End LLM Request Payload ---\n")
-                except Exception as print_err:
-                    logging.error(f"Error printing LLM payload: {print_err}")
-                    print(
-                        f"Raw Payload Data (may contain unserializable objects):\n{payload_to_print}\n"
+                    stream_generator_func = generate_openai_stream(
+                        api_key=(
+                            current_api_key if current_api_key != "dummy_key" else None
+                        ),
+                        base_url=base_url,
+                        model_name=model_name,
+                        history_for_api_call=history_for_current_compression_cycle,
+                        system_prompt_text=system_prompt_text,
+                        extra_params=extra_params,
+                        current_provider_name=provider,  # Pass current provider name
                     )
 
-                # --- Make API Call and Process Stream ---
-                stream_response = None
-                if is_gemini:
-                    if not llm_client:
-                        raise ValueError("Gemini client not initialized.")
-                    stream_response = (
-                        await llm_client.aio.models.generate_content_stream(
-                            model=model_name,
-                            contents=api_content_kwargs["contents"],
-                            config=api_config,
-                        )
-                    )
-                else:
-                    if not llm_client:
-                        raise ValueError("OpenAI client not initialized.")
-                    stream_response = await llm_client.chat.completions.create(
-                        model=model_name,
-                        messages=api_content_kwargs["messages"],
-                        **api_config,
+                # --- Stream Processing Loop (now consumes from provider-specific generator) ---
+                async for (
+                    text_chunk,
+                    chunk_finish_reason,
+                    chunk_grounding_metadata,
+                    error_msg_chunk,
+                ) in stream_generator_func:
+                    chunk_processed_successfully = (
+                        False  # Reset for each chunk from provider
                     )
 
-                # --- Stream Processing Loop ---
-                async for chunk in stream_response:
-                    new_content_chunk = ""
-                    chunk_finish_reason = None
-                    chunk_grounding_metadata = None
-                    chunk_processed_successfully = False
-
-                    try:  # Inner try for stream processing errors
-                        if is_gemini:
-                            if (
-                                hasattr(chunk, "prompt_feedback")
-                                and chunk.prompt_feedback
-                                and chunk.prompt_feedback.block_reason
-                            ):
+                    if error_msg_chunk:
+                        # Provider function signals an error
+                        # Specific error strings can be used for special handling (e.g., compression)
+                        if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE":
+                            if not is_gemini:  # This error is specific to OpenAI path
                                 logging.warning(
-                                    f"Gemini Prompt Blocked (reason: {chunk.prompt_feedback.block_reason}) with key {key_display}. Aborting."
+                                    f"OpenAI API Error 413 (Request Entity Too Large) for key {key_display}, attempt {compression_attempt + 1}."
                                 )
-                                llm_errors.append(
-                                    f"Key {key_display}: Prompt Blocked ({chunk.prompt_feedback.block_reason})"
-                                )
-                                is_blocked_by_safety = True
-                                last_error_type = "safety"
+                                last_error_type = "api_413"
+                                # Break from this inner stream consumption to trigger compression logic below
                                 break
-                            if hasattr(chunk, "text") and chunk.text:
-                                new_content_chunk = chunk.text
-                                content_received = True
-                            if hasattr(chunk, "candidates") and chunk.candidates:
-                                candidate = chunk.candidates[0]
-                                if (
-                                    hasattr(candidate, "finish_reason")
-                                    and candidate.finish_reason
-                                    and candidate.finish_reason
-                                    != google_types.FinishReason.FINISH_REASON_UNSPECIFIED
-                                ):
-                                    reason_map = {
-                                        google_types.FinishReason.STOP: "stop",
-                                        google_types.FinishReason.MAX_TOKENS: "length",
-                                        google_types.FinishReason.SAFETY: "safety",
-                                        google_types.FinishReason.RECITATION: "recitation",
-                                        google_types.FinishReason.OTHER: "other",
-                                    }
-                                    chunk_finish_reason = reason_map.get(
-                                        candidate.finish_reason,
-                                        str(candidate.finish_reason),
-                                    )
-                                    if chunk_finish_reason:
-                                        finish_reason_lower = (
-                                            chunk_finish_reason.lower()
-                                        )
-                                        if finish_reason_lower == "safety":
-                                            is_blocked_by_safety = True
-                                            last_error_type = "safety"
-                                            llm_errors.append(
-                                                f"Key {key_display}: Response Blocked (Safety)"
-                                            )
-                                        elif finish_reason_lower == "recitation":
-                                            is_stopped_by_recitation = True
-                                            last_error_type = "recitation"
-                                            llm_errors.append(
-                                                f"Key {key_display}: Response Stopped (Recitation)"
-                                            )
-                                        elif finish_reason_lower == "other":
-                                            is_blocked_by_safety = True
-                                            last_error_type = "other"
-                                            llm_errors.append(
-                                                f"Key {key_display}: Response Blocked (Other)"
-                                            )
-                                if (
-                                    hasattr(candidate, "grounding_metadata")
-                                    and candidate.grounding_metadata
-                                ):
-                                    chunk_grounding_metadata = (
-                                        candidate.grounding_metadata
-                                    )
-                                if (
-                                    hasattr(candidate, "safety_ratings")
-                                    and candidate.safety_ratings
-                                ):
-                                    for rating in candidate.safety_ratings:
-                                        if rating.probability in (
-                                            google_types.HarmProbability.MEDIUM,
-                                            google_types.HarmProbability.HIGH,
-                                        ):
-                                            if not content_received:
-                                                is_blocked_by_safety = True
-                                                last_error_type = "safety"
-                                                llm_errors.append(
-                                                    f"Key {key_display}: Response Blocked (Safety Rating: {rating.category}={rating.probability})"
-                                                )
-                        else:  # OpenAI
-                            if chunk.choices:
-                                delta = chunk.choices[0].delta
-                                chunk_finish_reason = chunk.choices[0].finish_reason
-                                if delta and delta.content:
-                                    new_content_chunk = delta.content
-                                    content_received = True
+                        elif error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422":
+                            if not is_gemini:
+                                logging.warning(
+                                    f"OpenAI Unprocessable Entity (422) for key {key_display}. Signaling for fallback."
+                                )
+                                last_error_type = "unprocessable_entity"
+                                # Yield a specific signal that the main handler in response_sender.py can catch
+                                yield (
+                                    None,
+                                    None,
+                                    None,
+                                    "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY",
+                                )
+                                return  # Stop this entire generation attempt
 
-                        if chunk_finish_reason:
-                            stream_finish_reason = chunk_finish_reason
-                        if chunk_grounding_metadata:
-                            stream_grounding_metadata = chunk_grounding_metadata
-                        if (
-                            new_content_chunk
-                            and not is_blocked_by_safety
-                            and not is_stopped_by_recitation
-                        ):
-                            yield new_content_chunk, None, None, None
-                        chunk_processed_successfully = True
-                        if stream_finish_reason:
-                            break
-
-                    except google_api_exceptions.GoogleAPIError as stream_err:
+                        # Handle other errors from provider stream
                         llm_errors.append(
-                            f"Key {key_display}: Stream Google API Error - {type(stream_err).__name__}: {stream_err}"
+                            f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
                         )
-                        last_error_type = "google_api"
-                        if isinstance(
-                            stream_err, google_api_exceptions.ResourceExhausted
+                        last_error_type = "provider_stream_error"  # Generic type for errors from provider stream
+
+                        # Decide if this error from provider is a rate limit
+                        if (
+                            "rate limit" in error_msg_chunk.lower()
+                            or "resourceexhausted" in error_msg_chunk.lower()
                         ):
                             if current_api_key != "dummy_key":
                                 await llm_db_manager.add_key(current_api_key)
-                            last_error_type = "rate_limit"
-                        break
-                    except APIConnectionError as stream_err:
-                        llm_errors.append(
-                            f"Key {key_display}: Stream Connection Error - {stream_err}"
-                        )
-                        last_error_type = "connection"
-                        break
-                    except APIError as stream_err:
-                        llm_errors.append(
-                            f"Key {key_display}: Stream API Error - {stream_err}"
-                        )
-                        last_error_type = "api"
-                        if isinstance(stream_err, RateLimitError):
-                            if current_api_key != "dummy_key":
-                                await llm_db_manager.add_key(current_api_key)
-                            last_error_type = "rate_limit"
-                        # Check for 413 within stream error for OpenAI
-                        if (
-                            not is_gemini
-                            and hasattr(stream_err, "status_code")
-                            and stream_err.status_code == 413
-                        ):
-                            logging.warning(
-                                f"OpenAI API Error 413 (Request Entity Too Large) during stream with key {key_display}. Attempting compression."
+                            last_error_type = (
+                                "rate_limit"  # Be more specific if it's a rate limit
                             )
-                            # This break will exit the stream processing loop, and the outer compression loop will handle it.
-                            # No need to set last_error_type to 'api_413' here, the initial API call error handler will do it.
-                            break
-                        break
-                    except Exception as stream_err:
-                        llm_errors.append(
-                            f"Key {key_display}: Unexpected Stream Error - {type(stream_err).__name__}"
-                        )
-                        last_error_type = "unexpected"
-                        break
-                # --- End Stream Processing Loop for this attempt ---
+
+                        break  # Break from stream consumption, try next compression or key
+
+                    # If no error from provider chunk, process as before
+                    if chunk_finish_reason:
+                        stream_finish_reason = chunk_finish_reason
+                    if chunk_grounding_metadata:  # Mainly for Gemini
+                        stream_grounding_metadata = chunk_grounding_metadata
+
+                    if text_chunk:
+                        content_received = True
+                        # Yield content if not blocked
+                        if (
+                            not is_blocked_by_safety and not is_stopped_by_recitation
+                        ):  # These flags are set by Gemini provider
+                            yield text_chunk, None, None, None
+
+                    chunk_processed_successfully = (
+                        True  # If we got here without error_msg_chunk
+                    )
+
+                    if stream_finish_reason:
+                        # Check if Gemini specific safety/recitation finish reasons were passed up
+                        if stream_finish_reason.lower() == "safety":
+                            is_blocked_by_safety = True
+                            last_error_type = "safety"
+                            llm_errors.append(
+                                f"Key {key_display}: Response Blocked (Safety via provider)"
+                            )
+                        elif stream_finish_reason.lower() == "recitation":
+                            is_stopped_by_recitation = True
+                            last_error_type = "recitation"
+                            llm_errors.append(
+                                f"Key {key_display}: Response Stopped (Recitation via provider)"
+                            )
+                        break  # Break from stream consumption
 
                 # --- After Stream Processing Loop for this attempt ---
+                # This `if last_error_type == "api_413":` block needs to be outside the `async for`
+                # and inside the `try` that catches APIError, but before generic error handling.
+                # The logic for compression retry should be triggered if `last_error_type` is `api_413`.
+
+                if (
+                    last_error_type == "api_413"
+                ):  # Check if the stream broke due to 413 signal
+                    compression_attempt += 1
+                    if compression_attempt >= max_compression_attempts:
+                        logging.error(
+                            f"Max compression attempts for 413 error on key {key_display}. Trying next API key."
+                        )
+                        llm_errors.append(
+                            f"Key {key_display}: Max compression for 413 failed."
+                        )
+                        break  # Break compression loop, try next API key
+
+                    logging.info(
+                        f"Attempting image compression for OpenAI (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
+                    )
+                    (
+                        history_for_current_compression_cycle,
+                        history_was_modified_by_compression,
+                    ) = await compress_images_in_history(
+                        history=current_history_for_api_call,  # Start with the history for this API key
+                        is_gemini_provider=False,  # OpenAI
+                        compression_quality=current_compression_quality,
+                        resize_factor=current_resize_factor,
+                    )
+                    if history_was_modified_by_compression:
+                        compression_occurred = True
+                        final_quality = min(final_quality, current_compression_quality)
+                        final_resize = min(final_resize, current_resize_factor)
+                        current_compression_quality = max(
+                            10, current_compression_quality - 20
+                        )
+                        current_resize_factor = max(0.2, current_resize_factor - 0.15)
+                        logging.info(
+                            f"Retrying API call for key {key_display} with compressed images."
+                        )
+                        continue  # Continue to next compression attempt
+                    else:
+                        logging.warning(
+                            f"413 error for key {key_display}, but no images were compressed/modified. Trying next API key."
+                        )
+                        llm_errors.append(
+                            f"Key {key_display}: 413 but no images to compress or compression ineffective."
+                        )
+                        break  # Break compression loop
+
+                # The rest of the logic after stream processing (safety blocks, successful finish, etc.)
+                # remains largely the same, using `stream_finish_reason`, `content_received`, etc.
+                # which are now populated by consuming the provider-specific stream.
                 if (
                     is_blocked_by_safety or is_stopped_by_recitation
                 ):  # Safety/Recitation block is final for this key.
@@ -822,139 +593,17 @@ async def generate_response_stream(
                     logging.info(
                         f"Attempting image compression (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
                     )
-                    history_was_modified_by_compression = False
-                    temp_compressed_history = [
-                        msg.copy() for msg in current_history_for_api_call
-                    ]  # Work on a copy for this compression cycle
 
-                    for msg_data in temp_compressed_history:
-                        if msg_data.get("role") == "user" and isinstance(
-                            msg_data.get("content"), list
-                        ):
-                            new_content_parts = []
-                            for part in msg_data["content"]:
-                                if part.get("type") == "image_url" and isinstance(
-                                    part.get("image_url"), dict
-                                ):
-                                    image_data_url = part["image_url"].get("url", "")
-                                    if (
-                                        image_data_url.startswith("data:image")
-                                        and ";base64," in image_data_url
-                                    ):
-                                        try:
-                                            header, encoded_image_data = (
-                                                image_data_url.split(";base64,", 1)
-                                            )
-                                            mime_type = (
-                                                header.split(":", 1)[1]
-                                                if ":" in header
-                                                else "image/png"
-                                            )  # Default to png
-                                            image_bytes = base64.b64decode(
-                                                encoded_image_data
-                                            )
-
-                                            img = Image.open(io.BytesIO(image_bytes))
-                                            try:
-                                                original_format = img.format or (
-                                                    mime_type.split("/")[-1].upper()
-                                                    if "/" in mime_type
-                                                    else "PNG"
-                                                )
-
-                                                # Apply resizing
-                                                if current_resize_factor < 1.0:
-                                                    new_width = int(
-                                                        img.width
-                                                        * current_resize_factor
-                                                    )
-                                                    new_height = int(
-                                                        img.height
-                                                        * current_resize_factor
-                                                    )
-                                                    if (
-                                                        new_width > 0 and new_height > 0
-                                                    ):  # Ensure dimensions are positive
-                                                        logging.debug(
-                                                            f"Resizing image from {img.size} to ({new_width}, {new_height})"
-                                                        )
-                                                        img = img.resize(
-                                                            (new_width, new_height),
-                                                            Image.Resampling.LANCZOS,
-                                                        )
-                                                        history_was_modified_by_compression = True
-
-                                                output_buffer = io.BytesIO()
-                                                save_params = {}
-                                                target_format = original_format
-
-                                                if original_format in ["JPEG", "WEBP"]:
-                                                    save_params["quality"] = (
-                                                        current_compression_quality
-                                                    )
-                                                    target_format = "JPEG"  # Prefer JPEG for quality adjustments
-                                                    if (
-                                                        img.mode == "RGBA"
-                                                        or img.mode == "LA"
-                                                        or (
-                                                            img.mode == "P"
-                                                            and "transparency"
-                                                            in img.info
-                                                        )
-                                                    ):
-                                                        logging.debug(
-                                                            f"Image has alpha, converting to RGB for JPEG. Original mode: {img.mode}"
-                                                        )
-                                                        img = img.convert("RGB")
-                                                    history_was_modified_by_compression = True
-                                                elif original_format == "PNG":
-                                                    save_params["optimize"] = True
-                                                    # Could also consider reducing colors for PNG if size is still an issue: img = img.quantize(colors=128)
-                                                    # For now, rely on resize and potential future conversion to JPEG if PNGs are too large.
-
-                                                img.save(
-                                                    output_buffer,
-                                                    format=target_format,
-                                                    **save_params,
-                                                )
-                                                compressed_image_bytes = (
-                                                    output_buffer.getvalue()
-                                                )
-                                            finally:
-                                                img.close()
-
-                                            new_mime_type = (
-                                                f"image/{target_format.lower()}"
-                                            )
-                                            new_encoded_data = base64.b64encode(
-                                                compressed_image_bytes
-                                            ).decode("utf-8")
-
-                                            new_part = part.copy()
-                                            new_part["image_url"]["url"] = (
-                                                f"data:{new_mime_type};base64,{new_encoded_data}"
-                                            )
-                                            new_content_parts.append(new_part)
-                                            logging.debug(
-                                                f"Compressed image. Original size: {len(image_bytes)}, New size: {len(compressed_image_bytes)}, Format: {target_format}, Quality: {current_compression_quality if target_format == 'JPEG' else 'N/A'}, Resize: {current_resize_factor:.2f}"
-                                            )
-                                        except Exception as compress_exc:
-                                            logging.error(
-                                                f"Error during image compression: {compress_exc}",
-                                                exc_info=True,
-                                            )
-                                            new_content_parts.append(
-                                                part
-                                            )  # Add original part back if compression failed
-                                    else:
-                                        new_content_parts.append(
-                                            part
-                                        )  # Not a data URL image
-                                else:
-                                    new_content_parts.append(
-                                        part
-                                    )  # Not an image_url part
-                            msg_data["content"] = new_content_parts
+                    # Use the new image utility function
+                    (
+                        temp_compressed_history,
+                        history_was_modified_by_compression,
+                    ) = await compress_images_in_history(
+                        history=current_history_for_api_call,  # Pass the current version of history for this key
+                        is_gemini_provider=False,  # OpenAI
+                        compression_quality=current_compression_quality,
+                        resize_factor=current_resize_factor,
+                    )
 
                     if history_was_modified_by_compression:
                         # Track compression information
@@ -1053,101 +702,17 @@ async def generate_response_stream(
                     logging.info(
                         f"Attempting image compression for Gemini (Attempt {compression_attempt}/{max_compression_attempts}) for key {key_display}. Quality: {current_compression_quality}, Resize: {current_resize_factor:.2f}"
                     )
-                    history_was_modified_by_compression = False
-                    temp_compressed_history = [
-                        msg.copy() for msg in current_history_for_api_call
-                    ]
 
-                    for msg_data in temp_compressed_history:
-                        if isinstance(msg_data.get("parts"), list):
-                            new_gemini_parts = []
-                            for part in msg_data["parts"]:
-                                if (
-                                    isinstance(part, google_types.Part)
-                                    and hasattr(part, "inline_data")
-                                    and part.inline_data
-                                    and part.inline_data.mime_type.startswith("image/")
-                                ):
-                                    try:
-                                        image_bytes = part.inline_data.data
-                                        img = Image.open(io.BytesIO(image_bytes))
-                                        try:
-                                            original_format = img.format or (
-                                                part.inline_data.mime_type.split("/")[
-                                                    -1
-                                                ].upper()
-                                                if "/" in part.inline_data.mime_type
-                                                else "PNG"
-                                            )
-
-                                            if current_resize_factor < 1.0:
-                                                new_width = int(
-                                                    img.width * current_resize_factor
-                                                )
-                                                new_height = int(
-                                                    img.height * current_resize_factor
-                                                )
-                                                if new_width > 0 and new_height > 0:
-                                                    img = img.resize(
-                                                        (new_width, new_height),
-                                                        Image.Resampling.LANCZOS,
-                                                    )
-                                                    history_was_modified_by_compression = True
-
-                                            output_buffer = io.BytesIO()
-                                            save_params = {}
-                                            target_format = original_format
-
-                                            if original_format in ["JPEG", "WEBP"]:
-                                                save_params["quality"] = (
-                                                    current_compression_quality
-                                                )
-                                                target_format = "JPEG"
-                                                if (
-                                                    img.mode == "RGBA"
-                                                    or img.mode == "LA"
-                                                    or (
-                                                        img.mode == "P"
-                                                        and "transparency" in img.info
-                                                    )
-                                                ):
-                                                    img = img.convert("RGB")
-                                                history_was_modified_by_compression = (
-                                                    True
-                                                )
-                                            elif original_format == "PNG":
-                                                save_params["optimize"] = True
-
-                                            img.save(
-                                                output_buffer,
-                                                format=target_format,
-                                                **save_params,
-                                            )
-                                            compressed_image_bytes = (
-                                                output_buffer.getvalue()
-                                            )
-                                        finally:
-                                            img.close()
-
-                                        new_mime_type = f"image/{target_format.lower()}"
-                                        new_gemini_parts.append(
-                                            google_types.Part.from_bytes(
-                                                data=compressed_image_bytes,
-                                                mime_type=new_mime_type,
-                                            )
-                                        )
-                                        logging.debug(
-                                            f"Gemini Compressed image. Original size: {len(image_bytes)}, New size: {len(compressed_image_bytes)}, Format: {target_format}, Quality: {current_compression_quality if target_format == 'JPEG' else 'N/A'}, Resize: {current_resize_factor:.2f}"
-                                        )
-                                    except Exception as compress_exc:
-                                        logging.error(
-                                            f"Error during Gemini image compression: {compress_exc}",
-                                            exc_info=True,
-                                        )
-                                        new_gemini_parts.append(part)
-                                else:
-                                    new_gemini_parts.append(part)
-                            msg_data["parts"] = new_gemini_parts
+                    # Use the new image utility function
+                    (
+                        temp_compressed_history,
+                        history_was_modified_by_compression,
+                    ) = await compress_images_in_history(
+                        history=current_history_for_api_call,  # Pass current version of history for this key
+                        is_gemini_provider=True,  # Gemini
+                        compression_quality=current_compression_quality,
+                        resize_factor=current_resize_factor,
+                    )
 
                     if history_was_modified_by_compression:
                         # Track compression information
@@ -1310,7 +875,7 @@ Improved Prompt:"""
         history_for_llm=history_for_enhancement_llm,
         system_prompt_text=(
             f"{app_config.get(PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY, '')}\n"
-            f"Current date: {datetime.date.today().strftime('%Y-%m-%d')}"
+            f"Current date: {date.today().strftime('%Y-%m-%d')}"  # Use imported date
         ),
         provider_config=provider_config,
         extra_params=extra_params,
