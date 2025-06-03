@@ -563,7 +563,6 @@ async def _execute_enhance_prompt_logic(
 
         # Check if the combined initial parts + header + full enhanced text fits
         combined_message_for_single_send = (
-            f"{original_prompt_display_str}"
             f"**Enhanced Prompt {model_info_display_str}:**\n"
             f"```\n{escaped_full_enhanced_text_for_display}\n```"
         )
@@ -581,7 +580,7 @@ async def _execute_enhance_prompt_logic(
             # Define a helper for splitting text meant for code blocks
             def split_text_for_code_blocks(
                 text_content: str,
-            ) -> List[str]:  # Removed header param, it's handled outside
+            ) -> List[str]:
                 parts = []
                 safety_margin = 30
                 code_block_wrapper_len = len("```\n\n```")
@@ -600,7 +599,7 @@ async def _execute_enhance_prompt_logic(
                     else:
                         parts.append(
                             "```\n...\n```"
-                        )  # Should not happen if text_content is not empty
+                        )
                     return parts
 
                 idx = 0
@@ -610,22 +609,10 @@ async def _execute_enhance_prompt_logic(
                     idx += len(chunk)
                 return parts
 
-            # 1. Handle Original Prompt Display
-            original_prompt_header_text = "**Original Prompt:**"
-            messages_to_send_parts_list.append(original_prompt_header_text)
-            escaped_original_content = discord.utils.escape_markdown(
-                original_prompt_text
-            )
-            messages_to_send_parts_list.extend(
-                split_text_for_code_blocks(escaped_original_content)
-            )
-
-            # 2. Enhanced Prompt Header
+            # Only Enhanced Prompt Header and Content
             messages_to_send_parts_list.append(
                 f"**Enhanced Prompt {model_info_display_str}:**"
             )
-
-            # 3. Enhanced Prompt Content (already escaped as escaped_full_enhanced_text_for_display)
             messages_to_send_parts_list.extend(
                 split_text_for_code_blocks(escaped_full_enhanced_text_for_display)
             )
