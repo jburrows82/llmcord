@@ -216,6 +216,25 @@ async def generate_gemini_stream(
                                 yield None, finish_reason_str, grounding_meta, error_msg_chunk
                                 return # Stop generation
 
+            # Detect and handle whitespace spam
+            if not hasattr(generate_gemini_stream, "_whitespace_chunk_limit"):
+                generate_gemini_stream._whitespace_chunk_limit = 5  # static var for threshold
+            if not hasattr(generate_gemini_stream, "_whitespace_chunk_count"):
+                generate_gemini_stream._whitespace_chunk_count = 0
+
+            if text_chunk is not None and text_chunk.strip() == "":
+                generate_gemini_stream._whitespace_chunk_count += 1
+                if generate_gemini_stream._whitespace_chunk_count >= generate_gemini_stream._whitespace_chunk_limit:
+                    warning_msg = (
+                        "⚠️ Gemini API is sending repeated whitespace-only chunks (possible spam). "
+                        "Output stopped to prevent flooding. Please check Gemini API status or try again later."
+                    )
+                    yield None, "spam_warning", None, warning_msg
+                    return
+                continue  # Do not yield whitespace-only chunks
+            else:
+                generate_gemini_stream._whitespace_chunk_count = 0
+
             yield text_chunk, finish_reason_str, grounding_meta, error_msg_chunk
             if finish_reason_str: # If a finish reason is determined, stop.
                 return
