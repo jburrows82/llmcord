@@ -618,22 +618,47 @@ async def handle_llm_response_stream(
                                     footer_text_final = f"Model: {current_model_name}"
                                     if attempt_num == 1:  # This is for retry logic
                                         footer_text_final += f" (Retried from {original_model_name_param})"
-
+                                    
                                     internet_info_parts = []
-                                    if custom_search_queries_generated:
-                                        internet_info_parts.append("Internet used")
-                                        # This will correctly show "0 search results processed" if count is 0
-                                        internet_info_parts.append(
-                                            f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed"
+                                    
+                                    # --- Begin Gemini-specific grounding logic for footer ---
+                                    is_gemini = current_provider == "google" and "gemini" in current_model_name.lower()
+                                    if is_gemini:
+                                        # Determine if grounding was actually used
+                                        has_gemini_grounding = (
+                                            grounding_metadata_for_this_attempt
+                                            and (
+                                                getattr(grounding_metadata_for_this_attempt, "web_search_queries", None)
+                                                or getattr(grounding_metadata_for_this_attempt, "grounding_chunks", None)
+                                                or getattr(grounding_metadata_for_this_attempt, "search_entry_point", None)
+                                            )
                                         )
+                                        if has_gemini_grounding:
+                                            internet_info_parts.append("Internet used")
+                                            # Optionally, count search results if available
+                                            if hasattr(grounding_metadata_for_this_attempt, "grounding_chunks") and getattr(grounding_metadata_for_this_attempt, "grounding_chunks", None) is not None:
+                                                num_results = len(getattr(grounding_metadata_for_this_attempt, "grounding_chunks", []))
+                                                internet_info_parts.append(
+                                                    f"{num_results} search result{'s' if num_results != 1 else ''} processed"
+                                                )
+                                        else:
+                                            internet_info_parts.append("Internet not used")
                                     else:
-                                        internet_info_parts.append("Internet not used")
-
+                                        # Non-Gemini: keep existing logic
+                                        if custom_search_queries_generated:
+                                            internet_info_parts.append("Internet used")
+                                            internet_info_parts.append(
+                                                f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed"
+                                            )
+                                        else:
+                                            internet_info_parts.append("Internet not used")
+                                    # --- End Gemini-specific grounding logic for footer ---
+                                    
                                     if internet_info_parts:
                                         footer_text_final += " | " + ", ".join(
                                             internet_info_parts
                                         )
-
+                                    
                                     current_segment_embed.set_footer(
                                         text=footer_text_final
                                     )
