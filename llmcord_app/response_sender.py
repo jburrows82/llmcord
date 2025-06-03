@@ -442,7 +442,10 @@ async def handle_llm_response_stream(
                     if chunk_grounding_metadata:
                         grounding_metadata_for_this_attempt = chunk_grounding_metadata
                     if text_chunk:
-                        final_text_for_this_attempt += text_chunk
+                        if isinstance(text_chunk, list):
+                            final_text_for_this_attempt += "".join(text_chunk)
+                        else:
+                            final_text_for_this_attempt += text_chunk
 
                     if not use_plain_responses_config:
                         is_final_chunk_for_attempt = finish_reason is not None
