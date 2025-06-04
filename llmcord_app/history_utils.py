@@ -303,10 +303,14 @@ async def build_message_history(
                         if att.content_type.startswith("text/"):
                             is_relevant_for_download = True
                         elif att.content_type.startswith("image/"):
+                            # Download images if: 
+                            # 1. accept_files is True (user can send files), or
+                            # 2. current message and google lens is enabled, or  
+                            # 3. this is a bot message (to include generated images in history)
                             if accept_files or (
                                 is_current_message_node
                                 and use_google_lens_for_current  # Updated variable name
-                            ):
+                            ) or current_role == "model":
                                 is_relevant_for_download = True
                         elif att.content_type == "application/pdf":
                             if (
@@ -411,8 +415,10 @@ async def build_message_history(
                 is_lens_trigger_message = (
                     is_current_message_node and use_google_lens_for_current
                 )  # Updated variable name
+                
+                # Modified logic: Also process attachments from bot messages (for generated images)
                 should_process_files_for_api = (
-                    current_role == "user" or is_lens_trigger_message
+                    (current_role == "user" or current_role == "model") or is_lens_trigger_message
                 ) and (accept_files or is_lens_trigger_message)
 
                 if (
@@ -436,6 +442,7 @@ async def build_message_history(
                             att.content_type == "application/pdf"
                             and is_target_provider_gemini
                             and accept_files
+                            and current_role == "user"  # Only process PDFs for user messages
                         ):
                             is_api_relevant_type = True
                             mime_type_for_api = "application/pdf"

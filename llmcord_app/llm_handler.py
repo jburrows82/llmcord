@@ -33,7 +33,7 @@ from .constants import (
 )
 from .rate_limiter import get_db_manager, get_available_keys
 from .image_utils import compress_images_in_history
-from .llm_providers.gemini_provider import generate_gemini_stream  # Added import
+from .llm_providers.gemini_provider import generate_gemini_stream, generate_gemini_image_stream  # Added import
 from .llm_providers.openai_provider import generate_openai_stream  # Added import
 
 
@@ -47,7 +47,7 @@ async def generate_response_stream(
     # Add app_config to access Gemini safety settings
     app_config: Dict[str, Any],
 ) -> AsyncGenerator[
-    Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
+    Tuple[Optional[str], Optional[str], Optional[Any], Optional[str], Optional[bytes], Optional[str]], None
 ]:
     # Track image compression information
     compression_occurred = False
@@ -73,6 +73,8 @@ async def generate_response_stream(
         - finish_reason (Optional[str]): The reason the generation finished (e.g., "stop", "length", "safety").
         - grounding_metadata (Optional[Any]): Grounding metadata from the response (currently Gemini specific).
         - error_message (Optional[str]): An error message if a non-retryable error occurred during streaming.
+        - image_data (Optional[bytes]): Image data if available (for image generation models).
+        - image_mime_type (Optional[str]): MIME type of the image if available.
 
     Raises:
         AllKeysFailedError: If all available API keys for the provider fail.
@@ -81,6 +83,7 @@ async def generate_response_stream(
     all_api_keys = provider_config.get("api_keys", [])
     base_url = provider_config.get("base_url")
     is_gemini = provider == "google"
+    is_image_generation_model = (is_gemini and model_name == "gemini-2.0-flash-preview-image-generation")
 
     # Check if keys are required for this provider
     keys_required = provider not in [
@@ -273,14 +276,25 @@ async def generate_response_stream(
                 # --- Delegate to Provider-Specific Stream Generation ---
                 stream_generator_func = None
                 if is_gemini:
-                    stream_generator_func = generate_gemini_stream(
-                        api_key=current_api_key,
-                        model_name=model_name,
-                        history_for_api_call=history_for_current_compression_cycle,
-                        system_instruction_text=system_prompt_text,
-                        extra_params=extra_params,
-                        app_config=app_config,
-                    )
+                    if is_image_generation_model:
+                        # Use special image generation function (no system prompts, no grounding)
+                        stream_generator_func = generate_gemini_image_stream(
+                            api_key=current_api_key,
+                            model_name=model_name,
+                            history_for_api_call=history_for_current_compression_cycle,
+                            extra_params=extra_params,
+                            app_config=app_config,
+                        )
+                    else:
+                        # Use regular Gemini function
+                        stream_generator_func = generate_gemini_stream(
+                            api_key=current_api_key,
+                            model_name=model_name,
+                            history_for_api_call=history_for_current_compression_cycle,
+                            system_instruction_text=system_prompt_text,
+                            extra_params=extra_params,
+                            app_config=app_config,
+                        )
                 else:  # OpenAI compatible
                     stream_generator_func = generate_openai_stream(
                         api_key=(
@@ -295,94 +309,161 @@ async def generate_response_stream(
                     )
 
                 # --- Stream Processing Loop (now consumes from provider-specific generator) ---
-                async for (
-                    text_chunk,
-                    chunk_finish_reason,
-                    chunk_grounding_metadata,
-                    error_msg_chunk,
-                ) in stream_generator_func:
-                    chunk_processed_successfully = (
-                        False  # Reset for each chunk from provider
-                    )
-
-                    if error_msg_chunk:
-                        # Provider function signals an error
-                        # Specific error strings can be used for special handling (e.g., compression)
-                        if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE":
-                            if not is_gemini:  # This error is specific to OpenAI path
-                                logging.warning(
-                                    f"OpenAI API Error 413 (Request Entity Too Large) for key {key_display}, attempt {compression_attempt + 1}."
-                                )
-                                last_error_type = "api_413"
-                                # Break from this inner stream consumption to trigger compression logic below
-                                break
-                        elif error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422":
-                            if not is_gemini:
-                                logging.warning(
-                                    f"OpenAI Unprocessable Entity (422) for key {key_display}. Signaling for fallback."
-                                )
-                                last_error_type = "unprocessable_entity"
-                                # Yield a specific signal that the main handler in response_sender.py can catch
-                                yield (
-                                    None,
-                                    None,
-                                    None,
-                                    "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY",
-                                )
-                                return  # Stop this entire generation attempt
-
-                        # Handle other errors from provider stream
-                        llm_errors.append(
-                            f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
+                if is_image_generation_model:
+                    # Handle image generation model with expanded tuple
+                    async for (
+                        text_chunk,
+                        chunk_finish_reason,
+                        chunk_grounding_metadata,
+                        error_msg_chunk,
+                        image_data,
+                        image_mime_type,
+                    ) in stream_generator_func:
+                        chunk_processed_successfully = (
+                            False  # Reset for each chunk from provider
                         )
-                        last_error_type = "provider_stream_error"  # Generic type for errors from provider stream
 
-                        # Decide if this error from provider is a rate limit
-                        if (
-                            "rate limit" in error_msg_chunk.lower()
-                            or "resourceexhausted" in error_msg_chunk.lower()
-                        ):
-                            if current_api_key != "dummy_key":
-                                await llm_db_manager.add_key(current_api_key)
-                            last_error_type = (
-                                "rate_limit"  # Be more specific if it's a rate limit
-                            )
-
-                        break  # Break from stream consumption, try next compression or key
-
-                    # If no error from provider chunk, process as before
-                    if chunk_finish_reason:
-                        stream_finish_reason = chunk_finish_reason
-                    if chunk_grounding_metadata:  # Mainly for Gemini
-                        stream_grounding_metadata = chunk_grounding_metadata
-
-                    if text_chunk:
-                        content_received = True
-                        # Yield content if not blocked
-                        if (
-                            not is_blocked_by_safety and not is_stopped_by_recitation
-                        ):  # These flags are set by Gemini provider
-                            yield text_chunk, None, None, None
-
-                    chunk_processed_successfully = (
-                        True  # If we got here without error_msg_chunk
-                    )
-
-                    if stream_finish_reason:
-                        # Check if Gemini specific safety/recitation finish reasons were passed up
-                        if stream_finish_reason.lower() == "safety":
-                            is_blocked_by_safety = True
-                            last_error_type = "safety"
+                        if error_msg_chunk:
+                            # Provider function signals an error
                             llm_errors.append(
-                                f"Key {key_display}: Response Blocked (Safety via provider)"
+                                f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
                             )
-                        elif stream_finish_reason.lower() == "recitation":
-                            is_stopped_by_recitation = True
-                            last_error_type = "recitation"
+                            last_error_type = "provider_stream_error"
+                            
+                            # Decide if this error from provider is a rate limit
+                            if (
+                                "rate limit" in error_msg_chunk.lower()
+                                or "resourceexhausted" in error_msg_chunk.lower()
+                            ):
+                                if current_api_key != "dummy_key":
+                                    await llm_db_manager.add_key(current_api_key)
+                                last_error_type = "rate_limit"
+
+                            break  # Break from stream consumption, try next key
+
+                        # If no error from provider chunk, process as before
+                        if chunk_finish_reason:
+                            stream_finish_reason = chunk_finish_reason
+                        if chunk_grounding_metadata:
+                            stream_grounding_metadata = chunk_grounding_metadata
+
+                        if text_chunk or image_data:
+                            content_received = True
+                            # Yield content if not blocked
+                            if not is_blocked_by_safety and not is_stopped_by_recitation:
+                                yield text_chunk, None, None, None, image_data, image_mime_type
+
+                        chunk_processed_successfully = True
+
+                        if stream_finish_reason:
+                            # Check if Gemini specific safety/recitation finish reasons were passed up
+                            if stream_finish_reason.lower() == "safety":
+                                is_blocked_by_safety = True
+                                last_error_type = "safety"
+                                llm_errors.append(
+                                    f"Key {key_display}: Response Blocked (Safety via provider)"
+                                )
+                            elif stream_finish_reason.lower() == "recitation":
+                                is_stopped_by_recitation = True
+                                last_error_type = "recitation"
+                                llm_errors.append(
+                                    f"Key {key_display}: Response Stopped (Recitation via provider)"
+                                )
+                            break  # Break from stream consumption
+                else:
+                    # Handle regular models - now also expect 6-tuple but ignore image data
+                    async for (
+                        text_chunk,
+                        chunk_finish_reason,
+                        chunk_grounding_metadata,
+                        error_msg_chunk,
+                        image_data,  # Will be None for regular models
+                        image_mime_type,  # Will be None for regular models
+                    ) in stream_generator_func:
+                        chunk_processed_successfully = (
+                            False  # Reset for each chunk from provider
+                        )
+
+                        if error_msg_chunk:
+                            # Provider function signals an error
+                            # Specific error strings can be used for special handling (e.g., compression)
+                            if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE":
+                                if not is_gemini:  # This error is specific to OpenAI path
+                                    logging.warning(
+                                        f"OpenAI API Error 413 (Request Entity Too Large) for key {key_display}, attempt {compression_attempt + 1}."
+                                    )
+                                    last_error_type = "api_413"
+                                    # Break from this inner stream consumption to trigger compression logic below
+                                    break
+                            elif error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422":
+                                if not is_gemini:
+                                    logging.warning(
+                                        f"OpenAI Unprocessable Entity (422) for key {key_display}. Signaling for fallback."
+                                    )
+                                    last_error_type = "unprocessable_entity"
+                                    # Yield a specific signal that the main handler in response_sender.py can catch
+                                    yield (
+                                        None,
+                                        None,
+                                        None,
+                                        "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY",
+                                        None,
+                                        None,
+                                    )
+                                    return  # Stop this entire generation attempt
+
+                            # Handle other errors from provider stream
                             llm_errors.append(
-                                f"Key {key_display}: Response Stopped (Recitation via provider)"
+                                f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
                             )
-                        break  # Break from stream consumption
+                            last_error_type = "provider_stream_error"  # Generic type for errors from provider stream
+
+                            # Decide if this error from provider is a rate limit
+                            if (
+                                "rate limit" in error_msg_chunk.lower()
+                                or "resourceexhausted" in error_msg_chunk.lower()
+                            ):
+                                if current_api_key != "dummy_key":
+                                    await llm_db_manager.add_key(current_api_key)
+                                last_error_type = (
+                                    "rate_limit"  # Be more specific if it's a rate limit
+                                )
+
+                            break  # Break from stream consumption, try next compression or key
+
+                        # If no error from provider chunk, process as before
+                        if chunk_finish_reason:
+                            stream_finish_reason = chunk_finish_reason
+                        if chunk_grounding_metadata:  # Mainly for Gemini
+                            stream_grounding_metadata = chunk_grounding_metadata
+
+                        if text_chunk:
+                            content_received = True
+                            # Yield content if not blocked
+                            if (
+                                not is_blocked_by_safety and not is_stopped_by_recitation
+                            ):  # These flags are set by Gemini provider
+                                yield text_chunk, None, None, None, None, None
+
+                        chunk_processed_successfully = (
+                            True  # If we got here without error_msg_chunk
+                        )
+
+                        if stream_finish_reason:
+                            # Check if Gemini specific safety/recitation finish reasons were passed up
+                            if stream_finish_reason.lower() == "safety":
+                                is_blocked_by_safety = True
+                                last_error_type = "safety"
+                                llm_errors.append(
+                                    f"Key {key_display}: Response Blocked (Safety via provider)"
+                                )
+                            elif stream_finish_reason.lower() == "recitation":
+                                is_stopped_by_recitation = True
+                                last_error_type = "recitation"
+                                llm_errors.append(
+                                    f"Key {key_display}: Response Stopped (Recitation via provider)"
+                                )
+                            break  # Break from stream consumption
 
                 # --- After Stream Processing Loop for this attempt ---
                 # This `if last_error_type == "api_413":` block needs to be outside the `async for`
@@ -449,6 +530,8 @@ async def generate_response_stream(
                         ("safety" if is_blocked_by_safety else "recitation"),
                         stream_grounding_metadata,
                         f"Response {'blocked by safety' if is_blocked_by_safety else 'stopped by recitation'}.",
+                        None,
+                        None,
                     )
                     return  # Stop generation entirely if safety/recitation block from any key.
 
@@ -473,12 +556,14 @@ async def generate_response_stream(
                             quality_pct = final_quality
                             resize_pct = int(final_resize * 100)
                             user_warning = f"⚠️ The image is at {quality_pct}% of the original quality and has been resized to {resize_pct}% so the request works."
-                            yield None, None, None, f"COMPRESSION_INFO:{user_warning}"
+                            yield None, None, None, None, None, f"COMPRESSION_INFO:{user_warning}"
 
                         yield (
                             None,
                             stream_finish_reason,
                             stream_grounding_metadata,
+                            None,
+                            None,
                             None,
                         )
                         return  # Successful completion
@@ -515,6 +600,8 @@ async def generate_response_stream(
                             stream_finish_reason,
                             stream_grounding_metadata,
                             f"No content received (Finish Reason: {stream_finish_reason})",
+                            None,
+                            None,
                         )
                         return  # Stop generation
                     # If it WAS a 413 that led to no content, the compression loop should continue or break based on attempts.
@@ -543,6 +630,8 @@ async def generate_response_stream(
                             None,
                             stream_grounding_metadata,
                             "RETRY_WITH_GEMINI_NO_FINISH_REASON",
+                            None,
+                            None,
                         )
                         return  # Stop this attempt, let outer logic handle retry signal
                     else:  # Gemini stream ended with content but no explicit finish reason (should be rare)
@@ -553,6 +642,8 @@ async def generate_response_stream(
                             None,
                             "stop",
                             stream_grounding_metadata,
+                            None,
+                            None,
                             None,
                         )  # Assume stop
                         return
@@ -761,7 +852,7 @@ async def generate_response_stream(
                     f"Key {key_display}: Initial Unprocessable Entity - {e}"
                 )
                 last_error_type = "unprocessable_entity"
-                yield None, None, None, "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY"
+                yield None, None, None, None, None, None
                 return
             except (
                 google_api_exceptions.GoogleAPICallError

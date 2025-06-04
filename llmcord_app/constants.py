@@ -199,6 +199,7 @@ Do not apologize for the previous model. Focus on fulfilling the user's request 
 AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-05-20",
+        "gemini-2.0-flash-preview-image-generation",
         # Add other Gemini models as needed/supported
     ],
     "openai": [

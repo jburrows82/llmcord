@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import io
 from datetime import datetime as dt
 from typing import List, Dict, Optional, Any, Set
 
@@ -333,6 +334,11 @@ async def handle_llm_response_stream(
         current_attempt_llm_successful = False
         final_text_for_this_attempt = ""
         grounding_metadata_for_this_attempt = None
+        
+        # Special handling for image generation model
+        is_image_generation_model = (current_provider == "google" and current_model_name == "gemini-2.0-flash-preview-image-generation")
+        accumulated_image_data = None
+        accumulated_image_mime_type = None
 
         try:
             async with new_msg.channel.typing():
@@ -351,6 +357,8 @@ async def handle_llm_response_stream(
                     finish_reason,
                     chunk_grounding_metadata,
                     error_message,
+                    image_data,
+                    image_mime_type,
                 ) in stream_generator:
                     if error_message == "RETRY_WITH_GEMINI_NO_FINISH_REASON":
                         if (
@@ -447,6 +455,27 @@ async def handle_llm_response_stream(
                         else:
                             final_text_for_this_attempt += text_chunk
 
+                    # For image generation model, accumulate image data but don't send yet
+                    if is_image_generation_model and image_data and image_mime_type:
+                        accumulated_image_data = image_data
+                        accumulated_image_mime_type = image_mime_type
+                        logging.info(f"Accumulated image data: {len(image_data)} bytes, MIME type: {image_mime_type}")
+
+                    # Skip embed processing entirely for image generation model
+                    if is_image_generation_model:
+                        if finish_reason:
+                            current_attempt_llm_successful = finish_reason.lower() in (
+                                "stop",
+                                "end_turn",
+                            ) or (
+                                current_provider == "google"
+                                and finish_reason
+                                == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
+                            )
+                            break
+                        continue
+
+                    # Regular embed processing for non-image generation models
                     if not use_plain_responses_config:
                         is_final_chunk_for_attempt = finish_reason is not None
                         if (
@@ -822,6 +851,77 @@ async def handle_llm_response_stream(
                     final_text_for_this_attempt = ""  # Discard text from this attempt
                     # The outer loop (for attempt_num in range(2)) will continue to the retry logic
                     continue
+
+                # Handle image generation model - send accumulated data at the end
+                if is_image_generation_model and current_attempt_llm_successful:
+                    try:
+                        if accumulated_image_data and accumulated_image_mime_type:
+                            # Create a file from the accumulated image data
+                            image_file = io.BytesIO(accumulated_image_data)
+                            
+                            # Determine file extension from mime type
+                            file_extension = "png"  # default
+                            if "jpeg" in accumulated_image_mime_type or "jpg" in accumulated_image_mime_type:
+                                file_extension = "jpg"
+                            elif "webp" in accumulated_image_mime_type:
+                                file_extension = "webp"
+                            elif "gif" in accumulated_image_mime_type:
+                                file_extension = "gif"
+                            
+                            filename = f"generated_image.{file_extension}"
+                            discord_file = discord.File(fp=image_file, filename=filename)
+                            
+                            # Send the image as a reply with any text content
+                            content_to_send = final_text_for_this_attempt.strip() if final_text_for_this_attempt.strip() else None
+                            
+                            if processing_msg and not response_msgs:
+                                # Edit the processing message to show completion and send image
+                                await processing_msg.edit(content="✅ Image generated successfully!", embed=None, view=None)
+                                response_msg = await processing_msg.reply(
+                                    content=content_to_send,
+                                    file=discord_file,
+                                    mention_author=False
+                                )
+                            else:
+                                # Send as a new reply
+                                reply_target = response_msgs[-1] if response_msgs else new_msg
+                                response_msg = await reply_target.reply(
+                                    content=content_to_send,
+                                    file=discord_file,
+                                    mention_author=False
+                                )
+                            
+                            response_msgs.append(response_msg)
+                            
+                            # Update msg_nodes cache
+                            if response_msg.id not in client.msg_nodes:
+                                client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
+                                client.msg_nodes[response_msg.id].full_response_text = final_text_for_this_attempt
+                            
+                            client.last_task_time = dt.now().timestamp()
+                            
+                        else:
+                            # No image data received, send text only
+                            if processing_msg:
+                                await processing_msg.edit(
+                                    content=final_text_for_this_attempt or "Image generation completed but no image was received.",
+                                    embed=None,
+                                    view=None
+                                )
+                                response_msgs.append(processing_msg)
+                                if processing_msg.id not in client.msg_nodes:
+                                    client.msg_nodes[processing_msg.id] = models.MsgNode(parent_msg=new_msg)
+                                    client.msg_nodes[processing_msg.id].full_response_text = final_text_for_this_attempt
+                        
+                    except Exception as e:
+                        logging.error(f"Error sending generated image: {e}")
+                        # Fall back to text-only response
+                        if processing_msg:
+                            await processing_msg.edit(
+                                content=f"Generated image but failed to send: {str(e)}",
+                                embed=None,
+                                view=None
+                            )
 
                 llm_call_successful_final = current_attempt_llm_successful
                 final_text_to_return = final_text_for_this_attempt

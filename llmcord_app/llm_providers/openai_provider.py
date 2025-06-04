@@ -16,7 +16,7 @@ async def generate_openai_stream(
     extra_params: Dict[str, Any],
     current_provider_name: str, # To check against PROVIDERS_SUPPORTING_USERNAMES
     # app_config is not strictly needed here unless there are OpenAI specific global settings
-) -> AsyncGenerator[Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None]:
+) -> AsyncGenerator[Tuple[Optional[str], Optional[str], Optional[Any], Optional[str], Optional[bytes], Optional[str]], None]:
     """
     Generates a response stream from an OpenAI-compatible API.
 
@@ -35,9 +35,11 @@ async def generate_openai_stream(
         - finish_reason (Optional[str]): The reason the generation finished.
         - grounding_metadata (Optional[Any]): Always None for OpenAI.
         - error_message (Optional[str]): An error message if one occurred.
+        - image_data (Optional[bytes]): Always None for OpenAI (no image generation).
+        - image_mime_type (Optional[str]): Always None for OpenAI (no image generation).
     """
     if not base_url:
-        yield None, None, None, "Base URL is required for OpenAI-compatible provider but not found."
+        yield None, None, None, "Base URL is required for OpenAI-compatible provider but not found.", None, None
         return
 
     llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
@@ -98,7 +100,7 @@ async def generate_openai_stream(
                 if delta and delta.content:
                     text_chunk = delta.content
             
-            yield text_chunk, finish_reason_str, None, error_msg_chunk # No grounding metadata for OpenAI
+            yield text_chunk, finish_reason_str, None, error_msg_chunk, None, None # No grounding metadata or images for OpenAI
             if finish_reason_str:
                 return
 
@@ -110,20 +112,20 @@ async def generate_openai_stream(
         
         # Specific handling for 413 to allow compression retry by the caller
         if hasattr(e, 'status_code') and e.status_code == 413:
-             yield None, None, None, "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE" # Signal for compression
+             yield None, None, None, "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE", None, None # Signal for compression
              return
 
-        yield None, None, None, f"OpenAI API Error: {type(e).__name__} - {error_detail[:200]}"
+        yield None, None, None, f"OpenAI API Error: {type(e).__name__} - {error_detail[:200]}", None, None
     except APIConnectionError as e:
         logging.error(f"OpenAI Connection Error: {e}")
-        yield None, None, None, f"OpenAI Connection Error: {e}"
+        yield None, None, None, f"OpenAI Connection Error: {e}", None, None
     except UnprocessableEntityError as e: # Specific for 422
         logging.error(f"OpenAI Unprocessable Entity Error (422): {e}")
-        yield None, None, None, "OPENAI_UNPROCESSABLE_ENTITY_422" # Specific signal
+        yield None, None, None, "OPENAI_UNPROCESSABLE_ENTITY_422", None, None # Specific signal
     except BadRequestError as e: # Specific for 400
         logging.error(f"OpenAI Bad Request Error (400): {e}")
         error_body = str(e.body) if hasattr(e, 'body') else str(e)
-        yield None, None, None, f"OpenAI Bad Request (400): {error_body[:200]}"
+        yield None, None, None, f"OpenAI Bad Request (400): {error_body[:200]}", None, None
     except Exception as e:
         logging.exception("Unexpected error in generate_openai_stream")
-        yield None, None, None, f"Unexpected error: {type(e).__name__}"
+        yield None, None, None, f"Unexpected error: {type(e).__name__}", None, None
