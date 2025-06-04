@@ -67,9 +67,9 @@ async def get_web_search_queries_from_gemini(
     config: Dict[str, Any],
     # Pass the generate_response_stream function as a callable
     generate_response_stream_func: Callable[
-        [str, str, List[Dict[str, Any]], Optional[str], Dict[str, Any], Dict[str, Any]],
+        [str, str, List[Dict[str, Any]], Optional[str], Dict[str, Any], Dict[str, Any], Dict[str, Any]],
         AsyncGenerator[
-            Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
+            Tuple[Optional[str], Optional[str], Optional[Any], Optional[str], Optional[bytes], Optional[str]], None
         ],
     ],
 ) -> Optional[List[str]]:
@@ -148,7 +148,7 @@ async def get_web_search_queries_from_gemini(
             app_config=config,  # Pass app_config
         )
 
-        async for _, _, chunk_grounding_metadata, error_message in stream_generator:
+        async for _, _, chunk_grounding_metadata, error_message, _, _ in stream_generator:
             if error_message:
                 logging.error(f"Error during Gemini grounding call: {error_message}")
                 return None  # Abort on first error
@@ -775,7 +775,7 @@ async def generate_search_queries_with_custom_prompt(
             Config,
         ],  # Added Config to signature based on llm_handler call
         AsyncGenerator[
-            Tuple[Optional[str], Optional[str], Optional[Any], Optional[str]], None
+            Tuple[Optional[str], Optional[str], Optional[Any], Optional[str], Optional[bytes], Optional[str]], None
         ],
     ],
     current_model_id: str,
@@ -969,7 +969,7 @@ async def generate_search_queries_with_custom_prompt(
             app_config=config,  # Pass app_config
         )
 
-        async for text_chunk, _, _, error_message in stream_generator:  # type: ignore
+        async for text_chunk, _, _, error_message, _, _ in stream_generator:  # type: ignore
             if error_message:
                 logging.error(
                     f"LLM call error during custom search query generation: {error_message}"
