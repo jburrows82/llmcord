@@ -972,4 +972,6 @@ Improved Prompt:"""
         extra_params=extra_params,
         app_config=app_config,
     ):
-        yield chunk_tuple
+        # Extract only the first 4 elements from the 6-tuple returned by generate_response_stream
+        text_chunk, finish_reason, grounding_metadata, error_message = chunk_tuple[:4]
+        yield text_chunk, finish_reason, grounding_metadata, error_message
