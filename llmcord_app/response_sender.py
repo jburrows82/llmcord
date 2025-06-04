@@ -334,9 +334,12 @@ async def handle_llm_response_stream(
         current_attempt_llm_successful = False
         final_text_for_this_attempt = ""
         grounding_metadata_for_this_attempt = None
-        
+
         # Special handling for image generation model
-        is_image_generation_model = (current_provider == "google" and current_model_name == "gemini-2.0-flash-preview-image-generation")
+        is_image_generation_model = (
+            current_provider == "google"
+            and current_model_name == "gemini-2.0-flash-preview-image-generation"
+        )
         accumulated_image_data = None
         accumulated_image_mime_type = None
 
@@ -459,7 +462,9 @@ async def handle_llm_response_stream(
                     if is_image_generation_model and image_data and image_mime_type:
                         accumulated_image_data = image_data
                         accumulated_image_mime_type = image_mime_type
-                        logging.info(f"Accumulated image data: {len(image_data)} bytes, MIME type: {image_mime_type}")
+                        logging.info(
+                            f"Accumulated image data: {len(image_data)} bytes, MIME type: {image_mime_type}"
+                        )
 
                     # Skip embed processing entirely for image generation model
                     if is_image_generation_model:
@@ -470,7 +475,9 @@ async def handle_llm_response_stream(
                             ) or (
                                 current_provider == "google"
                                 and finish_reason
-                                == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
+                                == str(
+                                    google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                                )
                             )
                             break
                         continue
@@ -650,31 +657,65 @@ async def handle_llm_response_stream(
                                     footer_text_final = f"Model: {current_model_name}"
                                     if attempt_num == 1:  # This is for retry logic
                                         footer_text_final += f" (Retried from {original_model_name_param})"
-                                    
+
                                     internet_info_parts = []
-                                    
+
                                     # --- Begin Gemini-specific grounding logic for footer ---
-                                    is_gemini = current_provider == "google" and "gemini" in current_model_name.lower()
+                                    is_gemini = (
+                                        current_provider == "google"
+                                        and "gemini" in current_model_name.lower()
+                                    )
                                     if is_gemini:
                                         # Determine if grounding was actually used
                                         has_gemini_grounding = (
                                             grounding_metadata_for_this_attempt
                                             and (
-                                                getattr(grounding_metadata_for_this_attempt, "web_search_queries", None)
-                                                or getattr(grounding_metadata_for_this_attempt, "grounding_chunks", None)
-                                                or getattr(grounding_metadata_for_this_attempt, "search_entry_point", None)
+                                                getattr(
+                                                    grounding_metadata_for_this_attempt,
+                                                    "web_search_queries",
+                                                    None,
+                                                )
+                                                or getattr(
+                                                    grounding_metadata_for_this_attempt,
+                                                    "grounding_chunks",
+                                                    None,
+                                                )
+                                                or getattr(
+                                                    grounding_metadata_for_this_attempt,
+                                                    "search_entry_point",
+                                                    None,
+                                                )
                                             )
                                         )
                                         if has_gemini_grounding:
                                             internet_info_parts.append("Internet used")
                                             # Optionally, count search results if available
-                                            if hasattr(grounding_metadata_for_this_attempt, "grounding_chunks") and getattr(grounding_metadata_for_this_attempt, "grounding_chunks", None) is not None:
-                                                num_results = len(getattr(grounding_metadata_for_this_attempt, "grounding_chunks", []))
+                                            if (
+                                                hasattr(
+                                                    grounding_metadata_for_this_attempt,
+                                                    "grounding_chunks",
+                                                )
+                                                and getattr(
+                                                    grounding_metadata_for_this_attempt,
+                                                    "grounding_chunks",
+                                                    None,
+                                                )
+                                                is not None
+                                            ):
+                                                num_results = len(
+                                                    getattr(
+                                                        grounding_metadata_for_this_attempt,
+                                                        "grounding_chunks",
+                                                        [],
+                                                    )
+                                                )
                                                 internet_info_parts.append(
                                                     f"{num_results} search result{'s' if num_results != 1 else ''} processed"
                                                 )
                                         else:
-                                            internet_info_parts.append("Internet not used")
+                                            internet_info_parts.append(
+                                                "Internet not used"
+                                            )
                                     else:
                                         # Non-Gemini: keep existing logic
                                         if custom_search_queries_generated:
@@ -683,14 +724,16 @@ async def handle_llm_response_stream(
                                                 f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed"
                                             )
                                         else:
-                                            internet_info_parts.append("Internet not used")
+                                            internet_info_parts.append(
+                                                "Internet not used"
+                                            )
                                     # --- End Gemini-specific grounding logic for footer ---
-                                    
+
                                     if internet_info_parts:
                                         footer_text_final += " | " + ", ".join(
                                             internet_info_parts
                                         )
-                                    
+
                                     current_segment_embed.set_footer(
                                         text=footer_text_final
                                     )
@@ -858,61 +901,85 @@ async def handle_llm_response_stream(
                         if accumulated_image_data and accumulated_image_mime_type:
                             # Create a file from the accumulated image data
                             image_file = io.BytesIO(accumulated_image_data)
-                            
+
                             # Determine file extension from mime type
                             file_extension = "png"  # default
-                            if "jpeg" in accumulated_image_mime_type or "jpg" in accumulated_image_mime_type:
+                            if (
+                                "jpeg" in accumulated_image_mime_type
+                                or "jpg" in accumulated_image_mime_type
+                            ):
                                 file_extension = "jpg"
                             elif "webp" in accumulated_image_mime_type:
                                 file_extension = "webp"
                             elif "gif" in accumulated_image_mime_type:
                                 file_extension = "gif"
-                            
+
                             filename = f"generated_image.{file_extension}"
-                            discord_file = discord.File(fp=image_file, filename=filename)
-                            
+                            discord_file = discord.File(
+                                fp=image_file, filename=filename
+                            )
+
                             # Send the image as a reply with any text content
-                            content_to_send = final_text_for_this_attempt.strip() if final_text_for_this_attempt.strip() else None
-                            
+                            content_to_send = (
+                                final_text_for_this_attempt.strip()
+                                if final_text_for_this_attempt.strip()
+                                else None
+                            )
+
                             if processing_msg and not response_msgs:
                                 # Edit the processing message to show completion and send image
-                                await processing_msg.edit(content="✅ Image generated successfully!", embed=None, view=None)
+                                await processing_msg.edit(
+                                    content="✅ Image generated successfully!",
+                                    embed=None,
+                                    view=None,
+                                )
                                 response_msg = await processing_msg.reply(
                                     content=content_to_send,
                                     file=discord_file,
-                                    mention_author=False
+                                    mention_author=False,
                                 )
                             else:
                                 # Send as a new reply
-                                reply_target = response_msgs[-1] if response_msgs else new_msg
+                                reply_target = (
+                                    response_msgs[-1] if response_msgs else new_msg
+                                )
                                 response_msg = await reply_target.reply(
                                     content=content_to_send,
                                     file=discord_file,
-                                    mention_author=False
+                                    mention_author=False,
                                 )
-                            
+
                             response_msgs.append(response_msg)
-                            
+
                             # Update msg_nodes cache
                             if response_msg.id not in client.msg_nodes:
-                                client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                                client.msg_nodes[response_msg.id].full_response_text = final_text_for_this_attempt
-                            
+                                client.msg_nodes[response_msg.id] = models.MsgNode(
+                                    parent_msg=new_msg
+                                )
+                                client.msg_nodes[
+                                    response_msg.id
+                                ].full_response_text = final_text_for_this_attempt
+
                             client.last_task_time = dt.now().timestamp()
-                            
+
                         else:
                             # No image data received, send text only
                             if processing_msg:
                                 await processing_msg.edit(
-                                    content=final_text_for_this_attempt or "Image generation completed but no image was received.",
+                                    content=final_text_for_this_attempt
+                                    or "Image generation completed but no image was received.",
                                     embed=None,
-                                    view=None
+                                    view=None,
                                 )
                                 response_msgs.append(processing_msg)
                                 if processing_msg.id not in client.msg_nodes:
-                                    client.msg_nodes[processing_msg.id] = models.MsgNode(parent_msg=new_msg)
-                                    client.msg_nodes[processing_msg.id].full_response_text = final_text_for_this_attempt
-                        
+                                    client.msg_nodes[processing_msg.id] = (
+                                        models.MsgNode(parent_msg=new_msg)
+                                    )
+                                    client.msg_nodes[
+                                        processing_msg.id
+                                    ].full_response_text = final_text_for_this_attempt
+
                     except Exception as e:
                         logging.error(f"Error sending generated image: {e}")
                         # Fall back to text-only response
@@ -920,7 +987,7 @@ async def handle_llm_response_stream(
                             await processing_msg.edit(
                                 content=f"Generated image but failed to send: {str(e)}",
                                 embed=None,
-                                view=None
+                                view=None,
                             )
 
                 llm_call_successful_final = current_attempt_llm_successful

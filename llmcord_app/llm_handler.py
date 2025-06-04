@@ -33,7 +33,10 @@ from .constants import (
 )
 from .rate_limiter import get_db_manager, get_available_keys
 from .image_utils import compress_images_in_history
-from .llm_providers.gemini_provider import generate_gemini_stream, generate_gemini_image_stream  # Added import
+from .llm_providers.gemini_provider import (
+    generate_gemini_stream,
+    generate_gemini_image_stream,
+)  # Added import
 from .llm_providers.openai_provider import generate_openai_stream  # Added import
 
 
@@ -47,7 +50,15 @@ async def generate_response_stream(
     # Add app_config to access Gemini safety settings
     app_config: Dict[str, Any],
 ) -> AsyncGenerator[
-    Tuple[Optional[str], Optional[str], Optional[Any], Optional[str], Optional[bytes], Optional[str]], None
+    Tuple[
+        Optional[str],
+        Optional[str],
+        Optional[Any],
+        Optional[str],
+        Optional[bytes],
+        Optional[str],
+    ],
+    None,
 ]:
     # Track image compression information
     compression_occurred = False
@@ -83,7 +94,9 @@ async def generate_response_stream(
     all_api_keys = provider_config.get("api_keys", [])
     base_url = provider_config.get("base_url")
     is_gemini = provider == "google"
-    is_image_generation_model = (is_gemini and model_name == "gemini-2.0-flash-preview-image-generation")
+    is_image_generation_model = (
+        is_gemini and model_name == "gemini-2.0-flash-preview-image-generation"
+    )
 
     # Check if keys are required for this provider
     keys_required = provider not in [
@@ -329,7 +342,7 @@ async def generate_response_stream(
                                 f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
                             )
                             last_error_type = "provider_stream_error"
-                            
+
                             # Decide if this error from provider is a rate limit
                             if (
                                 "rate limit" in error_msg_chunk.lower()
@@ -350,8 +363,18 @@ async def generate_response_stream(
                         if text_chunk or image_data:
                             content_received = True
                             # Yield content if not blocked
-                            if not is_blocked_by_safety and not is_stopped_by_recitation:
-                                yield text_chunk, None, None, None, image_data, image_mime_type
+                            if (
+                                not is_blocked_by_safety
+                                and not is_stopped_by_recitation
+                            ):
+                                yield (
+                                    text_chunk,
+                                    None,
+                                    None,
+                                    None,
+                                    image_data,
+                                    image_mime_type,
+                                )
 
                         chunk_processed_successfully = True
 
@@ -387,8 +410,13 @@ async def generate_response_stream(
                         if error_msg_chunk:
                             # Provider function signals an error
                             # Specific error strings can be used for special handling (e.g., compression)
-                            if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE":
-                                if not is_gemini:  # This error is specific to OpenAI path
+                            if (
+                                error_msg_chunk
+                                == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE"
+                            ):
+                                if (
+                                    not is_gemini
+                                ):  # This error is specific to OpenAI path
                                     logging.warning(
                                         f"OpenAI API Error 413 (Request Entity Too Large) for key {key_display}, attempt {compression_attempt + 1}."
                                     )
@@ -425,9 +453,7 @@ async def generate_response_stream(
                             ):
                                 if current_api_key != "dummy_key":
                                     await llm_db_manager.add_key(current_api_key)
-                                last_error_type = (
-                                    "rate_limit"  # Be more specific if it's a rate limit
-                                )
+                                last_error_type = "rate_limit"  # Be more specific if it's a rate limit
 
                             break  # Break from stream consumption, try next compression or key
 
@@ -441,7 +467,8 @@ async def generate_response_stream(
                             content_received = True
                             # Yield content if not blocked
                             if (
-                                not is_blocked_by_safety and not is_stopped_by_recitation
+                                not is_blocked_by_safety
+                                and not is_stopped_by_recitation
                             ):  # These flags are set by Gemini provider
                                 yield text_chunk, None, None, None, None, None
 
@@ -556,7 +583,14 @@ async def generate_response_stream(
                             quality_pct = final_quality
                             resize_pct = int(final_resize * 100)
                             user_warning = f"⚠️ The image is at {quality_pct}% of the original quality and has been resized to {resize_pct}% so the request works."
-                            yield None, None, None, None, None, f"COMPRESSION_INFO:{user_warning}"
+                            yield (
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                f"COMPRESSION_INFO:{user_warning}",
+                            )
 
                         yield (
                             None,

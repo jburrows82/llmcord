@@ -413,7 +413,7 @@ async def _execute_enhance_prompt_logic(
                 _kwargs["content"] = content
             if view is not None:
                 _kwargs["view"] = view
-            
+
             # The original conditional for 'initial' existed, though both branches made the same type of call.
             # We'll maintain the conditional structure but use the corrected kwargs.
             if (
@@ -543,7 +543,6 @@ async def _execute_enhance_prompt_logic(
             return
 
         # --- Response Formatting and Sending ---
-        original_prompt_display_str = f"**Original Prompt:**\n```\n{discord.utils.escape_markdown(original_prompt_text)}\n```\n"
         model_info_display_str = f"**(Enhanced by Model: {provider}/{model_name})**"
         full_enhanced_prompt_text_for_file = (
             enhanced_prompt_text_from_llm.strip()
@@ -597,9 +596,7 @@ async def _execute_enhance_prompt_logic(
                             f"```\n{text_content[: max_text_in_chunk - len('...')] if max_text_in_chunk > len('...') else ''}...\n```"
                         )
                     else:
-                        parts.append(
-                            "```\n...\n```"
-                        )
+                        parts.append("```\n...\n```")
                     return parts
 
                 idx = 0

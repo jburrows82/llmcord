@@ -25,7 +25,7 @@ from .constants import (
 
 from . import models
 from .rate_limiter import check_and_perform_global_reset, close_all_db_managers
-from .config import get_max_text_for_model # New
+from .config import get_max_text_for_model  # New
 from .utils import (
     extract_urls_with_indices,
     is_image_url,

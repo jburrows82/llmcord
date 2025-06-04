@@ -30,11 +30,13 @@ STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS_CONFIG_KEY = "edit_delay_seconds"
 
 MAX_MESSAGE_NODES_CONFIG_KEY = "max_message_node_cache"
-MAX_TEXT_LIMITS_CONFIG_KEY = "max_text_limits" # New
-DEFAULT_MAX_TEXT_KEY = "default" # New
-MODEL_SPECIFIC_MAX_TEXT_KEY = "models" # New
-MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY = "max_text_safety_margin" # New
-MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY = "min_token_limit_after_safety_margin" # New
+MAX_TEXT_LIMITS_CONFIG_KEY = "max_text_limits"  # New
+DEFAULT_MAX_TEXT_KEY = "default"  # New
+MODEL_SPECIFIC_MAX_TEXT_KEY = "models"  # New
+MAX_TEXT_SAFETY_MARGIN_CONFIG_KEY = "max_text_safety_margin"  # New
+MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY = (
+    "min_token_limit_after_safety_margin"  # New
+)
 # --- Limits ---
 MAX_EMBED_FIELD_VALUE_LENGTH = 1024
 MAX_EMBED_FIELDS = 25
