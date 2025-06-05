@@ -102,7 +102,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 - **PDF and DOCX Attachment Processing**:
   - When using Gemini models (with vision/file capabilities enabled), PDF attachments are sent directly to the model.
   - For other models, text is extracted from PDF attachments using `PyMuPDF` and appended to your query.
-  - DOCX attachments are processed for all models: text is extracted using `python-docx` and appended to your query.
+  - DOCX attachments are processed for all models (including Gemini): text is extracted using `python-docx` and appended to your query.
 - **Image URL Processing**: If you include direct URLs to images (e.g., `https://example.com/image.png`) in your message text, the bot will attempt to download these images and treat them as if they were attached directly, making them available to vision models or Google Lens.
 
 ### Robust Rate Limit Handling

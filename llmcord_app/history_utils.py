@@ -503,24 +503,7 @@ async def build_message_history(
                             else:
                                 curr_node.has_bad_attachments = True
                                 continue
-                        elif (
-                            att.content_type
-                            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            and is_target_provider_gemini
-                            and accept_files
-                            and current_role
-                            == "user"  # Only process DOCX for user messages
-                        ):
-                            is_api_relevant_type = True
-                            mime_type_for_api = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            if (
-                                isinstance(resp, httpx.Response)
-                                and resp.status_code == 200
-                            ):
-                                file_bytes_for_api = resp.content
-                            else:
-                                curr_node.has_bad_attachments = True
-                                continue
+
                         if not is_api_relevant_type or file_bytes_for_api is None:
                             continue
                         if files_processed_for_api_count >= max_files_per_message:
