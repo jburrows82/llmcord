@@ -1,16 +1,12 @@
 <h1 align="center">
-  llmcord
+  Discord LLM Chatbot
 </h1>
 
 <h3 align="center"><i>
   Talk to LLMs with your friends!
 </i></h3>
 
-<p align="center">
-  <img src="https://github.com/jakobdylanc/llmcord/assets/38699060/789d49fe-ef5c-470e-b60e-48ac03057443" alt="">
-</p>
-
-llmcord transforms Discord into a collaborative LLM frontend. It works with practically any LLM, remote or locally hosted.
+This Discord bot transforms Discord into a collaborative LLM frontend, based on the excellent [llmcord](https://github.com/jakobdylanc/llmcord) project. It works with practically any LLM, remote or locally hosted, with a modular Python codebase and extensive customization options.
 
 ## Features
 
@@ -134,15 +130,30 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 - Fully asynchronous.
 - Modular Python codebase.
 
+## Project Structure
+
+This project is organized into several key directories:
+
+- **`src/`** - Main source code organized by functionality:
+  - `bot/` - Discord bot implementation and command handlers
+  - `core/` - Core utilities, configuration, and rate limiting
+  - `llm/` - LLM provider integrations and response handling
+  - `content/` - Content extraction from URLs, files, and media
+  - `messaging/` - Message processing and conversation management
+  - `services/` - Additional services like grounding and prompt utilities
+  - `ui/` - Output server for sharing rendered content
+- **`config/`** - Configuration files and user preferences
+- **`docker/`** - Docker configuration files
+- **`logs/`** - Application logs
+- **`data/`** - Data storage and caching
+- **`scripts/`** - Utility scripts
+- **`tests/`** - Test files
+
 ## Instructions
 
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/jakobdylanc/llmcord
-   cd llmcord # Navigate into the cloned directory
-   ```
+1. Clone this repo or download the source code
 
-2. Create a copy of "config-example.yaml" named "config.yaml" and set it up:
+2. Create a copy of "config/config-example.yaml" named "config/config.yaml" and set it up:
 
 ### Discord settings:
 
@@ -214,25 +225,26 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 | **output_sharing.url_shortener_service** | The URL shortener service to use. Currently supported: `"tinyurl"`. (Default: `"tinyurl"`) |
 
 ### User Preferences:
-- User-specific settings for model, system prompt, and Gemini thinking budget are stored in JSON files at the root of the project (e.g., `user_model_prefs.json`, `user_system_prompts.json`, `user_gemini_thinking_budget_prefs.json`). Consider adding these to your `.gitignore` if you manage your deployment with git.
+- User-specific settings for model, system prompt, and Gemini thinking budget are stored in JSON files in the `config/` directory (e.g., `config/user_model_prefs.json`, `config/user_system_prompts.json`, `config/user_gemini_thinking_budget_prefs.json`). Consider adding these to your `.gitignore` if you manage your deployment with git.
 
 3. Install requirements:
    ```bash
-    # Ensure you are in the 'llmcord' directory (the one containing requirements.txt)
+    # Ensure you are in the project root directory (the one containing requirements.txt)
     python -m pip install -U -r requirements.txt
     ```
-   *(Note: This includes `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, `PyMuPDF` for PDF text extraction, and `tiktoken` for token counting.)*
+   *(Note: This includes `discord.py`, `httpx`, `google-genai`, `openai`, `youtube-transcript-api`, `google-api-python-client`, `asyncpraw`, `beautifulsoup4`, `google-search-results` for SerpAPI, `PyMuPDF` for PDF text extraction, `tiktoken` for token counting, `crawl4ai` for advanced web scraping, `grip` and `pyngrok` for output sharing, and other dependencies.)*
 
 4. Run the bot:
 
    **No Docker:**
    ```bash
-   # Ensure you are in the 'llmcord' directory
+   # Ensure you are in the project root directory
    python main.py
    ```
 
    **With Docker:**
    ```bash
+   cd docker
    docker compose up
     ```
 
@@ -255,16 +267,12 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 
 - PDF text extraction for non-Gemini models is done using `PyMuPDF`.
 
-- **Rate Limit Handling & User Preferences:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) and JSON files (e.g., `user_model_prefs.json`) at the project root. Ensure these (and `last_reset_timestamp.txt`) are added to your `.gitignore` if you manage your deployment with git.
+- **Rate Limit Handling & User Preferences:** The bot uses SQLite databases (in the `ratelimit_dbs/` folder) and JSON files (e.g., `config/user_model_prefs.json`) in the config directory. Ensure these (and `last_reset_timestamp.txt`) are added to your `.gitignore` if you manage your deployment with git.
 
-- PRs are welcome :)
+## Acknowledgments
 
-## Star History
+This project is based on the excellent [llmcord](https://github.com/jakobdylanc/llmcord) by jakobdylanc. The original project provides the foundation for this Discord LLM bot implementation.
 
-<a href="https://star-history.com/#jakobdylanc/llmcord&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
-  </picture>
-</a>
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests to improve the bot.
