@@ -227,10 +227,9 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 
    **No Docker:**
    ```bash
-   # Ensure you are in the 'llmcord' directory (the parent of 'llmcord_app')
-   python -m llmcord_app.main
+   # Ensure you are in the 'llmcord' directory
+   python main.py
    ```
-   *(Note: You must use `python -m llmcord_app.main` because the code is now structured as a Python package (`llmcord_app`) and this command tells Python to run the `main.py` file within that package.)*
 
    **With Docker:**
    ```bash

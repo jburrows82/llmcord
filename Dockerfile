@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -U -r requirements.txt
 
 COPY . .
 
-CMD ["python", "-m", "llmcord_app.main"]
+CMD ["python", "main.py"]
