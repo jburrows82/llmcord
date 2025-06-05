@@ -11,7 +11,55 @@
 !config-example.yaml
 !docker-compose.yaml
 !requirements.txt
-!llmcord_app
-!llmcord_app/content_fetchers
+
+# New directory structure
+!src/
+!src/**
+!config/
+!config/**
+!docker/
+!docker/**
+!tests/
+!tests/**
+!scripts/
+!scripts/**
+!docs/
+!docs/**
+
+# Exclude sensitive config files but allow example
+config/config.yaml
+config/user_*.json
+
+# Allow directory structure but ignore contents
+!data/
+!data/.gitkeep
+data/*
+!logs/
+!logs/.gitkeep
+logs/*
+
+# Exclude specific patterns within allowed directories
 *_docs_(use_for_reference).md
-!llmcord_app/llm_providers
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.env
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files that change frequently
+*.log

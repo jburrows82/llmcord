@@ -5,10 +5,10 @@ import discord
 import yaml
 
 
-from llmcord_app.config import get_config
-from llmcord_app.bot import LLMCordClient
-from llmcord_app.rate_limiter import close_all_db_managers
-from llmcord_app.output_server import (
+from src.core.config import get_config
+from src.bot.bot import LLMCordClient
+from src.core.rate_limiter import close_all_db_managers
+from src.ui.output_server import (
     stop_output_server,
     cleanup_shared_html_dir,
 )
@@ -26,7 +26,7 @@ console_handler.setFormatter(log_formatter)
 logger.addHandler(console_handler)
 
 # File Handler for errors and warnings
-file_handler = logging.FileHandler("llmcord_errors.log", encoding="utf-8")
+file_handler = logging.FileHandler("logs/llmcord_errors.log", encoding="utf-8")
 file_handler.setLevel(logging.WARNING)  # Log WARNING and ERROR levels to file
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
