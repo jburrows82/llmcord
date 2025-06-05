@@ -364,6 +364,19 @@ class LLMCordClient(discord.Client):
                 is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check
             ):
                 has_potential_image_urls_in_text = True
+        
+        # Also check for image URLs in replied-to messages
+        if not has_potential_image_urls_in_text and new_msg.reference and new_msg.reference.message_id:
+            try:
+                referenced_msg = new_msg.reference.cached_message
+                if not referenced_msg:
+                    referenced_msg = await new_msg.channel.fetch_message(new_msg.reference.message_id)
+                if referenced_msg and referenced_msg.content:
+                    urls_in_replied_msg = extract_urls_with_indices(referenced_msg.content)
+                    if any(is_image_url(url_info[0]) for url_info in urls_in_replied_msg):
+                        has_potential_image_urls_in_text = True
+            except (discord.NotFound, discord.HTTPException, Exception):
+                pass  # If we can't fetch the message, just continue without it
 
         # --- LLM Provider/Model Selection using the new selector function ---
         (

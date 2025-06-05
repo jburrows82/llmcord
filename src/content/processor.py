@@ -34,6 +34,38 @@ from ..messaging.history_utils import (
 from ..services.prompt_utils import prepare_system_prompt
 
 
+async def extract_urls_from_replied_message(new_msg: discord.Message) -> str:
+    """
+    Extracts URLs from the message that was replied to, if any.
+    Returns a string containing any URLs found in the replied-to message.
+    """
+    if not new_msg.reference or not new_msg.reference.message_id:
+        return ""
+    
+    try:
+        # Try to get the referenced message from cache first
+        referenced_msg = new_msg.reference.cached_message
+        if not referenced_msg:
+            # If not in cache, fetch it
+            referenced_msg = await new_msg.channel.fetch_message(new_msg.reference.message_id)
+        
+        if referenced_msg and referenced_msg.content:
+            # Extract URLs from the referenced message content
+            urls_with_indices = extract_urls_with_indices(referenced_msg.content)
+            if urls_with_indices:
+                urls = [url for url, _ in urls_with_indices]
+                urls_content = " ".join(urls)
+                logging.info(f"Found {len(urls)} URL(s) in replied-to message {referenced_msg.id}: {urls}")
+                return urls_content
+                
+    except (discord.NotFound, discord.HTTPException) as e:
+        logging.warning(f"Could not fetch referenced message {new_msg.reference.message_id}: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error extracting URLs from referenced message: {e}", exc_info=True)
+    
+    return ""
+
+
 ProcessContentResult = Tuple[
     Optional[str],  # formatted_user_urls_content
     Optional[str],  # formatted_google_lens_content
@@ -84,19 +116,33 @@ async def process_content_and_grounding(
     # This will be the content passed to build_message_history later
     content_after_processing = cleaned_content
 
+    # Extract URLs from the current message content
     all_urls_in_cleaned_content = extract_urls_with_indices(cleaned_content)
-    user_has_provided_urls = bool(all_urls_in_cleaned_content)
+    
+    # Extract URLs from replied-to message if present
+    replied_urls_content = await extract_urls_from_replied_message(new_msg)
+    
+    # Combine current message content with URLs from replied-to message for URL processing
+    combined_content_for_url_extraction = cleaned_content
+    if replied_urls_content:
+        combined_content_for_url_extraction = f"{cleaned_content} {replied_urls_content}".strip()
+        logging.info(f"Added URLs from replied-to message to content processing. Combined content: {len(combined_content_for_url_extraction)} chars")
+    
+    # Re-extract URLs from combined content
+    all_urls_in_combined_content = extract_urls_with_indices(combined_content_for_url_extraction)
+    user_has_provided_urls = bool(all_urls_in_combined_content)
+    
     has_only_backticked_urls = False
 
     if user_has_provided_urls:
         all_backticked = True
-        for url, index_pos in all_urls_in_cleaned_content:
+        for url, index_pos in all_urls_in_combined_content:
             char_before_is_backtick = (
-                index_pos > 0 and cleaned_content[index_pos - 1] == "`"
+                index_pos > 0 and combined_content_for_url_extraction[index_pos - 1] == "`"
             )
             char_after_is_backtick = (index_pos + len(url)) < len(
-                cleaned_content
-            ) and cleaned_content[index_pos + len(url)] == "`"
+                combined_content_for_url_extraction
+            ) and combined_content_for_url_extraction[index_pos + len(url)] == "`"
             if not (char_before_is_backtick and char_after_is_backtick):
                 all_backticked = False
                 break
@@ -105,7 +151,7 @@ async def process_content_and_grounding(
 
     if use_google_lens:
         url_fetch_results = await fetch_external_content(
-            cleaned_content,
+            combined_content_for_url_extraction,
             image_attachments,
             True,  # use_google_lens is true here
             max_files_per_message_config,
@@ -300,7 +346,7 @@ async def process_content_and_grounding(
             user_has_provided_urls and not custom_search_performed
         ):  # Process user-provided URLs if no other search happened
             url_fetch_results = await fetch_external_content(
-                cleaned_content,
+                combined_content_for_url_extraction,
                 image_attachments,
                 False,  # use_google_lens is False here
                 max_files_per_message_config,
