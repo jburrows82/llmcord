@@ -80,7 +80,7 @@ async def share_to_textis(text_content: str) -> Optional[str]:
             response_post.raise_for_status()
 
             # 3. Extract the canonical URL from the response page
-            # httpx.AsyncClient with follow_redirects=True should mean response_post.url is the final URL.
+
             final_url = str(response_post.url)
 
             # Check if the final_url is the base_url. If so, the redirect might not have happened as expected,

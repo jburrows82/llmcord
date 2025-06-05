@@ -26,9 +26,8 @@ class ResponseActionView(ui.View):
         full_response_text: Optional[str] = None,
         model_name: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,  # Added app_config
-        # timeout=300): # Default timeout 5 minutes - OLD VALUE
         timeout=3600,  # 1 hour
-    ):  # Set timeout to None for persistent view - NEW VALUE
+    ):
         super().__init__(timeout=timeout)
         self.grounding_metadata = grounding_metadata
         self.full_response_text = full_response_text
@@ -89,7 +88,6 @@ class ResponseActionView(ui.View):
 
             self.add_item(self.ViewRenderedOutputButton(row=rendered_output_button_row))
 
-    # on_timeout is still useful if a timeout *is* set, but won't be called if timeout=None
     async def on_timeout(self):
         """Disables all buttons when the view times out."""
         if self.message:

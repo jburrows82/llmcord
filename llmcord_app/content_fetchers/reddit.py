@@ -72,11 +72,10 @@ async def fetch_reddit_data(
             original_index=index,
         )
 
-    # reddit = None # No longer initializing locally
     try:
         # Use the global reddit_client_instance
         submission = await reddit_client_instance.submission(id=submission_id)
-        # Use fetch=True to ensure data is loaded, replaces await submission.load()
+
         await submission.load()  # Keep load() as it fetches comments too
 
         logging.debug(

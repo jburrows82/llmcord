@@ -49,12 +49,12 @@ def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str
                 logging.error(
                     f"Failed to decode truncated tokens even after removing one: {e}. Returning empty string."
                 )
-                return "", actual_token_count  # Return original token count
+                return "", actual_token_count
         if (
             truncated_text and max_tokens > 0
         ):  # Ensure ellipsis isn't added to an empty or zero-token result
             truncated_text += "..."
-        return truncated_text, actual_token_count  # Return original token count
+        return truncated_text, actual_token_count
     return text, actual_token_count
 
 
@@ -321,6 +321,12 @@ async def build_message_history(
                                 is_target_provider_gemini and accept_files
                             ) or not is_target_provider_gemini:
                                 is_relevant_for_download = True
+                        elif (
+                            att.content_type
+                            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        ):
+                            # DOCX files - always download for text extraction
+                            is_relevant_for_download = True
                         if is_relevant_for_download:
                             attachments_to_fetch.append(att)
                         else:
@@ -409,6 +415,43 @@ async def build_message_history(
                             pdf_texts_to_append
                         )
 
+                # Handle DOCX text extraction for all user messages (not just non-Gemini)
+                if current_role == "user":
+                    docx_texts_to_append = []
+                    for att, resp in zip(attachments_to_fetch, attachment_responses):
+                        if (
+                            att.content_type
+                            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        ):
+                            if (
+                                isinstance(resp, httpx.Response)
+                                and resp.status_code == 200
+                            ):
+                                try:
+                                    # Import the function dynamically to avoid circular imports
+                                    from .utils import extract_text_from_docx_bytes
+
+                                    extracted_docx_text = (
+                                        await extract_text_from_docx_bytes(resp.content)
+                                    )
+                                    if extracted_docx_text:
+                                        docx_texts_to_append.append(
+                                            f"\n\n--- Content from DOCX: {att.filename} ---\n{extracted_docx_text}\n--- End of DOCX: {att.filename} ---"
+                                        )
+                                    else:
+                                        curr_node.has_bad_attachments = True
+                                except Exception as docx_e:
+                                    logging.error(
+                                        f"Error extracting DOCX {att.filename}: {docx_e}"
+                                    )
+                                    curr_node.has_bad_attachments = True
+                            elif isinstance(resp, Exception):
+                                curr_node.has_bad_attachments = True
+                    if docx_texts_to_append:
+                        curr_node.text = (curr_node.text or "") + "".join(
+                            docx_texts_to_append
+                        )
+
                 # Populate api_file_parts (only if not already populated or if it's the current message)
                 # This logic assumes api_file_parts are only truly needed for the current message or if re-evaluating history.
                 # For simplicity in this refactor, we'll repopulate if should_populate_node is true.
@@ -452,6 +495,24 @@ async def build_message_history(
                         ):
                             is_api_relevant_type = True
                             mime_type_for_api = "application/pdf"
+                            if (
+                                isinstance(resp, httpx.Response)
+                                and resp.status_code == 200
+                            ):
+                                file_bytes_for_api = resp.content
+                            else:
+                                curr_node.has_bad_attachments = True
+                                continue
+                        elif (
+                            att.content_type
+                            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            and is_target_provider_gemini
+                            and accept_files
+                            and current_role
+                            == "user"  # Only process DOCX for user messages
+                        ):
+                            is_api_relevant_type = True
+                            mime_type_for_api = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             if (
                                 isinstance(resp, httpx.Response)
                                 and resp.status_code == 200
@@ -924,7 +985,7 @@ async def build_message_history(
     for entry in final_api_message_parts:
         # Construct the text content that goes into the API call for this message
         # Only include external_content if it's the current message
-        # is_current_message = entry.get("id") == new_msg.id # No longer needed for this logic
+
         text_content_for_api = entry["text"] or ""
 
         # If this entry is a user message and has external_content, incorporate it.

@@ -16,7 +16,6 @@ from .utils import (
 from .content_fetchers import (
     fetch_youtube_data,
     fetch_reddit_data,
-    # fetch_general_url_content, # No longer directly used here for batching
     process_google_lens_image,
 )
 from .content_fetchers.web import (
@@ -113,7 +112,6 @@ async def fetch_external_content(
             async def fetch_image_url_content_wrapper(
                 img_url: str, img_idx: int
             ) -> models.UrlFetchResult:
-                # This is the same inner function as before, just defined here for clarity
                 try:
                     logging.info(f"Attempting to download image URL: {img_url}")
                     async with httpx_client.stream(

@@ -663,7 +663,6 @@ async def _execute_enhance_prompt_logic(
                 simple_view_for_button.message = sent_message_for_button_hook
             # For the GetTextFileButton, it accesses self.view.full_response_text and self.view.model_name,
             # which are already set on simple_view_for_button directly.
-            # The `item.message = sent_message` was more for ResponseActionView's on_timeout, which is disabled here.
 
         logger.info(
             f'User {user_obj.id} ({user_obj.name}) successfully used enhanceprompt for: "{original_prompt_text[:50]}..." with model {provider}/{model_name}'

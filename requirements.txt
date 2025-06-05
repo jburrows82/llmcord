@@ -10,6 +10,7 @@ beautifulsoup4
 google-search-results # SerpAPI library
 lxml
 PyMuPDF # For PDF text extraction
+python-docx # For DOCX text extraction
 tiktoken
 grip
 pyngrok

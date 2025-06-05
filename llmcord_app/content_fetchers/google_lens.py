@@ -50,8 +50,8 @@ async def fetch_google_lens_serpapi(
             "api_key": api_key,
             "safe": "off",  # Keep safe search off
             "no_cache": True,  # Force fresh results
-            "hl": "en",  # Set language to English
-            "country": "us",  # Set country to United States
+            "hl": "en",
+            "country": "us",
         }
         logging.info(
             f"Attempting SerpAPI Google Lens request for image {index + 1} with key {key_display} ({key_index + 1}/{len(available_keys)})"
@@ -114,7 +114,7 @@ async def fetch_google_lens_serpapi(
                     f"Key {key_display}: Search Error - {error_msg}"
                 )
                 # These errors are usually not key-related, so don't mark key as limited.
-                # Return the error from the first key that hit this.
+
                 logging.error(
                     f"SerpAPI search failed for image {index + 1} with key {key_display}. Aborting SerpAPI attempts."
                 )

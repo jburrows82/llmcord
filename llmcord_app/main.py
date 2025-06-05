@@ -4,7 +4,7 @@ import sys
 import discord
 import yaml
 
-# Import necessary components using absolute paths from the package root
+
 from llmcord_app.config import get_config
 from llmcord_app.bot import LLMCordClient
 from llmcord_app.rate_limiter import close_all_db_managers
@@ -67,7 +67,6 @@ async def main():
         logging.critical("CRITICAL: bot_token not found in config.yaml. Exiting.")
         return  # Exit if token is missing
 
-    # Setup Discord intents and activity
     intents = discord.Intents.default()
     intents.message_content = True
     activity = discord.CustomActivity(

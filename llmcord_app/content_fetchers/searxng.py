@@ -56,8 +56,6 @@ async def fetch_searxng_results(
             if "url" in result and isinstance(result["url"], str):
                 urls.append(result["url"])
             # Optional: could extract title/snippet here if needed for future enhancements
-            # title = result.get("title")
-            # content_snippet = result.get("content")
 
         logging.info(
             f"SearxNG returned {len(urls)} URLs for query '{query}'. Requested up to {num_results}."

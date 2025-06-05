@@ -5,6 +5,8 @@ import discord
 from google.genai import types as google_types
 import pymupdf  # Changed from pypdfium2
 import asyncio
+from docx import Document
+import io
 
 from .constants import (
     GENERAL_URL_PATTERN,
@@ -166,6 +168,48 @@ async def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
             return "\n\n".join(all_text_parts).strip() if all_text_parts else None
         except Exception as e:
             # The caller (in history_utils.py or bot.py) will log this exception.
+            # Re-raise to be caught by asyncio.to_thread and then the caller
+            raise e
+
+    try:
+        return await asyncio.to_thread(sync_extract)
+    except Exception as e:  # Catch exceptions from sync_extract re-raised by to_thread
+        # Re-raise for the caller (e.g., in history_utils.py)
+        raise e
+
+
+async def extract_text_from_docx_bytes(docx_bytes: bytes) -> Optional[str]:
+    """Extracts text from DOCX bytes using python-docx, run in a thread."""
+    if not docx_bytes:
+        return None
+
+    def sync_extract():
+        try:
+            # Create a BytesIO stream from the bytes
+            docx_stream = io.BytesIO(docx_bytes)
+            # Open the document from the stream
+            doc = Document(docx_stream)
+
+            # Extract text from all paragraphs
+            all_text_parts = []
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():  # Only add non-empty paragraphs
+                    all_text_parts.append(paragraph.text.strip())
+
+            # Extract text from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            row_text.append(cell.text.strip())
+                    if row_text:
+                        all_text_parts.append(" | ".join(row_text))
+
+            # Join parts with double newline for better separation, return None if no text
+            return "\n\n".join(all_text_parts).strip() if all_text_parts else None
+        except Exception as e:
+            # The caller will log this exception.
             # Re-raise to be caught by asyncio.to_thread and then the caller
             raise e
 

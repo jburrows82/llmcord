@@ -4,10 +4,7 @@ import random
 import json
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 
-# import io # Moved to image_utils
-# import datetime # Not used directly here anymore for date, but enhance_prompt_with_llm uses it.
 from datetime import date  # Specifically for enhance_prompt_with_llm
-# from PIL import Image # Moved to image_utils
 
 # OpenAI specific imports
 from openai import (
@@ -274,10 +271,6 @@ async def generate_response_stream(
         ]
 
         while compression_attempt < max_compression_attempts:
-            # llm_client = None # No longer used directly here
-            # api_config = None # No longer used directly here
-            # api_content_kwargs = {} # No longer used directly here
-            # payload_to_print = {} # No longer used directly here
             is_blocked_by_safety = False
             is_stopped_by_recitation = False
             content_received = False
@@ -493,7 +486,7 @@ async def generate_response_stream(
                             break  # Break from stream consumption
 
                 # --- After Stream Processing Loop for this attempt ---
-                # This `if last_error_type == "api_413":` block needs to be outside the `async for`
+
                 # and inside the `try` that catches APIError, but before generic error handling.
                 # The logic for compression retry should be triggered if `last_error_type` is `api_413`.
 

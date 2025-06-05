@@ -136,7 +136,7 @@ async def generate_gemini_stream(
         # However, the original code didn't have an explicit else for the outer if,
         # it was for the isinstance(thinking_budget_val, str)
         # The original logic was:
-        # if isinstance(int): ...
+
         # elif isinstance(str): try/except
         # else: (this was missing, but implied by falling through)
         # The corrected logic below should be fine.

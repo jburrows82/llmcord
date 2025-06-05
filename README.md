@@ -99,9 +99,10 @@ llmcord employs several strategies to enrich the context provided to the LLM:
     3. Content from the top SearXNG result URLs (YouTube, Reddit, general web pages) is fetched, processed (with a configurable length limit for general web content via `searxng_url_content_max_length`), and formatted.
     4. This fetched web context is then provided to your chosen LLM along with your original query.
     This feature requires `searxng_base_url` and API keys for the grounding Gemini model to be configured.
-- **PDF Attachment Processing**:
-    - When using Gemini models (with vision/file capabilities enabled), PDF attachments are sent directly to the model.
-    - For other models, text is extracted from PDF attachments using `PyMuPDF` and appended to your query.
+- **PDF and DOCX Attachment Processing**:
+  - When using Gemini models (with vision/file capabilities enabled), PDF attachments are sent directly to the model.
+  - For other models, text is extracted from PDF attachments using `PyMuPDF` and appended to your query.
+  - DOCX attachments are processed for all models: text is extracted using `python-docx` and appended to your query.
 - **Image URL Processing**: If you include direct URLs to images (e.g., `https://example.com/image.png`) in your message text, the bot will attempt to download these images and treat them as if they were attached directly, making them available to vision models or Google Lens.
 
 ### Robust Rate Limit Handling
@@ -120,7 +121,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 ### And more:
 - **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking`, `/help` for user-specific preferences and help (see "Slash Commands" section).
 - Supports image attachments when using a vision model (like `gpt-4.1`, `claude-3`, `gemini-2.5-flash-preview-05-20`, etc.).
-- Supports text file attachments (.txt, .py, .c, etc.) and PDF attachments (see "Advanced Query Handling").
+- Supports text file attachments (.txt, .py, .c, etc.), PDF attachments, and DOCX attachments (see "Advanced Query Handling").
 - Customizable personality (default system prompt in `config.yaml`, user-overridable via `/systemprompt`).
 - User identity aware (OpenAI API and xAI API only, sends user's Discord ID as `name`).
 - Streamed responses (turns green when complete, automatically splits into separate messages when too long).

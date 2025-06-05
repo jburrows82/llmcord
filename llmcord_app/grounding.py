@@ -304,7 +304,7 @@ async def fetch_and_format_searxng_results(
             )
             for query_str in queries
         ]
-        # Use return_exceptions=True to handle individual task failures gracefully
+
         api_call_results_or_exceptions = await asyncio.gather(
             *tasks, return_exceptions=True
         )
@@ -851,8 +851,7 @@ async def generate_search_queries_with_custom_prompt(
             "{current_date}", current_date_str
         )
         # Add other placeholders if needed for system prompt, e.g., {current_day_of_week}, {current_time}
-        # final_system_prompt_text = final_system_prompt_text.replace("{current_day_of_week}", current_day_of_week_str)
-        # final_system_prompt_text = final_system_prompt_text.replace("{current_time}", current_time_str)
+
         logging.info(
             f"Using system prompt for search query generation: {final_system_prompt_text}"
         )
@@ -874,7 +873,7 @@ async def generate_search_queries_with_custom_prompt(
 
         # Extract text content from message_dict
         # message_dict structure can be like:
-        # Gemini: {"role": "user/model", "parts": [Part(text="..."), Part(inline_data=...)]}
+
         # OpenAI: {"role": "user/assistant", "content": "text_string" or [{"type":"text", "text":"..."}, {"type":"image_url", ...}]}
         if "parts" in message_dict:  # Likely Gemini-style from build_message_history
             for part in message_dict["parts"]:
@@ -921,9 +920,7 @@ async def generate_search_queries_with_custom_prompt(
         )
         # Optionally, append if placeholder is missing and history exists
         # if formatted_chat_history_string:
-        #     final_prompt_text = current_prompt_text + "\n\nChat History:\n" + formatted_chat_history_string
-        # else:
-        #     final_prompt_text = current_prompt_text
+
         final_prompt_text = (
             current_prompt_text  # Default to not appending if placeholder missing
         )

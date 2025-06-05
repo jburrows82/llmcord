@@ -258,7 +258,6 @@ async def get_config(filename="config.yaml"):
                     logging.warning(
                         f"Config Warning: Provider '{name}' configuration is not a dictionary. Ignoring provider."
                     )
-                    # Optionally remove invalid provider config: del providers[name] or set providers[name] = {}
 
             # Handle SerpAPI key(s)
             single_serp_key = config_data.get("serpapi_api_key")
@@ -510,7 +509,7 @@ async def get_config(filename="config.yaml"):
                     f"'model' not found or empty in {filename}. This is a required field."
                 )
                 # Potentially exit or raise error, but for now, let main script handle it if bot_token is also missing.
-                # Setting a hardcoded default to prevent crashes if other parts of the code expect it.
+
                 config_data["model"] = (
                     "google/gemini-2.5-flash-preview-05-20"  # A sensible default
                 )

@@ -30,6 +30,7 @@ from .utils import (
     extract_urls_with_indices,
     is_image_url,
     extract_text_from_pdf_bytes,
+    extract_text_from_docx_bytes,
 )
 from .model_selector import determine_final_model  # Added import
 from .message_parser import (
@@ -208,6 +209,13 @@ class LLMCordClient(discord.Client):
                             )
                         )
 
+                        # Check for DOCX files
+                        is_docx_file = (
+                            attachment.content_type
+                            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            or attachment.filename.lower().endswith(".docx")
+                        )
+
                         if is_text_content_type or (
                             attachment.content_type == "application/octet-stream"
                             and is_common_text_extension
@@ -233,6 +241,33 @@ class LLMCordClient(discord.Client):
                                     mention_author=False,
                                 )
                                 return
+                        elif is_docx_file:
+                            try:
+                                file_bytes = await attachment.read()
+                                prompt_text_for_prefix_cmd = (
+                                    await extract_text_from_docx_bytes(file_bytes)
+                                )
+                                if prompt_text_for_prefix_cmd:
+                                    attachment_filename = attachment.filename
+                                    processed_from_file = True
+                                    initial_status_message = f"⏳ Enhancing prompt from DOCX file `{discord.utils.escape_markdown(attachment_filename)}`..."
+                                    logging.info(
+                                        f"{ENHANCE_CMD_PREFIX}: Processing content from DOCX attachment: {attachment.filename}"
+                                    )
+                                    break  # Process first valid DOCX file
+                                else:
+                                    logging.warning(
+                                        f"No text content found in DOCX attachment {attachment.filename} for {ENHANCE_CMD_PREFIX}"
+                                    )
+                            except Exception as e:
+                                logging.error(
+                                    f"Error reading DOCX attachment {attachment.filename} for {ENHANCE_CMD_PREFIX}: {e}"
+                                )
+                                await new_msg.reply(
+                                    f"Sorry, I couldn't read the DOCX file: {attachment.filename}.",
+                                    mention_author=False,
+                                )
+                                return
 
                 if (
                     not processed_from_file
@@ -245,7 +280,7 @@ class LLMCordClient(discord.Client):
                         new_msg.attachments and not processed_from_file
                     ):  # Attachments were present but not suitable
                         await new_msg.reply(
-                            f"No suitable text file found in attachments for `{ENHANCE_CMD_PREFIX}`. Please provide a prompt as text or attach a recognized text file.",
+                            f"No suitable text file found in attachments for `{ENHANCE_CMD_PREFIX}`. Please provide a prompt as text or attach a recognized text file (.txt, .py, .md, etc.) or DOCX file.",
                             mention_author=False,
                         )
                     else:  # No text and no attachments or no suitable file
@@ -279,7 +314,7 @@ class LLMCordClient(discord.Client):
 
         # --- Reload config & Check Global Reset ---
         # Config is now an instance variable, consider if reloading is needed per message
-        # self.config = await get_config() # Uncomment if hot-reloading is desired, get_config is now async
+
         await check_and_perform_global_reset(self.config)
 
         # --- Permissions Check ---
@@ -515,7 +550,6 @@ class LLMCordClient(discord.Client):
         )
 
         if not history_for_llm:
-            # ... (handle empty history)
             return
 
         logging.info(
@@ -616,7 +650,7 @@ class LLMCordClient(discord.Client):
         await self.httpx_client.aclose()
 
         # Close Reddit client
-        # Import here to avoid circular dependency at module level if reddit.py also imports from bot.py (though it doesn't seem to)
+
         from .content_fetchers.reddit import reddit_client_instance
 
         if reddit_client_instance:

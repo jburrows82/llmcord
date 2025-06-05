@@ -462,7 +462,7 @@ async def fetch_general_url_content(
             logging.warning(
                 f"Main and fallback extractors are the same ({main_extractor}). Not re-running failed fetcher."
             )
-            # Return the error from the first attempt
+
             return UrlFetchResult(
                 url=url,
                 content=None,

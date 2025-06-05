@@ -21,7 +21,6 @@ class RateLimitDBManager:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
-        # self.conn is no longer an instance variable managed across calls.
 
     def _create_table_if_not_exists(self, conn: sqlite3.Connection):
         """Creates the rate_limited_keys table if it doesn't exist using the provided connection."""
@@ -68,7 +67,6 @@ class RateLimitDBManager:
                         """,
                         (api_key, timestamp),
                     )
-                # conn.commit() is handled by `with conn:`
                 logging.info(
                     f"Key ending with ...{api_key[-4:]} marked as rate-limited in {os.path.basename(self.db_path)}."
                 )
@@ -117,7 +115,6 @@ class RateLimitDBManager:
                 conn = self._get_connection_and_ensure_table()
                 with conn:
                     conn.execute("DELETE FROM rate_limited_keys")
-                # conn.commit() is handled by `with conn:`
                 logging.info(
                     f"Rate limit database {os.path.basename(self.db_path)} reset."
                 )
@@ -128,8 +125,6 @@ class RateLimitDBManager:
                     conn.close()
 
         await asyncio.to_thread(_sync_reset_db)
-
-    # close() method is removed as connections are now managed per operation.
 
 
 # --- Global Rate Limit Management ---

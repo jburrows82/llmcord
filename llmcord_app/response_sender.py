@@ -34,7 +34,6 @@ from .commands import (
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
-# class LLMCordClient(discord.Client): ...
 
 
 async def send_initial_processing_message(
@@ -85,7 +84,7 @@ async def handle_llm_response_stream(
     response_msgs: List[discord.Message] = []
     final_text_to_return = ""
     llm_call_successful_final = False
-    # grounding_metadata_final = None # This variable was assigned but never used
+
     edit_task = None  # Keep edit_task for embed streaming
 
     should_retry_with_gemini_signal = False
@@ -784,7 +783,7 @@ async def handle_llm_response_stream(
                                     )
                                     response_msg = processing_msg
                                     target_msg_for_node_update = response_msg
-                                    if view_to_attach:  # Set message for the view
+                                    if view_to_attach:
                                         view_to_attach.message = response_msg
                                 else:  # Subsequent messages, or no processing_msg
                                     reply_target = (
@@ -992,7 +991,6 @@ async def handle_llm_response_stream(
 
                 llm_call_successful_final = current_attempt_llm_successful
                 final_text_to_return = final_text_for_this_attempt
-                # grounding_metadata_final = grounding_metadata_for_this_attempt # This variable was assigned but never used
 
                 if use_plain_responses_config and llm_call_successful_final:
                     final_messages_content = [
@@ -1094,36 +1092,6 @@ async def handle_llm_response_stream(
             )
             llm_call_successful_final = False  # type: ignore
             break  # type: ignore
-
-    # After the loop, if successful, try to start the output server
-    # THIS BLOCK IS REMOVED as the functionality is moved to a button
-    # if llm_call_successful_final and final_text_to_return:
-    #     try:
-    #         # Run synchronous start_output_server in a thread
-    #         public_url = await asyncio.to_thread(
-    #             start_output_server, final_text_to_return, client.config
-    #         )
-    #         if public_url:
-    #             # Determine the target to reply to for the ngrok URL message
-    #             reply_target_for_url = response_msgs[-1] if response_msgs else new_msg
-    #             try:
-    #                 await reply_target_for_url.reply(
-    #                     f"🔗 View rendered output: {public_url}",
-    #                     mention_author=False,
-    #                     suppress_embeds=True,  # Keep it clean
-    #                 )
-    #                 logging.info(f"Sent ngrok public URL: {public_url}")
-    #             except discord.HTTPException as e:
-    #                 logging.error(f"Failed to send ngrok public URL message: {e}")
-    #             except Exception as e:
-    #                 logging.error(
-    #                     f"Unexpected error sending ngrok public URL message: {e}",
-    #                     exc_info=True,
-    #                 )
-    #     except Exception as e:
-    #         logging.error(
-    #             f"Error starting or managing output server: {e}", exc_info=True
-    #         )
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 
