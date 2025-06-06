@@ -218,12 +218,15 @@ async def _fetch_single_query_from_web_content_api(
     client: httpx.AsyncClient,
     api_url: str,
     api_max_results: int,
+    max_char_per_url: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Helper to fetch and do initial processing for a single query to the external web content API."""
     logging.info(
         f"External Web Content API: Initiating fetch for query: '{query_item_str}'"
     )
     payload = {"query": query_item_str, "max_results": api_max_results}
+    if max_char_per_url is not None:
+        payload["max_char_per_url"] = max_char_per_url
     try:
         response = await client.post(api_url, json=payload, timeout=30.0)
         response.raise_for_status()
@@ -288,11 +291,10 @@ async def fetch_and_format_searxng_results(
         WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY,
         DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS,
     )
-    api_content_limit = config.get(
-        SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY
-    )  # Reuse existing limit
-
     if api_enabled:
+        max_char_per_url = config.get(
+            SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY
+        )  # Send to API as max_char_per_url parameter
         all_formatted_contexts_from_api = []
         logging.info(
             f"External Web Content API is enabled. Processing {len(queries)} queries."
@@ -300,7 +302,7 @@ async def fetch_and_format_searxng_results(
 
         tasks = [
             _fetch_single_query_from_web_content_api(
-                query_str, httpx_client, api_url, api_max_results
+                query_str, httpx_client, api_url, api_max_results, max_char_per_url
             )
             for query_str in queries
         ]
@@ -374,11 +376,8 @@ async def fetch_and_format_searxng_results(
                         )
                         transcript = data.get("transcript")
                         if transcript:
-                            if (
-                                api_content_limit
-                                and len(transcript) > api_content_limit
-                            ):
-                                transcript = transcript[: api_content_limit - 3] + "..."
+                            # No client-side truncation needed when using web content extraction API
+                            # as the API handles max_char_per_url server-side
                             item_str_parts.append(
                                 f"  Transcript: {discord.utils.escape_markdown(transcript)}"
                             )
@@ -401,8 +400,8 @@ async def fetch_and_format_searxng_results(
                         )
                         body = data.get("post_body")
                         if body:
-                            if api_content_limit and len(body) > api_content_limit:
-                                body = body[: api_content_limit - 3] + "..."
+                            # No client-side truncation needed when using web content extraction API
+                            # as the API handles max_char_per_url server-side
                             item_str_parts.append(
                                 f"  Post Body: {discord.utils.escape_markdown(body)}"
                             )
@@ -421,13 +420,8 @@ async def fetch_and_format_searxng_results(
                     elif item_source_type == "pdf":
                         text_content = data.get("text_content")
                         if text_content:
-                            if (
-                                api_content_limit
-                                and len(text_content) > api_content_limit
-                            ):
-                                text_content = (
-                                    text_content[: api_content_limit - 3] + "..."
-                                )
+                            # No client-side truncation needed when using web content extraction API
+                            # as the API handles max_char_per_url server-side
                             item_str_parts.append(
                                 f"  Content: {discord.utils.escape_markdown(text_content)}"
                             )
@@ -440,25 +434,15 @@ async def fetch_and_format_searxng_results(
                             )
                         text_content = data.get("text_content")
                         if text_content:
-                            if (
-                                api_content_limit
-                                and len(text_content) > api_content_limit
-                            ):
-                                text_content = (
-                                    text_content[: api_content_limit - 3] + "..."
-                                )
+                            # No client-side truncation needed when using web content extraction API
+                            # as the API handles max_char_per_url server-side
                             item_str_parts.append(
                                 f"  Content: {discord.utils.escape_markdown(text_content)}"
                             )
                     else:  # unknown or other types
                         raw_content_str = str(data)
-                        if (
-                            api_content_limit
-                            and len(raw_content_str) > api_content_limit
-                        ):
-                            raw_content_str = (
-                                raw_content_str[: api_content_limit - 3] + "..."
-                            )
+                        # No client-side truncation needed when using web content extraction API
+                        # as the API handles max_char_per_url server-side
                         item_str_parts.append(
                             f"  Data: {discord.utils.escape_markdown(raw_content_str)}"
                         )

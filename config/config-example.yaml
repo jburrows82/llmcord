@@ -277,7 +277,9 @@ rate_limit_cooldown_hours: 24
 # SearXNG instance URL for grounding enhancement (web search results for non-Gemini/Grok models).
 searxng_base_url: http://localhost:18088 # Your SearXNG instance with /search endpoint and JSON format enabled.
 
-# Max character length for text extracted from each URL fetched by SearXNG.
+# Max character length for text extracted from each URL.
+# - When web_content_extraction_api_enabled is false: Used for client-side content truncation in traditional SearXNG grounding.
+# - When web_content_extraction_api_enabled is true: Sent as 'max_char_per_url' parameter to the API for server-side content limiting.
 searxng_url_content_max_length: 20000
 # Number of results to fetch from SearXNG for each grounding query.
 searxng_num_results_fetch: 5
@@ -313,8 +315,9 @@ jina_timeout: null
 crawl4ai_cache_mode: "bypass"
 
 # --- External Web Content API (Optional) ---
-# If enabled, this API fetches content from SearXNG URLs.
+# If enabled, this API fetches content from SearXNG URLs with enhanced processing capabilities.
 # Content from this API is appended to LLM query. URLs processed here are skipped by internal fetchers.
+# When enabled, 'searxng_url_content_max_length' is sent as 'max_char_per_url' to the API for server-side content limiting.
 web_content_extraction_api_enabled: false # Set to true to enable.
 web_content_extraction_api_url: "http://localhost:8080/search" # URL of the API.
 web_content_extraction_api_max_results: 3 # Max results to request from this API.
