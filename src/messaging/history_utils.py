@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 import asyncio
 import base64
 import httpx
@@ -56,6 +56,95 @@ def _truncate_text_by_tokens(text: str, tokenizer, max_tokens: int) -> tuple[str
             truncated_text += "..."
         return truncated_text, actual_token_count
     return text, actual_token_count
+
+
+def _smart_truncate_external_content(
+    user_provided_url_content: Optional[str],
+    google_lens_content: Optional[str], 
+    search_results_content: Optional[str],
+    tokenizer,
+    max_tokens_for_external_content: int,
+    user_warnings: Set[str]
+) -> tuple[Optional[str], Optional[str], Optional[str], int]:
+    """
+    Intelligently truncates external content, prioritizing web search results for truncation first.
+    
+    Returns:
+        tuple of (truncated_user_urls, truncated_google_lens, truncated_search_results, total_tokens_used)
+    """
+    if max_tokens_for_external_content <= 0:
+        return None, None, None, 0
+    
+    # Calculate current token usage for each content type
+    user_url_tokens = len(tokenizer.encode(user_provided_url_content)) if user_provided_url_content else 0
+    google_lens_tokens = len(tokenizer.encode(google_lens_content)) if google_lens_content else 0
+    search_results_tokens = len(tokenizer.encode(search_results_content)) if search_results_content else 0
+    
+    total_tokens = user_url_tokens + google_lens_tokens + search_results_tokens
+    
+    # If within budget, return as-is
+    if total_tokens <= max_tokens_for_external_content:
+        return user_provided_url_content, google_lens_content, search_results_content, total_tokens
+    
+    # Need to truncate - prioritize keeping user URLs and Google Lens over search results
+    tokens_to_remove = total_tokens - max_tokens_for_external_content
+    
+    # Start by truncating search results first (they are lowest priority)
+    truncated_search_results = search_results_content
+    if search_results_tokens > 0 and tokens_to_remove > 0:
+        tokens_to_remove_from_search = min(tokens_to_remove, search_results_tokens)
+        remaining_search_tokens = search_results_tokens - tokens_to_remove_from_search
+        
+        if remaining_search_tokens <= 0:
+            truncated_search_results = None
+            user_warnings.add("⚠️ Web search results truncated due to length limits")
+            tokens_to_remove -= search_results_tokens
+        else:
+            truncated_search_results, _ = _truncate_text_by_tokens(
+                search_results_content, tokenizer, remaining_search_tokens
+            )
+            user_warnings.add("⚠️ Web search results partially truncated due to length limits")
+            tokens_to_remove = 0
+    
+    # If still need to truncate more, truncate Google Lens content next
+    truncated_google_lens = google_lens_content
+    if google_lens_tokens > 0 and tokens_to_remove > 0:
+        tokens_to_remove_from_lens = min(tokens_to_remove, google_lens_tokens)
+        remaining_lens_tokens = google_lens_tokens - tokens_to_remove_from_lens
+        
+        if remaining_lens_tokens <= 0:
+            truncated_google_lens = None
+            user_warnings.add("⚠️ Google Lens results truncated due to length limits")
+            tokens_to_remove -= google_lens_tokens
+        else:
+            truncated_google_lens, _ = _truncate_text_by_tokens(
+                google_lens_content, tokenizer, remaining_lens_tokens
+            )
+            user_warnings.add("⚠️ Google Lens results partially truncated due to length limits")
+            tokens_to_remove = 0
+    
+    # Finally, if still need to truncate, truncate user URL content (highest priority to keep)
+    truncated_user_urls = user_provided_url_content
+    if user_url_tokens > 0 and tokens_to_remove > 0:
+        tokens_to_remove_from_urls = min(tokens_to_remove, user_url_tokens)
+        remaining_url_tokens = user_url_tokens - tokens_to_remove_from_urls
+        
+        if remaining_url_tokens <= 0:
+            truncated_user_urls = None
+            user_warnings.add("⚠️ User URL content truncated due to length limits")
+        else:
+            truncated_user_urls, _ = _truncate_text_by_tokens(
+                user_provided_url_content, tokenizer, remaining_url_tokens
+            )
+            user_warnings.add("⚠️ User URL content partially truncated due to length limits")
+    
+    # Calculate final token usage
+    final_user_url_tokens = len(tokenizer.encode(truncated_user_urls)) if truncated_user_urls else 0
+    final_google_lens_tokens = len(tokenizer.encode(truncated_google_lens)) if truncated_google_lens else 0  
+    final_search_results_tokens = len(tokenizer.encode(truncated_search_results)) if truncated_search_results else 0
+    final_total_tokens = final_user_url_tokens + final_google_lens_tokens + final_search_results_tokens
+    
+    return truncated_user_urls, truncated_google_lens, truncated_search_results, final_total_tokens
 
 
 async def find_parent_message(
@@ -676,6 +765,15 @@ async def build_message_history(
                 final_node_external_content = "External Content:\n" + "\n\n".join(
                     filter(None, node_external_content_parts)
                 )
+            
+            # Store individual content types for smart truncation (only for current message)
+            node_user_provided_urls = None
+            node_google_lens = None
+            node_search_results = None
+            if is_current_message_node:
+                node_user_provided_urls = curr_node.user_provided_url_formatted_content
+                node_google_lens = curr_node.google_lens_formatted_content
+                node_search_results = curr_node.search_results_formatted_content
 
             history_entry = {
                 "id": current_msg_id,
@@ -684,6 +782,10 @@ async def build_message_history(
                 "files": curr_node.api_file_parts,
                 "user_id": curr_node.user_id,
                 "external_content": final_node_external_content,  # This is the combined external data
+                # Store individual content types for smart truncation
+                "user_provided_urls": node_user_provided_urls,
+                "google_lens_content": node_google_lens, 
+                "search_results_content": node_search_results,
             }
 
             raw_history_entries_reversed.append(history_entry)
@@ -786,24 +888,15 @@ async def build_message_history(
             query_actual_tokens = latest_query_data["token_count"]
 
             if query_actual_tokens > effective_max_tokens_for_messages:
-                # Truncate the 'text' field of latest_query_data
-                budget_for_latest_query_node_text_field = (
-                    effective_max_tokens_for_messages
-                )
+                # Start with the full budget
+                remaining_budget = effective_max_tokens_for_messages
 
-                # Subtract tokens for external_content and image data from the budget for the text field
-                # External content will only exist for the current message
-                if latest_query_data.get("external_content"):
-                    budget_for_latest_query_node_text_field -= len(
-                        tokenizer.encode("User's query:\n")
-                    )
-                    budget_for_latest_query_node_text_field -= len(
-                        tokenizer.encode(
-                            "\n\nExternal Content:\n"
-                            + latest_query_data["external_content"]
-                        )
-                    )
-
+                # Subtract fixed costs (wrappers and image tokens)
+                user_query_wrapper_tokens = len(tokenizer.encode("User's query:\n"))
+                external_content_wrapper_tokens = len(tokenizer.encode("\n\nExternal Content:\n")) if latest_query_data.get("external_content") else 0
+                
+                # Calculate image token cost
+                image_token_cost = 0
                 if latest_query_data["files"]:
                     num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
@@ -831,24 +924,64 @@ async def build_message_history(
                                 )
                             ):
                                 num_images_in_latest_query += 1
-                    if num_images_in_latest_query > 0:
-                        budget_for_latest_query_node_text_field -= (
-                            num_images_in_latest_query * 765
+                    image_token_cost = num_images_in_latest_query * 765
+
+                remaining_budget -= (user_query_wrapper_tokens + external_content_wrapper_tokens + image_token_cost)
+
+                # Smart truncation of external content first
+                if latest_query_data.get("external_content"):
+                    # Calculate budget for external content (generous allocation)
+                    user_text_tokens = len(tokenizer.encode(latest_query_data["text"] or ""))
+                    
+                    # Prioritize user text, allocate remaining to external content
+                    min_user_text_budget = min(user_text_tokens, remaining_budget // 4)  # Reserve at least 25% for user text if possible
+                    max_external_content_budget = remaining_budget - min_user_text_budget
+                    
+                    # Apply smart truncation to external content
+                    truncated_user_urls, truncated_google_lens, truncated_search_results, actual_external_tokens = _smart_truncate_external_content(
+                        latest_query_data.get("user_provided_urls"),
+                        latest_query_data.get("google_lens_content"),
+                        latest_query_data.get("search_results_content"),
+                        tokenizer,
+                        max_external_content_budget,
+                        user_warnings
+                    )
+                    
+                    # Rebuild external content from truncated pieces
+                    truncated_external_parts = []
+                    if truncated_user_urls:
+                        truncated_external_parts.append(truncated_user_urls)
+                    if truncated_google_lens:
+                        truncated_external_parts.append(truncated_google_lens)
+                    if truncated_search_results:
+                        truncated_external_parts.append(truncated_search_results)
+                    
+                    if truncated_external_parts:
+                        latest_query_data["external_content"] = "External Content:\n" + "\n\n".join(truncated_external_parts)
+                    else:
+                        latest_query_data["external_content"] = None
+                    
+                    # Calculate remaining budget for user text
+                    remaining_budget -= (actual_external_tokens + external_content_wrapper_tokens)
+                
+                # Truncate user text with remaining budget
+                budget_for_user_text = max(0, remaining_budget)
+                
+                if budget_for_user_text <= 0:
+                    latest_query_data["text"] = ""
+                    user_warnings.add("⚠️ User query completely truncated due to length limits")
+                else:
+                    user_text_tokens = len(tokenizer.encode(latest_query_data["text"] or ""))
+                    if user_text_tokens > budget_for_user_text:
+                        truncated_user_text, _ = _truncate_text_by_tokens(
+                            latest_query_data["text"] or "",
+                            tokenizer,
+                            budget_for_user_text,
                         )
-
-                budget_for_latest_query_node_text_field = max(
-                    0, budget_for_latest_query_node_text_field
-                )
-
-                truncated_user_text, _ = _truncate_text_by_tokens(
-                    latest_query_data["text"] or "",
-                    tokenizer,
-                    budget_for_latest_query_node_text_field,
-                )
-                latest_query_data["text"] = truncated_user_text
-                user_warnings.add(
-                    f"⚠️ Query truncated to fit token limit ({effective_max_tokens_for_messages:,})"
-                )
+                        latest_query_data["text"] = truncated_user_text
+                        user_warnings.add(
+                            f"⚠️ User query truncated to fit token limit ({effective_max_tokens_for_messages:,})"
+                        )
             final_api_message_parts.append(latest_query_data)
     else:  # Prior history exists
         current_history_token_sum = sum(
@@ -900,22 +1033,15 @@ async def build_message_history(
                 current_history_token_sum + latest_query_actual_tokens
                 > effective_max_tokens_for_messages
             ):
-                budget_for_latest_query_node_text_field = (
-                    effective_max_tokens_for_messages - current_history_token_sum
-                )
+                # Start with remaining budget after history
+                remaining_budget = effective_max_tokens_for_messages - current_history_token_sum
 
-                # External content will only exist for the current message
-                if latest_query_data.get("external_content"):
-                    budget_for_latest_query_node_text_field -= len(
-                        tokenizer.encode("User's query:\n")
-                    )
-                    budget_for_latest_query_node_text_field -= len(
-                        tokenizer.encode(
-                            "\n\nExternal Content:\n"
-                            + latest_query_data["external_content"]
-                        )
-                    )
-
+                # Subtract fixed costs (wrappers and image tokens)
+                user_query_wrapper_tokens = len(tokenizer.encode("User's query:\n"))
+                external_content_wrapper_tokens = len(tokenizer.encode("\n\nExternal Content:\n")) if latest_query_data.get("external_content") else 0
+                
+                # Calculate image token cost
+                image_token_cost = 0
                 if latest_query_data["files"]:
                     num_images_in_latest_query = 0
                     for file_part_struct in latest_query_data["files"]:
@@ -943,21 +1069,61 @@ async def build_message_history(
                                 )
                             ):
                                 num_images_in_latest_query += 1
-                    if num_images_in_latest_query > 0:
-                        budget_for_latest_query_node_text_field -= (
-                            num_images_in_latest_query * 765
+                    image_token_cost = num_images_in_latest_query * 765
+
+                remaining_budget -= (user_query_wrapper_tokens + external_content_wrapper_tokens + image_token_cost)
+
+                # Smart truncation of external content first
+                if latest_query_data.get("external_content"):
+                    # Calculate budget for external content (generous allocation)
+                    user_text_tokens = len(tokenizer.encode(latest_query_data["text"] or ""))
+                    
+                    # Prioritize user text, allocate remaining to external content
+                    min_user_text_budget = min(user_text_tokens, remaining_budget // 4)  # Reserve at least 25% for user text if possible
+                    max_external_content_budget = remaining_budget - min_user_text_budget
+                    
+                    # Apply smart truncation to external content
+                    truncated_user_urls, truncated_google_lens, truncated_search_results, actual_external_tokens = _smart_truncate_external_content(
+                        latest_query_data.get("user_provided_urls"),
+                        latest_query_data.get("google_lens_content"),
+                        latest_query_data.get("search_results_content"),
+                        tokenizer,
+                        max_external_content_budget,
+                        user_warnings
+                    )
+                    
+                    # Rebuild external content from truncated pieces
+                    truncated_external_parts = []
+                    if truncated_user_urls:
+                        truncated_external_parts.append(truncated_user_urls)
+                    if truncated_google_lens:
+                        truncated_external_parts.append(truncated_google_lens)
+                    if truncated_search_results:
+                        truncated_external_parts.append(truncated_search_results)
+                    
+                    if truncated_external_parts:
+                        latest_query_data["external_content"] = "External Content:\n" + "\n\n".join(truncated_external_parts)
+                    else:
+                        latest_query_data["external_content"] = None
+                    
+                    # Calculate remaining budget for user text
+                    remaining_budget -= (actual_external_tokens + external_content_wrapper_tokens)
+                
+                # Truncate user text with remaining budget
+                budget_for_user_text = max(0, remaining_budget)
+                
+                if budget_for_user_text <= 0:
+                    latest_query_data["text"] = ""
+                    user_warnings.add("⚠️ User query completely truncated due to length limits")
+                else:
+                    user_text_tokens = len(tokenizer.encode(latest_query_data["text"] or ""))
+                    if user_text_tokens > budget_for_user_text:
+                        truncated_user_text, _ = _truncate_text_by_tokens(
+                            latest_query_data["text"] or "",
+                            tokenizer,
+                            budget_for_user_text,
                         )
-
-                budget_for_latest_query_node_text_field = max(
-                    0, budget_for_latest_query_node_text_field
-                )
-
-                truncated_user_text, _ = _truncate_text_by_tokens(
-                    latest_query_data["text"] or "",
-                    tokenizer,
-                    budget_for_latest_query_node_text_field,
-                )
-                latest_query_data["text"] = truncated_user_text
+                        latest_query_data["text"] = truncated_user_text
 
         final_api_message_parts.extend(history_data_to_truncate)
         if latest_query_data:
