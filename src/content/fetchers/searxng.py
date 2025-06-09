@@ -44,7 +44,11 @@ async def fetch_searxng_results(
         logging.info(
             f"Querying SearxNG ('{query}') at {search_url} with params {params}"
         )
-        response = await httpx_client.get(search_url, params=params, timeout=15.0)
+        response = await httpx_client.get(
+            search_url,
+            params=params,
+            timeout=httpx.Timeout(connect=8.0, read=15.0, write=8.0, pool=5.0),
+        )
         response.raise_for_status()
 
         data = response.json()

@@ -1,1 +1,1 @@
-# LLMCord Discord Bot Source Package 
+# LLMCord Discord Bot Source Package

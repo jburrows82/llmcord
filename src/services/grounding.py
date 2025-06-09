@@ -64,20 +64,28 @@ Config = Dict[str, Any]  # For type hinting and accessing config
 # Note: LLMHandler import removed, will use Callable for the stream function
 
 # Simple in-memory cache for API responses
-_api_response_cache: Dict[str, Tuple[Dict[str, Any], datetime]] = {}
+_api_response_cache: Dict[str, Tuple[Dict[str, Any], datetime, int]] = {}
 
 
-def _get_cache_key(query: str, api_url: str, api_max_results: int, max_char_per_url: Optional[int] = None) -> str:
+def _get_cache_key(
+    query: str,
+    api_url: str,
+    api_max_results: int,
+    max_char_per_url: Optional[int] = None,
+) -> str:
     """Generate a cache key for API requests."""
     key_data = f"{query}|{api_url}|{api_max_results}|{max_char_per_url}"
     return hashlib.md5(key_data.encode()).hexdigest()
 
 
-def _get_cached_response(cache_key: str, cache_ttl_minutes: int) -> Optional[Dict[str, Any]]:
+def _get_cached_response(
+    cache_key: str, cache_ttl_minutes: int
+) -> Optional[Dict[str, Any]]:
     """Get cached response if it exists and hasn't expired."""
     if cache_key in _api_response_cache:
-        cached_response, cache_time = _api_response_cache[cache_key]
-        if datetime.now() - cache_time < timedelta(minutes=cache_ttl_minutes):
+        cached_response, cache_time, stored_ttl = _api_response_cache[cache_key]
+        # Use the stored TTL from when the item was cached, not the current call's TTL
+        if datetime.now() - cache_time < timedelta(minutes=stored_ttl):
             return cached_response
         else:
             # Remove expired cache entry
@@ -85,21 +93,24 @@ def _get_cached_response(cache_key: str, cache_ttl_minutes: int) -> Optional[Dic
     return None
 
 
-def _cache_response(cache_key: str, response: Dict[str, Any], cache_ttl_minutes: int) -> None:
+def _cache_response(
+    cache_key: str, response: Dict[str, Any], cache_ttl_minutes: int
+) -> None:
     """Cache an API response."""
-    _api_response_cache[cache_key] = (response, datetime.now())
-    
+    _api_response_cache[cache_key] = (response, datetime.now(), cache_ttl_minutes)
+
     # Periodically clean up expired entries (every 100 cache operations)
     if len(_api_response_cache) > 0 and len(_api_response_cache) % 100 == 0:
-        _cleanup_expired_cache(cache_ttl_minutes)
+        _cleanup_expired_cache()
 
 
-def _cleanup_expired_cache(cache_ttl_minutes: int) -> None:
+def _cleanup_expired_cache() -> None:
     """Remove expired entries from the cache."""
     current_time = datetime.now()
     expired_keys = [
-        key for key, (_, cache_time) in _api_response_cache.items()
-        if current_time - cache_time >= timedelta(minutes=cache_ttl_minutes)
+        key
+        for key, (_, cache_time, stored_ttl) in _api_response_cache.items()
+        if current_time - cache_time >= timedelta(minutes=stored_ttl)
     ]
     for key in expired_keys:
         del _api_response_cache[key]
@@ -122,7 +133,7 @@ async def _fetch_batch_queries_from_web_content_api(
     results = []
     uncached_queries = []
     uncached_indices = []
-    
+
     # First pass: check cache
     for i, query in enumerate(queries):
         cache_key = _get_cache_key(query, api_url, api_max_results, max_char_per_url)
@@ -134,44 +145,56 @@ async def _fetch_batch_queries_from_web_content_api(
             results.append(None)  # Placeholder
             uncached_queries.append(query)
             uncached_indices.append(i)
-    
+
     # Second pass: fetch uncached queries
     if uncached_queries:
-        logging.info(f"Fetching {len(uncached_queries)} uncached queries from External Web Content API")
-        
+        logging.info(
+            f"Fetching {len(uncached_queries)} uncached queries from External Web Content API"
+        )
+
         # Create tasks for uncached queries
         fetch_tasks = []
         for query in uncached_queries:
-            fetch_tasks.append(_fetch_single_query_from_web_content_api(
-                query, client, api_url, api_max_results, max_char_per_url
-            ))
-        
+            fetch_tasks.append(
+                _fetch_single_query_from_web_content_api(
+                    query, client, api_url, api_max_results, max_char_per_url
+                )
+            )
+
         # Execute all uncached requests concurrently
         try:
-            uncached_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
-            
+            uncached_results = await asyncio.gather(
+                *fetch_tasks, return_exceptions=True
+            )
+
             # Process results and update cache
-            for i, (query, result_or_exc) in enumerate(zip(uncached_queries, uncached_results)):
+            for i, (query, result_or_exc) in enumerate(
+                zip(uncached_queries, uncached_results)
+            ):
                 idx = uncached_indices[i]
-                
+
                 if isinstance(result_or_exc, Exception):
-                    logging.error(f"Exception during API call for query '{query}': {result_or_exc}")
+                    logging.error(
+                        f"Exception during API call for query '{query}': {result_or_exc}"
+                    )
                     results[idx] = None
                 elif result_or_exc is not None:
                     # Cache successful responses
-                    cache_key = _get_cache_key(query, api_url, api_max_results, max_char_per_url)
+                    cache_key = _get_cache_key(
+                        query, api_url, api_max_results, max_char_per_url
+                    )
                     _cache_response(cache_key, result_or_exc, cache_ttl_minutes)
                     results[idx] = result_or_exc
                 else:
                     results[idx] = None
-                    
+
         except Exception as e:
             logging.error(f"Error in batch fetch: {e}")
             # Fill remaining slots with None
             for idx in uncached_indices:
                 if results[idx] is None:
                     results[idx] = None
-    
+
     return results
 
 
@@ -342,8 +365,12 @@ async def _fetch_single_query_from_web_content_api(
     if max_char_per_url is not None:
         payload["max_char_per_url"] = max_char_per_url
     try:
-        # Reduced timeout from 30s to 15s for faster failure and retry
-        response = await client.post(api_url, json=payload, timeout=15.0)
+        # Optimized timeout with granular settings for better performance
+        response = await client.post(
+            api_url,
+            json=payload,
+            timeout=httpx.Timeout(connect=8.0, read=15.0, write=8.0, pool=5.0),
+        )
         response.raise_for_status()
         api_response_json = response.json()
 
@@ -412,7 +439,7 @@ async def fetch_and_format_searxng_results(
         )  # Send to API as max_char_per_url parameter
         cache_ttl_minutes = config.get(
             WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY,
-            DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
+            DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL,
         )
         all_formatted_contexts_from_api = []
         logging.info(
@@ -421,7 +448,12 @@ async def fetch_and_format_searxng_results(
 
         # Use optimized batch fetching with caching
         api_call_results = await _fetch_batch_queries_from_web_content_api(
-            queries, httpx_client, api_url, api_max_results, max_char_per_url, cache_ttl_minutes
+            queries,
+            httpx_client,
+            api_url,
+            api_max_results,
+            max_char_per_url,
+            cache_ttl_minutes,
         )
 
         for query_idx, api_response_json in enumerate(api_call_results):

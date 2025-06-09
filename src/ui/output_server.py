@@ -11,15 +11,25 @@ from ..core.constants import (
 )
 
 
-async def _async_shorten_url_tinyurl(long_url: str) -> Optional[str]:
+async def _async_shorten_url_tinyurl(
+    long_url: str, httpx_client: Optional[httpx.AsyncClient] = None
+) -> Optional[str]:
     """Asynchronously shortens a URL using TinyURL's API."""
     if not long_url:
         return None
     try:
         api_url = f"http://tinyurl.com/api-create.php?url={long_url}"
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(api_url)
+
+        # Use provided client or create a temporary one
+        if httpx_client:
+            response = await httpx_client.get(api_url, timeout=10.0)
             response.raise_for_status()
+        else:
+            # Fallback: create optimized temporary client
+            timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+            async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
+                response = await client.get(api_url)
+                response.raise_for_status()
         short_url = response.text.strip()
         # Basic validation: check if it looks like a URL
         if short_url.startswith("http://") or short_url.startswith("https://"):
@@ -48,13 +58,28 @@ async def _async_shorten_url_tinyurl(long_url: str) -> Optional[str]:
         return None
 
 
-async def share_to_textis(text_content: str) -> Optional[str]:
+async def share_to_textis(
+    text_content: str, httpx_client: Optional[httpx.AsyncClient] = None
+) -> Optional[str]:
     """
     Shares text_content to text.is and returns the generated URL.
     """
     base_url = "https://text.is/"
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        # Use provided client or create optimized temporary one
+        if httpx_client:
+            client = httpx_client
+            should_close = False
+        else:
+            # Fallback: create optimized temporary client
+            timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
+            limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            client = httpx.AsyncClient(
+                timeout=timeout, follow_redirects=True, limits=limits, http2=True
+            )
+            should_close = True
+
+        try:
             # 1. GET the page to obtain CSRF token
             logging.debug(f"Fetching initial page from {base_url} to get CSRF token.")
             response_get = await client.get(base_url)
@@ -119,6 +144,11 @@ async def share_to_textis(text_content: str) -> Optional[str]:
             logging.info(f"Successfully obtained text.is URL: {final_url}")
             return final_url
 
+        finally:
+            # Close temporary client if we created one
+            if should_close and client:
+                await client.aclose()
+
     except httpx.HTTPStatusError as e:
         logging.error(
             f"HTTP error occurred while interacting with text.is: {e.response.status_code} - {e.response.text[:200]}"
@@ -135,7 +165,9 @@ async def share_to_textis(text_content: str) -> Optional[str]:
 
 
 async def start_output_server(
-    text_content: str, config: Dict[str, Any]
+    text_content: str,
+    config: Dict[str, Any],
+    httpx_client: Optional[httpx.AsyncClient] = None,
 ) -> Optional[str]:
     """
     Shares markdown text_content to text.is.
@@ -153,7 +185,7 @@ async def start_output_server(
         return None
 
     logging.info("Attempting to share content to text.is...")
-    public_url = await share_to_textis(text_content)
+    public_url = await share_to_textis(text_content, httpx_client)
 
     if not public_url:
         logging.error("Failed to share content to text.is.")
@@ -172,7 +204,7 @@ async def start_output_server(
     if shortener_enabled:
         logging.info(f"URL shortener enabled, service: {shortener_service}")
         if shortener_service.lower() == "tinyurl":
-            shortened_url = await _async_shorten_url_tinyurl(public_url)
+            shortened_url = await _async_shorten_url_tinyurl(public_url, httpx_client)
             if shortened_url:
                 final_url_to_share = shortened_url
             else:

@@ -76,14 +76,34 @@ class LLMCordClient(discord.Client):
         self.last_task_time: float = 0  # For stream editing delay
         self.config = config  # Store loaded config
         # Optimized HTTP client for improved performance
-        from ..core.constants import HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
-        use_http2 = config.get(HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2)
+        from ..core.constants import (
+            HTTP_CLIENT_USE_HTTP2_CONFIG_KEY,
+            DEFAULT_HTTP_CLIENT_USE_HTTP2,
+        )
+
+        # Enhanced connection pooling for better performance
+        limits = httpx.Limits(
+            max_keepalive_connections=30,  # Increased from 20 for better reuse
+            max_connections=150,  # Increased from 100 for higher concurrency
+            keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+        )
+        # Optimized timeout configuration
+        timeout = httpx.Timeout(
+            connect=10.0,  # Connection timeout
+            read=20.0,  # Read timeout
+            write=10.0,  # Write timeout
+            pool=5.0,  # Pool timeout for getting a connection
+        )
+        use_http2 = config.get(
+            HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2
+        )
         self.httpx_client = httpx.AsyncClient(
-            timeout=20.0, 
+            timeout=timeout,
             follow_redirects=True,
             limits=limits,
-            http2=use_http2  # Configurable HTTP/2 support
+            http2=use_http2,  # Configurable HTTP/2 support
+            # Enable connection pooling optimizations
+            trust_env=True,  # Trust proxy environment variables
         )  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
@@ -371,16 +391,26 @@ class LLMCordClient(discord.Client):
                 is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check
             ):
                 has_potential_image_urls_in_text = True
-        
+
         # Also check for image URLs in replied-to messages
-        if not has_potential_image_urls_in_text and new_msg.reference and new_msg.reference.message_id:
+        if (
+            not has_potential_image_urls_in_text
+            and new_msg.reference
+            and new_msg.reference.message_id
+        ):
             try:
                 referenced_msg = new_msg.reference.cached_message
                 if not referenced_msg:
-                    referenced_msg = await new_msg.channel.fetch_message(new_msg.reference.message_id)
+                    referenced_msg = await new_msg.channel.fetch_message(
+                        new_msg.reference.message_id
+                    )
                 if referenced_msg and referenced_msg.content:
-                    urls_in_replied_msg = extract_urls_with_indices(referenced_msg.content)
-                    if any(is_image_url(url_info[0]) for url_info in urls_in_replied_msg):
+                    urls_in_replied_msg = extract_urls_with_indices(
+                        referenced_msg.content
+                    )
+                    if any(
+                        is_image_url(url_info[0]) for url_info in urls_in_replied_msg
+                    ):
                         has_potential_image_urls_in_text = True
             except (discord.NotFound, discord.HTTPException, Exception):
                 pass  # If we can't fetch the message, just continue without it
@@ -684,10 +714,12 @@ class LLMCordClient(discord.Client):
         close_all_db_managers()
         await super().close()
 
-    async def retry_with_modified_content(self, original_message: discord.Message, content_suffix: str):
+    async def retry_with_modified_content(
+        self, original_message: discord.Message, content_suffix: str
+    ):
         """
         Retry processing a message with additional content appended.
-        
+
         Args:
             original_message: The original Discord message to retry
             content_suffix: Text to append to the original message content
@@ -696,7 +728,7 @@ class LLMCordClient(discord.Client):
             # Create a new message-like object with modified content
             # We'll reuse the original message but with modified content for processing
             modified_content = f"{original_message.content} {content_suffix}"
-            
+
             # Create a temporary message object that mimics the original
             # but with the modified content
             class RetryMessage:
@@ -719,33 +751,37 @@ class LLMCordClient(discord.Client):
                     self.flags = original_msg.flags
                     self.type = original_msg.type
                     self.system_content = original_msg.system_content
-                    self.clean_content = new_content  # Use modified content for clean_content too
-                    
+                    self.clean_content = (
+                        new_content  # Use modified content for clean_content too
+                    )
+
                     # Add missing attributes that the message processing expects
-                    self.embeds = getattr(original_msg, 'embeds', [])
-                    self.reactions = getattr(original_msg, 'reactions', [])
-                    self.webhook_id = getattr(original_msg, 'webhook_id', None)
-                    self.application_id = getattr(original_msg, 'application_id', None)
-                    self.activity = getattr(original_msg, 'activity', None)
-                    self.application = getattr(original_msg, 'application', None)
-                    self.stickers = getattr(original_msg, 'stickers', [])
-                    self.components = getattr(original_msg, 'components', [])
-                    self.thread = getattr(original_msg, 'thread', None)
-                    self.interaction = getattr(original_msg, 'interaction', None)
-                    self.role_subscription = getattr(original_msg, 'role_subscription', None)
-                    self.resolved = getattr(original_msg, 'resolved', None)
-                    self.position = getattr(original_msg, 'position', None)
-                    self.poll = getattr(original_msg, 'poll', None)
-                    self.call = getattr(original_msg, 'call', None)
-                    
+                    self.embeds = getattr(original_msg, "embeds", [])
+                    self.reactions = getattr(original_msg, "reactions", [])
+                    self.webhook_id = getattr(original_msg, "webhook_id", None)
+                    self.application_id = getattr(original_msg, "application_id", None)
+                    self.activity = getattr(original_msg, "activity", None)
+                    self.application = getattr(original_msg, "application", None)
+                    self.stickers = getattr(original_msg, "stickers", [])
+                    self.components = getattr(original_msg, "components", [])
+                    self.thread = getattr(original_msg, "thread", None)
+                    self.interaction = getattr(original_msg, "interaction", None)
+                    self.role_subscription = getattr(
+                        original_msg, "role_subscription", None
+                    )
+                    self.resolved = getattr(original_msg, "resolved", None)
+                    self.position = getattr(original_msg, "position", None)
+                    self.poll = getattr(original_msg, "poll", None)
+                    self.call = getattr(original_msg, "call", None)
+
                 def reply(self, *args, **kwargs):
                     return self.channel.send(*args, **kwargs)
-            
+
             retry_message = RetryMessage(original_message, modified_content)
-            
+
             # Process the message using the existing on_message logic
             await self.on_message(retry_message)
-            
+
         except Exception as e:
             logging.error(f"Error in retry_with_modified_content: {e}", exc_info=True)
             # Send an error message to the channel
@@ -753,5 +789,5 @@ class LLMCordClient(discord.Client):
                 await original_message.channel.send(
                     f"❌ Failed to retry the request: {str(e)}"
                 )
-            except:
+            except Exception:
                 pass  # Ignore errors when sending error messages

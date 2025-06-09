@@ -1,1 +1,1 @@
-# UI package - User interface components 
+# UI package - User interface components

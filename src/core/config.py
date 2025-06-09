@@ -1027,7 +1027,9 @@ async def get_config(filename="config/config.yaml"):
                 )
             else:
                 try:
-                    val = int(config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY])
+                    val = int(
+                        config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY]
+                    )
                     if val <= 0:
                         logging.warning(
                             f"'{WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY}' ({val}) must be positive. "
@@ -1037,7 +1039,9 @@ async def get_config(filename="config/config.yaml"):
                             DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
                         )
                     else:
-                        config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = val
+                        config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = (
+                            val
+                        )
                 except ValueError:
                     logging.warning(
                         f"'{WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY}' is not a valid integer. "
@@ -1049,7 +1053,9 @@ async def get_config(filename="config/config.yaml"):
 
             # HTTP/2 setting
             if HTTP_CLIENT_USE_HTTP2_CONFIG_KEY not in config_data:
-                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = DEFAULT_HTTP_CLIENT_USE_HTTP2
+                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = (
+                    DEFAULT_HTTP_CLIENT_USE_HTTP2
+                )
                 logging.info(
                     f"'{HTTP_CLIENT_USE_HTTP2_CONFIG_KEY}' not found. "
                     f"Using default: {DEFAULT_HTTP_CLIENT_USE_HTTP2}"
@@ -1059,7 +1065,9 @@ async def get_config(filename="config/config.yaml"):
                     f"'{HTTP_CLIENT_USE_HTTP2_CONFIG_KEY}' is not a boolean. "
                     f"Using default: {DEFAULT_HTTP_CLIENT_USE_HTTP2}"
                 )
-                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = DEFAULT_HTTP_CLIENT_USE_HTTP2
+                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = (
+                    DEFAULT_HTTP_CLIENT_USE_HTTP2
+                )
 
             # --- Load Alternative Search Query Generation Settings ---
             alt_search_config = config_data.get(ALT_SEARCH_SECTION_KEY, {})

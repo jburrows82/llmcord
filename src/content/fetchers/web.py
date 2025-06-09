@@ -59,11 +59,17 @@ async def fetch_with_jina(
                 target_jina_url,
                 headers=headers,
                 data=post_data,
-                timeout=30.0,  # Increased timeout for POST
+                timeout=httpx.Timeout(
+                    connect=10.0, read=25.0, write=10.0, pool=5.0
+                ),  # Optimized timeout
             )
         else:
             response = await httpx_client.get(
-                target_jina_url, headers=headers, timeout=20.0
+                target_jina_url,
+                headers=headers,
+                timeout=httpx.Timeout(
+                    connect=10.0, read=20.0, write=10.0, pool=5.0
+                ),  # Optimized timeout
             )
 
         response.raise_for_status()  # Raise an exception for bad status codes
@@ -224,7 +230,12 @@ async def fetch_with_beautifulsoup(
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        async with client.stream("GET", url, headers=headers, timeout=15.0) as response:
+        async with client.stream(
+            "GET",
+            url,
+            headers=headers,
+            timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=5.0),
+        ) as response:
             if response.status_code != 200:
                 if (
                     response.status_code >= 300

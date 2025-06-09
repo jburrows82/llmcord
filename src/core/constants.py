@@ -138,10 +138,12 @@ WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY = (
     "web_content_extraction_api_max_results"
 )
 DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED = False
-DEFAULT_WEB_CONTENT_EXTRACTION_API_URL = "http://localhost:8080/search"
+DEFAULT_WEB_CONTENT_EXTRACTION_API_URL = "http://localhost:8086/search"
 DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS = 3
 # Cache configuration for web content extraction API
-WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY = "web_content_extraction_api_cache_ttl_minutes"
+WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY = (
+    "web_content_extraction_api_cache_ttl_minutes"
+)
 DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL = 15
 # HTTP client optimization
 HTTP_CLIENT_USE_HTTP2_CONFIG_KEY = "http_client_use_http2"
@@ -165,7 +167,9 @@ GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE = (
     0  # Default to 0 (thinking disabled) for grounding
 )
 
-USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME = "config/user_gemini_thinking_budget_prefs.json"
+USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME = (
+    "config/user_gemini_thinking_budget_prefs.json"
+)
 USER_SYSTEM_PROMPTS_FILENAME = "config/user_system_prompts.json"
 USER_MODEL_PREFS_FILENAME = "config/user_model_prefs.json"
 

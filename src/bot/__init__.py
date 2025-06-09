@@ -1,1 +1,1 @@
-# Bot package - Discord bot core functionality 
+# Bot package - Discord bot core functionality

@@ -1,1 +1,1 @@
-# Messaging package - Message handling and responses 
+# Messaging package - Message handling and responses

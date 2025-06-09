@@ -151,9 +151,9 @@ class ResponseActionView(ui.View):
             # Disable this button after clicking
             self.disabled = True
             self.style = discord.ButtonStyle.secondary  # Change to greyed out style
-            
+
             view: "ResponseActionView" = self.view  # Type hint for clarity
-            
+
             # Update the view to reflect the disabled button
             try:
                 await interaction.response.edit_message(view=view)
@@ -294,7 +294,7 @@ class ResponseActionView(ui.View):
                         )
                     elif view.grounding_metadata:
                         metadata_str = str(view.grounding_metadata)
-                    
+
                     # Use followup since we already responded
                     await interaction.followup.send(
                         f"Could not extract specific sources. Raw metadata:\n```json\n{metadata_str[:1900]}\n```",
@@ -347,21 +347,21 @@ class ResponseActionView(ui.View):
             # Disable this button after clicking
             self.disabled = True
             self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
-            
+
             # Access parent view's data
             view: "ResponseActionView" = self.view
-            
+
             # Update the view to reflect the disabled button
             try:
                 await interaction.response.edit_message(view=view)
-                
+
                 if not view.full_response_text:
                     await interaction.followup.send(
                         "No response text available to send.",
                         ephemeral=False,
                     )
                     return
-                
+
                 # Clean model name for filename
                 safe_model_name = re.sub(
                     r'[<>:"/\\|?*]', "_", view.model_name or "llm"
@@ -425,13 +425,13 @@ class ResponseActionView(ui.View):
             # Disable this button after clicking
             self.disabled = True
             self.style = discord.ButtonStyle.secondary  # Change to greyed out style
-            
+
             view: "ResponseActionView" = self.view
-            
+
             # Update the view to reflect the disabled button
             try:
                 await interaction.response.edit_message(view=view)
-                
+
                 if not view.full_response_text:
                     await interaction.followup.send(
                         "No response text available to render.", ephemeral=False
@@ -458,8 +458,15 @@ class ResponseActionView(ui.View):
 
                 # Don't defer again since we already responded
                 try:
+                    # Try to get httpx_client from the interaction client
+                    httpx_client = None
+                    if interaction.client and hasattr(
+                        interaction.client, "httpx_client"
+                    ):
+                        httpx_client = getattr(interaction.client, "httpx_client", None)
+
                     public_url = await start_output_server(
-                        view.full_response_text, view.app_config
+                        view.full_response_text, view.app_config, httpx_client
                     )
                     if public_url:
                         await interaction.followup.send(
@@ -483,7 +490,7 @@ class ResponseActionView(ui.View):
                         "An error occurred while trying to generate the rendered output link.",
                         ephemeral=False,
                     )
-                    
+
             except discord.NotFound:
                 # If the original message is not found, handle normally
                 if not view.full_response_text:
@@ -515,8 +522,15 @@ class ResponseActionView(ui.View):
                 )  # Defer while processing
 
                 try:
+                    # Try to get httpx_client from the interaction client
+                    httpx_client = None
+                    if interaction.client and hasattr(
+                        interaction.client, "httpx_client"
+                    ):
+                        httpx_client = getattr(interaction.client, "httpx_client", None)
+
                     public_url = await start_output_server(
-                        view.full_response_text, view.app_config
+                        view.full_response_text, view.app_config, httpx_client
                     )
                     if public_url:
                         await interaction.followup.send(
@@ -553,13 +567,13 @@ class ResponseActionView(ui.View):
             # Disable this button after clicking
             self.disabled = True
             self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
-            
+
             view: "ResponseActionView" = self.view
-            
+
             # Update the view to reflect the disabled button
             try:
                 await interaction.response.edit_message(view=view)
-                
+
                 if not view.original_user_message:
                     await interaction.followup.send(
                         "No original message available to retry.",
@@ -569,25 +583,24 @@ class ResponseActionView(ui.View):
 
                 # Get the bot client from the interaction
                 bot_client = interaction.client
-                
+
                 # Acknowledge the retry attempt
                 await interaction.followup.send(
                     "🔄 Retrying with web search enabled...",
                     ephemeral=False,
                 )
-                
+
                 # Use the bot's retry method with web search suffix
-                if hasattr(bot_client, 'retry_with_modified_content'):
+                if hasattr(bot_client, "retry_with_modified_content"):
                     await bot_client.retry_with_modified_content(
-                        view.original_user_message, 
-                        "SEARCH THE NET"
+                        view.original_user_message, "SEARCH THE NET"
                     )
                 else:
                     await interaction.followup.send(
                         "❌ Unable to retry - retry functionality not available.",
                         ephemeral=False,
                     )
-                    
+
             except discord.NotFound:
                 # If the original message is not found, handle normally
                 if not view.original_user_message:
@@ -604,25 +617,24 @@ class ResponseActionView(ui.View):
                 try:
                     # Get the bot client from the interaction
                     bot_client = interaction.client
-                    
+
                     # Acknowledge the retry attempt
                     await interaction.followup.send(
                         "🔄 Retrying with web search enabled...",
                         ephemeral=False,
                     )
-                    
+
                     # Use the bot's retry method with web search suffix
-                    if hasattr(bot_client, 'retry_with_modified_content'):
+                    if hasattr(bot_client, "retry_with_modified_content"):
                         await bot_client.retry_with_modified_content(
-                            view.original_user_message, 
-                            "SEARCH THE NET"
+                            view.original_user_message, "SEARCH THE NET"
                         )
                     else:
                         await interaction.followup.send(
                             "❌ Unable to retry - retry functionality not available.",
                             ephemeral=False,
                         )
-                        
+
                 except Exception as e:
                     logging.error(
                         f"Error retrying with web search: {e}",
@@ -654,13 +666,13 @@ class ResponseActionView(ui.View):
             # Disable this button after clicking
             self.disabled = True
             self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
-            
+
             view: "ResponseActionView" = self.view
-            
+
             # Update the view to reflect the disabled button
             try:
                 await interaction.response.edit_message(view=view)
-                
+
                 if not view.original_user_message:
                     await interaction.followup.send(
                         "No original message available to retry.",
@@ -670,25 +682,24 @@ class ResponseActionView(ui.View):
 
                 # Get the bot client from the interaction
                 bot_client = interaction.client
-                
+
                 # Acknowledge the retry attempt
                 await interaction.followup.send(
                     "🔄 Retrying without web search...",
                     ephemeral=False,
                 )
-                
+
                 # Use the bot's retry method with no web search suffix
-                if hasattr(bot_client, 'retry_with_modified_content'):
+                if hasattr(bot_client, "retry_with_modified_content"):
                     await bot_client.retry_with_modified_content(
-                        view.original_user_message, 
-                        "DO NOT SEARCH THE NET"
+                        view.original_user_message, "DO NOT SEARCH THE NET"
                     )
                 else:
                     await interaction.followup.send(
                         "❌ Unable to retry - retry functionality not available.",
                         ephemeral=False,
                     )
-                    
+
             except discord.NotFound:
                 # If the original message is not found, handle normally
                 if not view.original_user_message:
@@ -705,25 +716,24 @@ class ResponseActionView(ui.View):
                 try:
                     # Get the bot client from the interaction
                     bot_client = interaction.client
-                    
+
                     # Acknowledge the retry attempt
                     await interaction.followup.send(
                         "🔄 Retrying without web search...",
                         ephemeral=False,
                     )
-                    
+
                     # Use the bot's retry method with no web search suffix
-                    if hasattr(bot_client, 'retry_with_modified_content'):
+                    if hasattr(bot_client, "retry_with_modified_content"):
                         await bot_client.retry_with_modified_content(
-                            view.original_user_message, 
-                            "DO NOT SEARCH THE NET"
+                            view.original_user_message, "DO NOT SEARCH THE NET"
                         )
                     else:
                         await interaction.followup.send(
                             "❌ Unable to retry - retry functionality not available.",
                             ephemeral=False,
                         )
-                        
+
                 except Exception as e:
                     logging.error(
                         f"Error retrying without web search: {e}",

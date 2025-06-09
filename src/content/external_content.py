@@ -115,7 +115,11 @@ async def fetch_external_content(
                 try:
                     logging.info(f"Attempting to download image URL: {img_url}")
                     async with httpx_client.stream(
-                        "GET", img_url, timeout=15.0
+                        "GET",
+                        img_url,
+                        timeout=httpx.Timeout(
+                            connect=8.0, read=15.0, write=8.0, pool=5.0
+                        ),
                     ) as response:
                         if response.status_code == 200:
                             content_type = response.headers.get(
