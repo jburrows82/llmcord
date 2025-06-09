@@ -468,15 +468,23 @@ async def handle_llm_response_stream(
                     # Skip embed processing entirely for image generation model
                     if is_image_generation_model:
                         if finish_reason:
-                            current_attempt_llm_successful = finish_reason.lower() in (
-                                "stop",
-                                "end_turn",
-                            ) or (
-                                current_provider == "google"
-                                and finish_reason
-                                == str(
-                                    google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                            current_attempt_llm_successful = (
+                                finish_reason.lower()
+                                in (
+                                    "stop",
+                                    "end_turn",
                                 )
+                                or (
+                                    current_provider == "google"
+                                    and finish_reason
+                                    == str(
+                                        google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                                    )
+                                )
+                            ) or finish_reason.lower() in (
+                                "content_filter",
+                                "length",
+                                "max_tokens",
                             )
                             break
                         continue
@@ -561,13 +569,21 @@ async def handle_llm_response_stream(
 
                             view_to_attach = None
                             is_successful_finish_attempt = finish_reason and (
-                                finish_reason.lower() in ("stop", "end_turn")
-                                or (
-                                    current_provider == "google"
-                                    and finish_reason
-                                    == str(
-                                        google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                                (
+                                    finish_reason.lower() in ("stop", "end_turn")
+                                    or (
+                                        current_provider == "google"
+                                        and finish_reason
+                                        == str(
+                                            google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                                        )
                                     )
+                                )
+                                or finish_reason.lower()
+                                in (
+                                    "content_filter",
+                                    "length",
+                                    "max_tokens",
                                 )
                             )
                             is_blocked_attempt = (
@@ -877,13 +893,23 @@ async def handle_llm_response_stream(
                             client.last_task_time = dt.now().timestamp()
 
                     if finish_reason:
-                        current_attempt_llm_successful = finish_reason.lower() in (
-                            "stop",
-                            "end_turn",
-                        ) or (
-                            current_provider == "google"
-                            and finish_reason
-                            == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
+                        current_attempt_llm_successful = (
+                            finish_reason.lower()
+                            in (
+                                "stop",
+                                "end_turn",
+                            )
+                            or (
+                                current_provider == "google"
+                                and finish_reason
+                                == str(
+                                    google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                                )
+                            )
+                        ) or finish_reason.lower() in (
+                            "content_filter",
+                            "length",
+                            "max_tokens",
                         )
                         break
 

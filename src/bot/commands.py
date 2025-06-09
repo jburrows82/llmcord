@@ -524,6 +524,8 @@ async def _execute_enhance_prompt_logic(
                     "length",
                     "end_turn",
                     "FINISH_REASON_UNSPECIFIED",
+                    "content_filter",
+                    "max_tokens",
                 ]:
                     logger.warning(
                         f"Unexpected finish reason from LLM: {finish_reason}"

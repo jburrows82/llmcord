@@ -566,10 +566,23 @@ async def generate_response_stream(
                         and stream_finish_reason
                         == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
                     )
-                    if is_successful_finish:
-                        logging.info(
-                            f"LLM request successful with key {key_display} on compression attempt {compression_attempt + 1}"
-                        )
+
+                    # Treat content_filter and length as acceptable when content was received
+                    is_acceptable_with_content = stream_finish_reason.lower() in (
+                        "content_filter",
+                        "length",
+                        "max_tokens",
+                    )
+
+                    if is_successful_finish or is_acceptable_with_content:
+                        if is_acceptable_with_content:
+                            logging.info(
+                                f"LLM request completed with reason '{stream_finish_reason}' for key {key_display} but content was received. Treating as partial success."
+                            )
+                        else:
+                            logging.info(
+                                f"LLM request successful with key {key_display} on compression attempt {compression_attempt + 1}"
+                            )
 
                         # Add compression warning if compression occurred
                         if compression_occurred:
