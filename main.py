@@ -8,7 +8,7 @@ import yaml
 from src.core.config import get_config
 from src.bot.bot import LLMCordClient
 from src.core.rate_limiter import close_all_db_managers
-from src.ui.output_server import (
+from src.ui.sharing import (
     stop_output_server,
     cleanup_shared_html_dir,
 )
@@ -156,7 +156,7 @@ if __name__ == "__main__":
             # The call within the async main() function's finally block is the correct place.
             # This secondary call here might be redundant or problematic.
             # Let's rely on the cleanup within the async main() function's `finally` block.
-            # If that fails, the atexit in output_server.py is a last resort.
+            # If that fails, the atexit in sharing.py is a last resort.
             pass  # Relying on cleanup within async main()
         except Exception as e:
             logging.error(

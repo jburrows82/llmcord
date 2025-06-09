@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 
 from ..core.constants import (
     OUTPUT_SHARING_CONFIG_KEY,
-    TEXTIS_ENABLED_CONFIG_KEY,  # Renamed from NGROK_ENABLED_CONFIG_KEY
+    TEXTIS_ENABLED_CONFIG_KEY,
     URL_SHORTENER_ENABLED_CONFIG_KEY,
     URL_SHORTENER_SERVICE_CONFIG_KEY,
 )
@@ -164,13 +164,13 @@ async def share_to_textis(
         return None
 
 
-async def start_output_server(
+async def share_text_content(
     text_content: str,
     config: Dict[str, Any],
     httpx_client: Optional[httpx.AsyncClient] = None,
 ) -> Optional[str]:
     """
-    Shares markdown text_content to text.is.
+    Shares markdown text_content to text.is with optional URL shortening.
     Returns the public URL to the paste if successful, otherwise None.
     """
     output_sharing_cfg = config.get(OUTPUT_SHARING_CONFIG_KEY, {})
@@ -220,9 +220,26 @@ async def start_output_server(
     return final_url_to_share
 
 
+# Legacy compatibility functions
+async def start_output_server(
+    text_content: str,
+    config: Dict[str, Any],
+    httpx_client: Optional[httpx.AsyncClient] = None,
+) -> Optional[str]:
+    """
+    Legacy function for backward compatibility.
+    Use share_text_content() instead.
+    """
+    logging.warning(
+        "start_output_server() is deprecated. Use share_text_content() instead."
+    )
+    return await share_text_content(text_content, config, httpx_client)
+
+
 def stop_output_server():
     """
-    Placeholder function. No server to stop with text.is implementation.
+    Legacy function for backward compatibility.
+    No-op since there's no server to stop with text.is implementation.
     """
     logging.info("stop_output_server called. No active server to stop for text.is.")
     pass
@@ -230,7 +247,8 @@ def stop_output_server():
 
 async def cleanup_shared_html_dir():
     """
-    Placeholder function. No local HTML directory to clean up with text.is implementation.
+    Legacy function for backward compatibility.
+    No-op since there's no local HTML directory with text.is implementation.
     """
     logging.info(
         "cleanup_shared_html_dir called. No local directory to clean for text.is."
