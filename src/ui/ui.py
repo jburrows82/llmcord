@@ -26,6 +26,7 @@ class ResponseActionView(ui.View):
         full_response_text: Optional[str] = None,
         model_name: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,  # Added app_config
+        original_user_message: Optional[discord.Message] = None,  # Add original message
         timeout=3600,  # 1 hour
     ):
         super().__init__(timeout=timeout)
@@ -33,6 +34,7 @@ class ResponseActionView(ui.View):
         self.full_response_text = full_response_text
         self.model_name = model_name or "llm"  # Default filename model name
         self.app_config = app_config  # Store app_config
+        self.original_user_message = original_user_message  # Store original message
         self.message: Optional[discord.Message] = (
             None  # Will be set after sending the message
         )
@@ -87,6 +89,25 @@ class ResponseActionView(ui.View):
                 rendered_output_button_row = 1
 
             self.add_item(self.ViewRenderedOutputButton(row=rendered_output_button_row))
+
+        # Add retry buttons if original message is available
+        if self.original_user_message:
+            # Determine the next available row
+            next_row = 0
+            if has_sources_button:
+                next_row = 1
+            if self.full_response_text:
+                next_row = max(next_row, 1)
+                if has_sources_button:
+                    next_row = 2
+            if self.full_response_text and textis_is_enabled:
+                next_row = max(next_row, 2)
+                if has_sources_button and self.full_response_text:
+                    next_row = 3
+
+            # Add retry buttons on the next row
+            self.add_item(self.RetryWithWebSearchButton(row=next_row))
+            self.add_item(self.RetryWithoutWebSearchButton(row=next_row))
 
     async def on_timeout(self):
         """Disables all buttons when the view times out."""
@@ -397,5 +418,111 @@ class ResponseActionView(ui.View):
                 )
                 await interaction.followup.send(
                     "An error occurred while trying to generate the rendered output link.",
+                    ephemeral=False,
+                )
+
+    class RetryWithWebSearchButton(ui.Button):
+        def __init__(self, row: int):
+            super().__init__(
+                label="Retry with Web Search",
+                style=discord.ButtonStyle.secondary,
+                row=row,
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            view: "ResponseActionView" = self.view
+            if not view.original_user_message:
+                await interaction.response.send_message(
+                    "No original message available to retry.",
+                    ephemeral=False,
+                )
+                return
+
+            await interaction.response.defer(
+                ephemeral=False, thinking=True
+            )  # Defer while processing
+
+            try:
+                # Get the bot client from the interaction
+                bot_client = interaction.client
+                
+                # Acknowledge the retry attempt
+                await interaction.followup.send(
+                    "🔄 Retrying with web search enabled...",
+                    ephemeral=False,
+                )
+                
+                # Use the bot's retry method with web search suffix
+                if hasattr(bot_client, 'retry_with_modified_content'):
+                    await bot_client.retry_with_modified_content(
+                        view.original_user_message, 
+                        "SEARCH THE NET"
+                    )
+                else:
+                    await interaction.followup.send(
+                        "❌ Unable to retry - retry functionality not available.",
+                        ephemeral=False,
+                    )
+                    
+            except Exception as e:
+                logging.error(
+                    f"Error retrying with web search: {e}",
+                    exc_info=True,
+                )
+                await interaction.followup.send(
+                    "❌ An error occurred while trying to retry with web search.",
+                    ephemeral=False,
+                )
+
+    class RetryWithoutWebSearchButton(ui.Button):
+        def __init__(self, row: int):
+            super().__init__(
+                label="Retry without Web Search",
+                style=discord.ButtonStyle.secondary,
+                row=row,
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            view: "ResponseActionView" = self.view
+            if not view.original_user_message:
+                await interaction.response.send_message(
+                    "No original message available to retry.",
+                    ephemeral=False,
+                )
+                return
+
+            await interaction.response.defer(
+                ephemeral=False, thinking=True
+            )  # Defer while processing
+
+            try:
+                # Get the bot client from the interaction
+                bot_client = interaction.client
+                
+                # Acknowledge the retry attempt
+                await interaction.followup.send(
+                    "🔄 Retrying without web search...",
+                    ephemeral=False,
+                )
+                
+                # Use the bot's retry method with no web search suffix
+                if hasattr(bot_client, 'retry_with_modified_content'):
+                    await bot_client.retry_with_modified_content(
+                        view.original_user_message, 
+                        "DO NOT SEARCH THE NET"
+                    )
+                else:
+                    await interaction.followup.send(
+                        "❌ Unable to retry - retry functionality not available.",
+                        ephemeral=False,
+                    )
+                    
+            except Exception as e:
+                logging.error(
+                    f"Error retrying without web search: {e}",
+                    exc_info=True,
+                )
+                await interaction.followup.send(
+                    "❌ An error occurred while trying to retry without web search.",
                     ephemeral=False,
                 )

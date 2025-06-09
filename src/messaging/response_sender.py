@@ -764,6 +764,7 @@ async def handle_llm_response_stream(
                                             full_response_text=final_text_for_this_attempt,
                                             model_name=current_model_name,
                                             app_config=client.config,
+                                            original_user_message=new_msg,
                                         )
                                         if (
                                             not view_to_attach

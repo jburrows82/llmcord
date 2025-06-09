@@ -676,3 +676,75 @@ class LLMCordClient(discord.Client):
         logging.info("Closing database connections...")
         close_all_db_managers()
         await super().close()
+
+    async def retry_with_modified_content(self, original_message: discord.Message, content_suffix: str):
+        """
+        Retry processing a message with additional content appended.
+        
+        Args:
+            original_message: The original Discord message to retry
+            content_suffix: Text to append to the original message content
+        """
+        try:
+            # Create a new message-like object with modified content
+            # We'll reuse the original message but with modified content for processing
+            modified_content = f"{original_message.content} {content_suffix}"
+            
+            # Create a temporary message object that mimics the original
+            # but with the modified content
+            class RetryMessage:
+                def __init__(self, original_msg, new_content):
+                    # Copy essential attributes
+                    self.author = original_msg.author
+                    self.channel = original_msg.channel
+                    self.guild = original_msg.guild
+                    self.id = original_msg.id  # Keep the same ID to avoid duplication
+                    self.attachments = original_msg.attachments
+                    self.reference = original_msg.reference
+                    self.content = new_content  # Use the modified content
+                    self.created_at = original_msg.created_at
+                    self.edited_at = original_msg.edited_at
+                    self.mention_everyone = original_msg.mention_everyone
+                    self.mentions = original_msg.mentions
+                    self.channel_mentions = original_msg.channel_mentions
+                    self.role_mentions = original_msg.role_mentions
+                    self.pinned = original_msg.pinned
+                    self.flags = original_msg.flags
+                    self.type = original_msg.type
+                    self.system_content = original_msg.system_content
+                    self.clean_content = new_content  # Use modified content for clean_content too
+                    
+                    # Add missing attributes that the message processing expects
+                    self.embeds = getattr(original_msg, 'embeds', [])
+                    self.reactions = getattr(original_msg, 'reactions', [])
+                    self.webhook_id = getattr(original_msg, 'webhook_id', None)
+                    self.application_id = getattr(original_msg, 'application_id', None)
+                    self.activity = getattr(original_msg, 'activity', None)
+                    self.application = getattr(original_msg, 'application', None)
+                    self.stickers = getattr(original_msg, 'stickers', [])
+                    self.components = getattr(original_msg, 'components', [])
+                    self.thread = getattr(original_msg, 'thread', None)
+                    self.interaction = getattr(original_msg, 'interaction', None)
+                    self.role_subscription = getattr(original_msg, 'role_subscription', None)
+                    self.resolved = getattr(original_msg, 'resolved', None)
+                    self.position = getattr(original_msg, 'position', None)
+                    self.poll = getattr(original_msg, 'poll', None)
+                    self.call = getattr(original_msg, 'call', None)
+                    
+                def reply(self, *args, **kwargs):
+                    return self.channel.send(*args, **kwargs)
+            
+            retry_message = RetryMessage(original_message, modified_content)
+            
+            # Process the message using the existing on_message logic
+            await self.on_message(retry_message)
+            
+        except Exception as e:
+            logging.error(f"Error in retry_with_modified_content: {e}", exc_info=True)
+            # Send an error message to the channel
+            try:
+                await original_message.channel.send(
+                    f"❌ Failed to retry the request: {str(e)}"
+                )
+            except:
+                pass  # Ignore errors when sending error messages

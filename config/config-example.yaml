@@ -376,7 +376,20 @@ alternative_search_query_generation:
   search_query_generation_prompt_template: |
     <task>
     Analyze the latest query to determine if it requires web search. Consider the chat history for context.
+    Pay special attention to explicit search directives in the query.
     </task>
+
+    <explicit_directives>
+    If the query ends with "SEARCH THE NET":
+    - The user explicitly wants web search enabled
+    - Force web search to be required regardless of other criteria
+    - Remove "SEARCH THE NET" from the query before generating search terms
+
+    If the query ends with "DO NOT SEARCH THE NET":
+    - The user explicitly wants web search disabled
+    - Force web search to be NOT required regardless of other criteria
+    - Return {"web_search_required": false} immediately
+    </explicit_directives>
 
     <criteria>
     Web search IS required when the query asks about:
@@ -395,11 +408,13 @@ alternative_search_query_generation:
     </criteria>
 
     <instructions>
-    1. Analyze the latest query in the context of the chat history
-    2. Determine if web search is required based on the criteria above
-    3. If web search is required, generate specific search queries that would find the needed information
-    4. For queries with multiple distinct subjects, create separate search queries for each
-    5. Return your response in the exact JSON format shown in the examples
+    1. First check for explicit directives ("SEARCH THE NET" or "DO NOT SEARCH THE NET")
+    2. If explicit directive found, follow it and clean the query text for search generation
+    3. If no explicit directive, analyze the latest query in the context of the chat history
+    4. Determine if web search is required based on the criteria above
+    5. If web search is required, generate specific search queries that would find the needed information
+    6. For queries with multiple distinct subjects, create separate search queries for each
+    7. Return your response in the exact JSON format shown in the examples
     </instructions>
 
     <examples>
@@ -443,6 +458,31 @@ alternative_search_query_generation:
       "search_queries": ["UN climate summit latest outcomes 2024"]
     }
     </output>
+    </example>
+
+    <example>
+    <chat_history>
+    User: What is Python programming?
+    Assistant: Python is a high-level programming language...
+    </chat_history>
+    <latest_query>Explain object-oriented programming SEARCH THE NET</latest_query>
+    <o>
+    {
+      "web_search_required": true,
+      "search_queries": ["object-oriented programming explanation examples"]
+    }
+    </o>
+    </example>
+
+    <example>
+    <chat_history>
+    User: Tell me about current market trends
+    Assistant: I'd be happy to help with market trends...
+    </chat_history>
+    <latest_query>What's the stock price of Apple today DO NOT SEARCH THE NET</latest_query>
+    <o>
+    {"web_search_required": false}
+    </o>
     </example>
     </examples>
 
