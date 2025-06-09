@@ -148,12 +148,30 @@ class ResponseActionView(ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
+            # Disable this button after clicking
+            self.disabled = True
+            self.style = discord.ButtonStyle.secondary  # Change to greyed out style
+            
             view: "ResponseActionView" = self.view  # Type hint for clarity
-            if not view.grounding_metadata:
-                await interaction.response.send_message(
-                    "No grounding metadata available.", ephemeral=False
-                )
-                return
+            
+            # Update the view to reflect the disabled button
+            try:
+                await interaction.response.edit_message(view=view)
+                # Now send the follow-up with the actual content
+                if not view.grounding_metadata:
+                    await interaction.followup.send(
+                        "No grounding metadata available.", ephemeral=False
+                    )
+                    return
+            except discord.NotFound:
+                # If the original message is not found, proceed without editing
+                if not view.grounding_metadata:
+                    await interaction.response.send_message(
+                        "No grounding metadata available.", ephemeral=False
+                    )
+                    return
+                # Defer the response for follow-up
+                await interaction.response.defer()
 
             embeds_to_send = []
             current_embed = discord.Embed(
@@ -276,20 +294,23 @@ class ResponseActionView(ui.View):
                         )
                     elif view.grounding_metadata:
                         metadata_str = str(view.grounding_metadata)
-                    await interaction.response.send_message(
+                    
+                    # Use followup since we already responded
+                    await interaction.followup.send(
                         f"Could not extract specific sources. Raw metadata:\n```json\n{metadata_str[:1900]}\n```",
                         ephemeral=False,
                     )
                 except Exception as e:
                     logging.error(f"Error sending raw metadata: {e}")
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "No grounding source information could be extracted.",
                         ephemeral=False,
                     )
                 return
 
             try:
-                await interaction.response.send_message(
+                # Use followup since we already responded
+                await interaction.followup.send(
                     embed=embeds_to_send[0],
                     ephemeral=False,
                 )
@@ -300,7 +321,6 @@ class ResponseActionView(ui.View):
                 logging.error(
                     f"HTTPException sending source embeds (might be too large even after split): {e}"
                 )
-                # Use followup because initial response was already sent
                 await interaction.followup.send(
                     "Failed to send sources as embeds (likely too large).",
                     ephemeral=False,
@@ -308,7 +328,6 @@ class ResponseActionView(ui.View):
             except Exception as e:
                 logging.error(f"Unexpected error sending source embeds: {e}")
                 try:
-                    # Use followup because initial response was already sent
                     await interaction.followup.send(
                         "An unexpected error occurred while sending sources.",
                         ephemeral=False,
@@ -325,16 +344,24 @@ class ResponseActionView(ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
+            # Disable this button after clicking
+            self.disabled = True
+            self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
+            
             # Access parent view's data
             view: "ResponseActionView" = self.view
-            if not view.full_response_text:
-                await interaction.response.send_message(
-                    "No response text available to send.",
-                    ephemeral=False,
-                )
-                return
-
+            
+            # Update the view to reflect the disabled button
             try:
+                await interaction.response.edit_message(view=view)
+                
+                if not view.full_response_text:
+                    await interaction.followup.send(
+                        "No response text available to send.",
+                        ephemeral=False,
+                    )
+                    return
+                
                 # Clean model name for filename
                 safe_model_name = re.sub(
                     r'[<>:"/\\|?*]', "_", view.model_name or "llm"
@@ -345,13 +372,43 @@ class ResponseActionView(ui.View):
                 file_content = io.BytesIO(view.full_response_text.encode("utf-8"))
                 discord_file = discord.File(fp=file_content, filename=filename)
 
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     file=discord_file,
                     ephemeral=False,
                 )
+            except discord.NotFound:
+                # If the original message is not found, handle normally
+                if not view.full_response_text:
+                    await interaction.response.send_message(
+                        "No response text available to send.",
+                        ephemeral=False,
+                    )
+                    return
+
+                try:
+                    # Clean model name for filename
+                    safe_model_name = re.sub(
+                        r'[<>:"/\\|?*]', "_", view.model_name or "llm"
+                    )  # Replace invalid chars
+                    filename = f"llm_response_{safe_model_name}.txt"
+
+                    # Create a file-like object from the string
+                    file_content = io.BytesIO(view.full_response_text.encode("utf-8"))
+                    discord_file = discord.File(fp=file_content, filename=filename)
+
+                    await interaction.response.send_message(
+                        file=discord_file,
+                        ephemeral=False,
+                    )
+                except Exception as e:
+                    logging.error(f"Error creating or sending text file: {e}")
+                    await interaction.response.send_message(
+                        "Sorry, I couldn't create the text file.",
+                        ephemeral=False,
+                    )
             except Exception as e:
                 logging.error(f"Error creating or sending text file: {e}")
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Sorry, I couldn't create the text file.",
                     ephemeral=False,
                 )
@@ -365,61 +422,124 @@ class ResponseActionView(ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
+            # Disable this button after clicking
+            self.disabled = True
+            self.style = discord.ButtonStyle.secondary  # Change to greyed out style
+            
             view: "ResponseActionView" = self.view
-            if not view.full_response_text:
-                await interaction.response.send_message(
-                    "No response text available to render.", ephemeral=False
-                )
-                return
-            if not view.app_config:
-                await interaction.response.send_message(
-                    "Application configuration is not available for rendering.",
-                    ephemeral=False,
-                )
-                return
-
-            output_sharing_cfg = view.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
-            textis_is_enabled = output_sharing_cfg.get(
-                TEXTIS_ENABLED_CONFIG_KEY, False
-            )  # Changed variable name and key
-
-            if not textis_is_enabled:  # Changed variable name
-                await interaction.response.send_message(
-                    "Output sharing (text.is) is not enabled in the configuration.",  # Changed message
-                    ephemeral=False,
-                )
-                return
-
-            await interaction.response.defer(
-                ephemeral=False, thinking=True
-            )  # Defer while processing
-
+            
+            # Update the view to reflect the disabled button
             try:
-                public_url = await start_output_server(
-                    view.full_response_text, view.app_config
-                )
-                if public_url:
+                await interaction.response.edit_message(view=view)
+                
+                if not view.full_response_text:
                     await interaction.followup.send(
-                        f"🔗 View output on text.is: {public_url}",  # Changed message
+                        "No response text available to render.", ephemeral=False
+                    )
+                    return
+                if not view.app_config:
+                    await interaction.followup.send(
+                        "Application configuration is not available for rendering.",
                         ephemeral=False,
                     )
-                    logging.info(
-                        f"Sent text.is public URL via button: {public_url}"
-                    )  # Changed log
-                else:
+                    return
+
+                output_sharing_cfg = view.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
+                textis_is_enabled = output_sharing_cfg.get(
+                    TEXTIS_ENABLED_CONFIG_KEY, False
+                )  # Changed variable name and key
+
+                if not textis_is_enabled:  # Changed variable name
                     await interaction.followup.send(
-                        "Could not generate a public link via text.is for the output.",  # Changed message
+                        "Output sharing (text.is) is not enabled in the configuration.",  # Changed message
                         ephemeral=False,
                     )
-            except Exception as e:
-                logging.error(
-                    f"Error starting or managing output server via button: {e}",
-                    exc_info=True,
-                )
-                await interaction.followup.send(
-                    "An error occurred while trying to generate the rendered output link.",
-                    ephemeral=False,
-                )
+                    return
+
+                # Don't defer again since we already responded
+                try:
+                    public_url = await start_output_server(
+                        view.full_response_text, view.app_config
+                    )
+                    if public_url:
+                        await interaction.followup.send(
+                            f"🔗 View output on text.is: {public_url}",  # Changed message
+                            ephemeral=False,
+                        )
+                        logging.info(
+                            f"Sent text.is public URL via button: {public_url}"
+                        )  # Changed log
+                    else:
+                        await interaction.followup.send(
+                            "Could not generate a public link via text.is for the output.",  # Changed message
+                            ephemeral=False,
+                        )
+                except Exception as e:
+                    logging.error(
+                        f"Error starting or managing output server via button: {e}",
+                        exc_info=True,
+                    )
+                    await interaction.followup.send(
+                        "An error occurred while trying to generate the rendered output link.",
+                        ephemeral=False,
+                    )
+                    
+            except discord.NotFound:
+                # If the original message is not found, handle normally
+                if not view.full_response_text:
+                    await interaction.response.send_message(
+                        "No response text available to render.", ephemeral=False
+                    )
+                    return
+                if not view.app_config:
+                    await interaction.response.send_message(
+                        "Application configuration is not available for rendering.",
+                        ephemeral=False,
+                    )
+                    return
+
+                output_sharing_cfg = view.app_config.get(OUTPUT_SHARING_CONFIG_KEY, {})
+                textis_is_enabled = output_sharing_cfg.get(
+                    TEXTIS_ENABLED_CONFIG_KEY, False
+                )  # Changed variable name and key
+
+                if not textis_is_enabled:  # Changed variable name
+                    await interaction.response.send_message(
+                        "Output sharing (text.is) is not enabled in the configuration.",  # Changed message
+                        ephemeral=False,
+                    )
+                    return
+
+                await interaction.response.defer(
+                    ephemeral=False, thinking=True
+                )  # Defer while processing
+
+                try:
+                    public_url = await start_output_server(
+                        view.full_response_text, view.app_config
+                    )
+                    if public_url:
+                        await interaction.followup.send(
+                            f"🔗 View output on text.is: {public_url}",  # Changed message
+                            ephemeral=False,
+                        )
+                        logging.info(
+                            f"Sent text.is public URL via button: {public_url}"
+                        )  # Changed log
+                    else:
+                        await interaction.followup.send(
+                            "Could not generate a public link via text.is for the output.",  # Changed message
+                            ephemeral=False,
+                        )
+                except Exception as e:
+                    logging.error(
+                        f"Error starting or managing output server via button: {e}",
+                        exc_info=True,
+                    )
+                    await interaction.followup.send(
+                        "An error occurred while trying to generate the rendered output link.",
+                        ephemeral=False,
+                    )
 
     class RetryWithWebSearchButton(ui.Button):
         def __init__(self, row: int):
@@ -430,19 +550,23 @@ class ResponseActionView(ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
+            # Disable this button after clicking
+            self.disabled = True
+            self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
+            
             view: "ResponseActionView" = self.view
-            if not view.original_user_message:
-                await interaction.response.send_message(
-                    "No original message available to retry.",
-                    ephemeral=False,
-                )
-                return
-
-            await interaction.response.defer(
-                ephemeral=False, thinking=True
-            )  # Defer while processing
-
+            
+            # Update the view to reflect the disabled button
             try:
+                await interaction.response.edit_message(view=view)
+                
+                if not view.original_user_message:
+                    await interaction.followup.send(
+                        "No original message available to retry.",
+                        ephemeral=False,
+                    )
+                    return
+
                 # Get the bot client from the interaction
                 bot_client = interaction.client
                 
@@ -464,6 +588,50 @@ class ResponseActionView(ui.View):
                         ephemeral=False,
                     )
                     
+            except discord.NotFound:
+                # If the original message is not found, handle normally
+                if not view.original_user_message:
+                    await interaction.response.send_message(
+                        "No original message available to retry.",
+                        ephemeral=False,
+                    )
+                    return
+
+                await interaction.response.defer(
+                    ephemeral=False, thinking=True
+                )  # Defer while processing
+
+                try:
+                    # Get the bot client from the interaction
+                    bot_client = interaction.client
+                    
+                    # Acknowledge the retry attempt
+                    await interaction.followup.send(
+                        "🔄 Retrying with web search enabled...",
+                        ephemeral=False,
+                    )
+                    
+                    # Use the bot's retry method with web search suffix
+                    if hasattr(bot_client, 'retry_with_modified_content'):
+                        await bot_client.retry_with_modified_content(
+                            view.original_user_message, 
+                            "SEARCH THE NET"
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "❌ Unable to retry - retry functionality not available.",
+                            ephemeral=False,
+                        )
+                        
+                except Exception as e:
+                    logging.error(
+                        f"Error retrying with web search: {e}",
+                        exc_info=True,
+                    )
+                    await interaction.followup.send(
+                        "❌ An error occurred while trying to retry with web search.",
+                        ephemeral=False,
+                    )
             except Exception as e:
                 logging.error(
                     f"Error retrying with web search: {e}",
@@ -483,19 +651,23 @@ class ResponseActionView(ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
+            # Disable this button after clicking
+            self.disabled = True
+            self.style = discord.ButtonStyle.secondary  # Keep secondary but disabled
+            
             view: "ResponseActionView" = self.view
-            if not view.original_user_message:
-                await interaction.response.send_message(
-                    "No original message available to retry.",
-                    ephemeral=False,
-                )
-                return
-
-            await interaction.response.defer(
-                ephemeral=False, thinking=True
-            )  # Defer while processing
-
+            
+            # Update the view to reflect the disabled button
             try:
+                await interaction.response.edit_message(view=view)
+                
+                if not view.original_user_message:
+                    await interaction.followup.send(
+                        "No original message available to retry.",
+                        ephemeral=False,
+                    )
+                    return
+
                 # Get the bot client from the interaction
                 bot_client = interaction.client
                 
@@ -517,6 +689,50 @@ class ResponseActionView(ui.View):
                         ephemeral=False,
                     )
                     
+            except discord.NotFound:
+                # If the original message is not found, handle normally
+                if not view.original_user_message:
+                    await interaction.response.send_message(
+                        "No original message available to retry.",
+                        ephemeral=False,
+                    )
+                    return
+
+                await interaction.response.defer(
+                    ephemeral=False, thinking=True
+                )  # Defer while processing
+
+                try:
+                    # Get the bot client from the interaction
+                    bot_client = interaction.client
+                    
+                    # Acknowledge the retry attempt
+                    await interaction.followup.send(
+                        "🔄 Retrying without web search...",
+                        ephemeral=False,
+                    )
+                    
+                    # Use the bot's retry method with no web search suffix
+                    if hasattr(bot_client, 'retry_with_modified_content'):
+                        await bot_client.retry_with_modified_content(
+                            view.original_user_message, 
+                            "DO NOT SEARCH THE NET"
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "❌ Unable to retry - retry functionality not available.",
+                            ephemeral=False,
+                        )
+                        
+                except Exception as e:
+                    logging.error(
+                        f"Error retrying without web search: {e}",
+                        exc_info=True,
+                    )
+                    await interaction.followup.send(
+                        "❌ An error occurred while trying to retry without web search.",
+                        ephemeral=False,
+                    )
             except Exception as e:
                 logging.error(
                     f"Error retrying without web search: {e}",
