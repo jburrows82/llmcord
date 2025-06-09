@@ -62,9 +62,13 @@ from .constants import (
     WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY,
     WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY,
     WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY,
+    WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY,
+    HTTP_CLIENT_USE_HTTP2_CONFIG_KEY,
     DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED,
     DEFAULT_WEB_CONTENT_EXTRACTION_API_URL,
     DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS,
+    DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL,
+    DEFAULT_HTTP_CLIENT_USE_HTTP2,
     # Grounding Model Parameters
     GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY,
     DEFAULT_GROUNDING_MODEL_TEMPERATURE,
@@ -1011,6 +1015,51 @@ async def get_config(filename="config/config.yaml"):
                     config_data[WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY] = (
                         DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS
                     )
+
+            # Cache TTL
+            if WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY not in config_data:
+                config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = (
+                    DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
+                )
+                logging.info(
+                    f"'{WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL}"
+                )
+            else:
+                try:
+                    val = int(config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY])
+                    if val <= 0:
+                        logging.warning(
+                            f"'{WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY}' ({val}) must be positive. "
+                            f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL}"
+                        )
+                        config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = (
+                            DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
+                        )
+                    else:
+                        config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = val
+                except ValueError:
+                    logging.warning(
+                        f"'{WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY}' is not a valid integer. "
+                        f"Using default: {DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL}"
+                    )
+                    config_data[WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY] = (
+                        DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
+                    )
+
+            # HTTP/2 setting
+            if HTTP_CLIENT_USE_HTTP2_CONFIG_KEY not in config_data:
+                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = DEFAULT_HTTP_CLIENT_USE_HTTP2
+                logging.info(
+                    f"'{HTTP_CLIENT_USE_HTTP2_CONFIG_KEY}' not found. "
+                    f"Using default: {DEFAULT_HTTP_CLIENT_USE_HTTP2}"
+                )
+            elif not isinstance(config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY], bool):
+                logging.warning(
+                    f"'{HTTP_CLIENT_USE_HTTP2_CONFIG_KEY}' is not a boolean. "
+                    f"Using default: {DEFAULT_HTTP_CLIENT_USE_HTTP2}"
+                )
+                config_data[HTTP_CLIENT_USE_HTTP2_CONFIG_KEY] = DEFAULT_HTTP_CLIENT_USE_HTTP2
 
             # --- Load Alternative Search Query Generation Settings ---
             alt_search_config = config_data.get(ALT_SEARCH_SECTION_KEY, {})

@@ -321,6 +321,12 @@ crawl4ai_cache_mode: "bypass"
 web_content_extraction_api_enabled: false # Set to true to enable.
 web_content_extraction_api_url: "http://localhost:8080/search" # URL of the API.
 web_content_extraction_api_max_results: 3 # Max results to request from this API.
+# Cache TTL for API responses in minutes (default: 15). Improves performance by reusing results for identical queries.
+web_content_extraction_api_cache_ttl_minutes: 15
+
+# --- HTTP Client Optimization ---
+# Enable HTTP/2 for improved performance with supported servers (default: true)
+http_client_use_http2: true
 
 # --- Gemini Thinking Budget (Optional) ---
 # Allows Gemini models more "thinking" time, potentially improving complex query responses but increasing latency.

@@ -75,8 +75,15 @@ class LLMCordClient(discord.Client):
         self.msg_nodes: Dict[int, models.MsgNode] = {}  # Message cache
         self.last_task_time: float = 0  # For stream editing delay
         self.config = config  # Store loaded config
+        # Optimized HTTP client for improved performance
+        from ..core.constants import HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        use_http2 = config.get(HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2)
         self.httpx_client = httpx.AsyncClient(
-            timeout=20.0, follow_redirects=True
+            timeout=20.0, 
+            follow_redirects=True,
+            limits=limits,
+            http2=use_http2  # Configurable HTTP/2 support
         )  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
