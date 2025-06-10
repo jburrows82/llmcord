@@ -66,6 +66,8 @@ Config = Dict[str, Any]  # For type hinting and accessing config
 # Simple in-memory cache for API responses
 _api_response_cache: Dict[str, Tuple[Dict[str, Any], datetime, int]] = {}
 
+MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS = 10  # Hard-limit to avoid saturating the local API server
+
 
 def _get_cache_key(
     query: str,
@@ -129,71 +131,77 @@ async def _fetch_batch_queries_from_web_content_api(
     """
     Optimized batch fetching with caching and reduced timeout.
     Returns results in the same order as input queries.
+    This implementation additionally:
+    1. Eliminates duplicate uncached queries so we never hit the API twice for the same query in a single batch.
+    2. Uses a semaphore to constrain the level of concurrency to avoid overwhelming the local API while still achieving high throughput.
     """
-    results = []
-    uncached_queries = []
-    uncached_indices = []
+    # Pre-allocate result list so we can easily fill by index later on.
+    results: List[Optional[Dict[str, Any]]] = [None] * len(queries)
 
-    # First pass: check cache
-    for i, query in enumerate(queries):
+    # ---------------------------------------------------------------------
+    # Pass 1 – satisfy as many queries as possible from the in-memory cache.
+    # ---------------------------------------------------------------------
+    uncached_query_to_indices: Dict[str, List[int]] = {}
+    for idx, query in enumerate(queries):
         cache_key = _get_cache_key(query, api_url, api_max_results, max_char_per_url)
         cached_result = _get_cached_response(cache_key, cache_ttl_minutes)
         if cached_result is not None:
             logging.debug(f"Using cached result for query: '{query}'")
-            results.append(cached_result)
+            results[idx] = cached_result
         else:
-            results.append(None)  # Placeholder
-            uncached_queries.append(query)
-            uncached_indices.append(i)
+            # Keep track of every position in *queries* that needs this uncached query.
+            uncached_query_to_indices.setdefault(query, []).append(idx)
 
-    # Second pass: fetch uncached queries
-    if uncached_queries:
-        logging.info(
-            f"Fetching {len(uncached_queries)} uncached queries from External Web Content API"
-        )
+    # Short-circuit if everything was already cached.
+    if not uncached_query_to_indices:
+        return results
 
-        # Create tasks for uncached queries
-        fetch_tasks = []
-        for query in uncached_queries:
-            fetch_tasks.append(
-                _fetch_single_query_from_web_content_api(
-                    query, client, api_url, api_max_results, max_char_per_url
-                )
+    logging.info(
+        f"Fetching {len(uncached_query_to_indices)} unique uncached queries (mapped from {sum(len(v) for v in uncached_query_to_indices.values())} total) from External Web Content API"
+    )
+
+    # ---------------------------------------------------------------------
+    # Pass 2 – perform the actual network requests, constrained by a semaphore.
+    # ---------------------------------------------------------------------
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS)
+
+    async def _sem_fetch(q: str) -> Optional[Dict[str, Any]]:
+        """Wrapper that enforces the concurrency limit via *semaphore*."""
+        async with semaphore:
+            return await _fetch_single_query_from_web_content_api(
+                q, client, api_url, api_max_results, max_char_per_url
             )
 
-        # Execute all uncached requests concurrently
-        try:
-            uncached_results = await asyncio.gather(
-                *fetch_tasks, return_exceptions=True
+    # Kick off tasks for every unique uncached query.
+    fetch_tasks = {query: asyncio.create_task(_sem_fetch(query)) for query in uncached_query_to_indices}
+
+    # Wait for all tasks to finish (preserving errors for logging below).
+    await asyncio.gather(*fetch_tasks.values(), return_exceptions=True)
+
+    # ---------------------------------------------------------------------
+    # Pass 3 – populate *results* and cache successful responses.
+    # ---------------------------------------------------------------------
+    for query, task in fetch_tasks.items():
+        if task.cancelled():
+            continue  # Skip cancelled tasks (shouldn't normally happen)
+
+        exc = task.exception()
+        if exc is not None:
+            logging.error(
+                f"Exception during API call for query '{query}': {exc}"
             )
+            continue  # Leave corresponding indices as None
 
-            # Process results and update cache
-            for i, (query, result_or_exc) in enumerate(
-                zip(uncached_queries, uncached_results)
-            ):
-                idx = uncached_indices[i]
+        result_payload: Optional[Dict[str, Any]] = task.result()
 
-                if isinstance(result_or_exc, Exception):
-                    logging.error(
-                        f"Exception during API call for query '{query}': {result_or_exc}"
-                    )
-                    results[idx] = None
-                elif result_or_exc is not None:
-                    # Cache successful responses
-                    cache_key = _get_cache_key(
-                        query, api_url, api_max_results, max_char_per_url
-                    )
-                    _cache_response(cache_key, result_or_exc, cache_ttl_minutes)
-                    results[idx] = result_or_exc
-                else:
-                    results[idx] = None
+        if result_payload is not None:
+            # Cache the successful response so future batches can reuse it.
+            cache_key = _get_cache_key(query, api_url, api_max_results, max_char_per_url)
+            _cache_response(cache_key, result_payload, cache_ttl_minutes)
 
-        except Exception as e:
-            logging.error(f"Error in batch fetch: {e}")
-            # Fill remaining slots with None
-            for idx in uncached_indices:
-                if results[idx] is None:
-                    results[idx] = None
+        # Assign the fetched result (whatever it is) to every original index
+        for idx in uncached_query_to_indices[query]:
+            results[idx] = result_payload
 
     return results
 
