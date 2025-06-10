@@ -25,11 +25,12 @@ async def _async_shorten_url_tinyurl(
             response = await httpx_client.get(api_url, timeout=10.0)
             response.raise_for_status()
         else:
-            # Fallback: create optimized temporary client
-            timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
-            async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
-                response = await client.get(api_url)
-                response.raise_for_status()
+            # Fallback: reuse the shared client to avoid extra connection overhead
+            from ..core.http_client import get_httpx_client
+
+            client = get_httpx_client()
+            response = await client.get(api_url, timeout=10.0)
+            response.raise_for_status()
         short_url = response.text.strip()
         # Basic validation: check if it looks like a URL
         if short_url.startswith("http://") or short_url.startswith("https://"):
@@ -71,13 +72,11 @@ async def share_to_textis(
             client = httpx_client
             should_close = False
         else:
-            # Fallback: create optimized temporary client
-            timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
-            limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
-            client = httpx.AsyncClient(
-                timeout=timeout, follow_redirects=True, limits=limits, http2=True
-            )
-            should_close = True
+            # Fallback: reuse the shared client to avoid spawning a new pool
+            from ..core.http_client import get_httpx_client
+
+            client = get_httpx_client()
+            should_close = False
 
         try:
             # 1. GET the page to obtain CSRF token

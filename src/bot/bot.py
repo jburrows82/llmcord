@@ -8,8 +8,6 @@ from discord import app_commands
 # Use google.genai.types
 from google.genai import types as google_types
 
-import httpx
-
 from ..core.constants import (
     MAX_EMBED_DESCRIPTION_LENGTH,
     AT_AI_PATTERN,
@@ -75,36 +73,10 @@ class LLMCordClient(discord.Client):
         self.msg_nodes: Dict[int, models.MsgNode] = {}  # Message cache
         self.last_task_time: float = 0  # For stream editing delay
         self.config = config  # Store loaded config
-        # Optimized HTTP client for improved performance
-        from ..core.constants import (
-            HTTP_CLIENT_USE_HTTP2_CONFIG_KEY,
-            DEFAULT_HTTP_CLIENT_USE_HTTP2,
-        )
+        # Use the **shared** HTTPX client for the whole application
+        from ..core.http_client import get_httpx_client
 
-        # Enhanced connection pooling for better performance
-        limits = httpx.Limits(
-            max_keepalive_connections=30,  # Increased from 20 for better reuse
-            max_connections=150,  # Increased from 100 for higher concurrency
-            keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
-        )
-        # Optimized timeout configuration
-        timeout = httpx.Timeout(
-            connect=10.0,  # Connection timeout
-            read=20.0,  # Read timeout
-            write=10.0,  # Write timeout
-            pool=5.0,  # Pool timeout for getting a connection
-        )
-        use_http2 = config.get(
-            HTTP_CLIENT_USE_HTTP2_CONFIG_KEY, DEFAULT_HTTP_CLIENT_USE_HTTP2
-        )
-        self.httpx_client = httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            limits=limits,
-            http2=use_http2,  # Configurable HTTP/2 support
-            # Enable connection pooling optimizations
-            trust_env=True,  # Trust proxy environment variables
-        )  # HTTP client for attachments/web
+        self.httpx_client = get_httpx_client(self.config)  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
         from ..content.fetchers.youtube import (
@@ -697,7 +669,9 @@ class LLMCordClient(discord.Client):
     async def close(self):
         """Clean up resources when the bot is shutting down."""
         logging.info("Closing HTTPX client...")
-        await self.httpx_client.aclose()
+        from ..core.http_client import close_httpx_client
+
+        await close_httpx_client()
 
         # Close Reddit client
 
