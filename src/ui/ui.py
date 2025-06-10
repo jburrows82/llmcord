@@ -27,6 +27,7 @@ class ResponseActionView(ui.View):
         model_name: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,  # Added app_config
         original_user_message: Optional[discord.Message] = None,  # Add original message
+        internet_used: Optional[bool] = None,  # Indicates whether last answer used the internet
         timeout=3600,  # 1 hour
     ):
         super().__init__(timeout=timeout)
@@ -35,6 +36,7 @@ class ResponseActionView(ui.View):
         self.model_name = model_name or "llm"  # Default filename model name
         self.app_config = app_config  # Store app_config
         self.original_user_message = original_user_message  # Store original message
+        self.internet_used = internet_used  # Store internet usage flag (may be None)
         self.message: Optional[discord.Message] = (
             None  # Will be set after sending the message
         )
@@ -92,7 +94,25 @@ class ResponseActionView(ui.View):
 
         # Add retry buttons if original message is available
         if self.original_user_message:
-            # Determine the next available row
+            # Determine if the previous answer actually used the internet
+            if self.internet_used is not None:
+                internet_was_used = self.internet_used
+            else:
+                # Fallback: approximate based on grounding metadata if internet_used not explicitly provided
+                internet_was_used = False
+                if self.grounding_metadata and (
+                    (
+                        hasattr(self.grounding_metadata, "web_search_queries")
+                        and self.grounding_metadata.web_search_queries
+                    )
+                    or (
+                        hasattr(self.grounding_metadata, "search_entry_point")
+                        and self.grounding_metadata.search_entry_point
+                    )
+                ):
+                    internet_was_used = True
+
+            # Determine the next available row for the retry buttons
             next_row = 0
             if has_sources_button:
                 next_row = 1
@@ -105,9 +125,13 @@ class ResponseActionView(ui.View):
                 if has_sources_button and self.full_response_text:
                     next_row = 3
 
-            # Add retry buttons on the next row
-            self.add_item(self.RetryWithWebSearchButton(row=next_row))
-            self.add_item(self.RetryWithoutWebSearchButton(row=next_row))
+            # Conditionally add the appropriate retry button based on internet usage
+            if internet_was_used:
+                # If internet was used, offer a retry **without** web search
+                self.add_item(self.RetryWithoutWebSearchButton(row=next_row))
+            else:
+                # If internet was NOT used, offer a retry **with** web search
+                self.add_item(self.RetryWithWebSearchButton(row=next_row))
 
     async def on_timeout(self):
         """Disables all buttons when the view times out."""

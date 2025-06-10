@@ -775,18 +775,28 @@ async def handle_llm_response_stream(
                                     )
                                     has_text_content = bool(final_text_for_this_attempt)
                                     if has_sources or has_text_content:
+                                        # Determine whether the response used the internet.
+                                        internet_used_flag = (
+                                            has_sources
+                                            if current_provider == "google"  # Gemini grounding implies web usage
+                                            else custom_search_queries_generated
+                                        )
+
                                         view_to_attach = ResponseActionView(
                                             grounding_metadata=grounding_metadata_for_this_attempt,
                                             full_response_text=final_text_for_this_attempt,
                                             model_name=current_model_name,
                                             app_config=client.config,
                                             original_user_message=new_msg,
+                                            internet_used=internet_used_flag,
                                         )
-                                        if (
-                                            not view_to_attach
-                                            or len(view_to_attach.children) == 0
-                                        ):
-                                            view_to_attach = None
+
+                                if "view_to_attach" in locals():
+                                    if (
+                                        not view_to_attach
+                                        or len(view_to_attach.children) == 0
+                                    ):
+                                        view_to_attach = None
 
                             target_msg_for_node_update = None
                             if start_next_msg:
@@ -985,26 +995,6 @@ async def handle_llm_response_stream(
                                 client.msg_nodes[
                                     response_msg.id
                                 ].full_response_text = final_text_for_this_attempt
-
-                            client.last_task_time = dt.now().timestamp()
-
-                        else:
-                            # No image data received, send text only
-                            if processing_msg:
-                                await processing_msg.edit(
-                                    content=final_text_for_this_attempt
-                                    or "Image generation completed but no image was received.",
-                                    embed=None,
-                                    view=None,
-                                )
-                                response_msgs.append(processing_msg)
-                                if processing_msg.id not in client.msg_nodes:
-                                    client.msg_nodes[processing_msg.id] = (
-                                        models.MsgNode(parent_msg=new_msg)
-                                    )
-                                    client.msg_nodes[
-                                        processing_msg.id
-                                    ].full_response_text = final_text_for_this_attempt
 
                     except Exception as e:
                         logging.error(f"Error sending generated image: {e}")
