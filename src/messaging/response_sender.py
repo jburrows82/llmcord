@@ -337,7 +337,10 @@ async def handle_llm_response_stream(
         # Special handling for image generation model
         is_image_generation_model = (
             current_provider == "google"
-            and current_model_name == "gemini-2.0-flash-preview-image-generation"
+            and (
+                current_model_name == "gemini-2.0-flash-preview-image-generation"
+                or current_model_name.startswith("imagen-")
+            )
         )
         accumulated_image_data = None
         accumulated_image_mime_type = None

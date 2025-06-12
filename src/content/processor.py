@@ -200,7 +200,7 @@ async def process_content_and_grounding(
                 logging.info(
                     "User query contains non-backticked URLs. Skipping alternative search query generation."
                 )
-            elif model_name == "gemini-2.0-flash-preview-image-generation":
+            elif model_name == "gemini-2.0-flash-preview-image-generation" or model_name.startswith("imagen-"):
                 # Don't trigger alternative search for image generation model
                 logging.info(
                     "Image generation model detected. Skipping alternative search query generation."

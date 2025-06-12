@@ -33,8 +33,9 @@ from ..core.image_utils import compress_images_in_history
 from .providers.gemini_provider import (
     generate_gemini_stream,
     generate_gemini_image_stream,
-)  # Added import
-from .providers.openai_provider import generate_openai_stream  # Added import
+)
+from .providers.imagen_provider import generate_imagen_image_stream  # NEW
+from .providers.openai_provider import generate_openai_stream
 
 
 async def generate_response_stream(
@@ -88,11 +89,21 @@ async def generate_response_stream(
         AllKeysFailedError: If all available API keys for the provider fail.
         ValueError: If configuration is invalid (e.g., missing keys for required provider).
     """
-    all_api_keys = provider_config.get("api_keys", [])
+    # Determine which key set to use
+    is_imagen_model = provider == "google" and model_name.startswith("imagen-")
+
+    if is_imagen_model:
+        all_api_keys = provider_config.get("billed_api_keys", [])
+    else:
+        all_api_keys = provider_config.get("api_keys", [])
     base_url = provider_config.get("base_url")
     is_gemini = provider == "google"
     is_image_generation_model = (
-        is_gemini and model_name == "gemini-2.0-flash-preview-image-generation"
+        is_gemini
+        and (
+            model_name == "gemini-2.0-flash-preview-image-generation"
+            or model_name.startswith("imagen-")
+        )
     )
 
     # Check if keys are required for this provider
@@ -282,8 +293,8 @@ async def generate_response_stream(
                 # --- Delegate to Provider-Specific Stream Generation ---
                 stream_generator_func = None
                 if is_gemini:
-                    if is_image_generation_model:
-                        # Use special image generation function (no system prompts, no grounding)
+                    if model_name == "gemini-2.0-flash-preview-image-generation":
+                        # Gemini native image generation
                         stream_generator_func = generate_gemini_image_stream(
                             api_key=current_api_key,
                             model_name=model_name,
@@ -291,8 +302,17 @@ async def generate_response_stream(
                             extra_params=extra_params,
                             app_config=app_config,
                         )
+                    elif model_name.startswith("imagen-"):
+                        # Imagen 3 image generation
+                        stream_generator_func = generate_imagen_image_stream(
+                            api_key=current_api_key,
+                            model_name=model_name,
+                            history_for_api_call=history_for_current_compression_cycle,
+                            extra_params=extra_params,
+                            app_config=app_config,
+                        )
                     else:
-                        # Use regular Gemini function
+                        # Regular Gemini text model
                         stream_generator_func = generate_gemini_stream(
                             api_key=current_api_key,
                             model_name=model_name,
@@ -316,7 +336,7 @@ async def generate_response_stream(
 
                 # --- Stream Processing Loop (now consumes from provider-specific generator) ---
                 if is_image_generation_model:
-                    # Handle image generation model with expanded tuple
+                    # Handle image generation models (Gemini or Imagen) with expanded tuple
                     async for (
                         text_chunk,
                         chunk_finish_reason,

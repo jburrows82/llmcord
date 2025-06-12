@@ -207,6 +207,7 @@ AVAILABLE_MODELS = {
     "google": [
         "gemini-2.5-flash-preview-05-20",
         "gemini-2.0-flash-preview-image-generation",
+        "imagen-3.0-generate-002",
         # Add other Gemini models as needed/supported
     ],
     "openai": [

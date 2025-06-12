@@ -115,6 +115,9 @@ providers:
       - YOUR_GEMINI_KEY_2
       # Optional: Additional Google API key. Comment out to disable.
       - ...
+    billed_api_keys:   # keys you want charged for Imagen usage only
+      - IMAGEN_BILLED_KEY_1
+      - IMAGEN_BILLED_KEY_2
   mistral:
     base_url: https://api.mistral.ai/v1
     api_keys:
