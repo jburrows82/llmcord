@@ -7,6 +7,50 @@ from typing import List, Dict, Optional, Any, Set
 import discord
 from google.genai import types as google_types  # For finish_reason comparison
 
+# New import for creating a safe typing context manager
+from contextlib import asynccontextmanager
+
+# ---------------------------------------------------------------------------
+# Utility: safe_typing
+# ---------------------------------------------------------------------------
+# Discord may occasionally reject the `CHANNEL_TYPING` request with a 403 error
+# (for example, when Cloudflare blocks the request and returns error code
+# 40333 "internal network error").
+#
+# When this happens we don't want the whole response flow to crash – the typing
+# indicator is purely cosmetic.  The helper below mirrors the behaviour of
+# `channel.typing()` but silently degrades to a no-op if Discord responds with
+# *Forbidden* or any 403 error.  It lets the rest of the coroutine continue
+# unaffected.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def safe_typing(channel: discord.abc.Messageable):
+    """A drop-in replacement for `channel.typing()` that swallows 403 errors."""
+
+    try:
+        async with channel.typing():
+            yield
+    except discord.Forbidden as e:
+        # Missing permission or Cloudflare block (error code 40333).
+        logging.warning(
+            "Typing indicator failed with Forbidden (likely 403/40333). "
+            "Continuing without it."
+        )
+        yield
+    except discord.HTTPException as e:
+        # Catch any other 403 response that does not raise the concrete
+        # Forbidden subtype (discord.py sometimes raises raw HTTPException).
+        if getattr(e, "status", None) == 403 or getattr(e, "code", None) == 40333:
+            logging.warning(
+                f"Typing indicator blocked (HTTP 403). Continuing without it: {e}"
+            )
+            yield
+        else:
+            # Re-raise unexpected HTTP errors so they are still surfaced.
+            raise
+
 from ..core import models  # Use relative import
 from ..core.constants import (
     EMBED_COLOR_COMPLETE,
@@ -346,7 +390,7 @@ async def handle_llm_response_stream(
         accumulated_image_mime_type = None
 
         try:
-            async with new_msg.channel.typing():
+            async with safe_typing(new_msg.channel):
                 stream_generator = generate_response_stream(
                     provider=current_provider,
                     model_name=current_model_name,
