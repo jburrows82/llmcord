@@ -438,7 +438,7 @@ async def _execute_enhance_prompt_logic(
 
     try:
         # Load prompt enhancement documents
-        doc_path_base = "prompt_data"
+        doc_path_base = os.path.join("data", "prompt_data")
         strategies_doc_path = os.path.join(doc_path_base, "prompt_design_strategies.md")
         guide_2_doc_path = os.path.join(doc_path_base, "prompt_guide_2.md")
         guide_3_doc_path = os.path.join(doc_path_base, "prompt_guide_3.md")
