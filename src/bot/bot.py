@@ -675,7 +675,9 @@ class LLMCordClient(discord.Client):
 
         # Close Reddit client
 
-        from .content_fetchers.reddit import reddit_client_instance
+        # Import the global Reddit client singleton from the correct package path
+        # NOTE: The fetcher lives in  src/content/fetchers/reddit.py  (double-dot path)
+        from ..content.fetchers.reddit import reddit_client_instance
 
         if reddit_client_instance:
             logging.info("Closing Reddit client...")
