@@ -4,10 +4,8 @@ import discord
 
 from ..core.constants import (
     AVAILABLE_MODELS,
-    DEEP_SEARCH_KEYWORDS,
     VISION_MODEL_TAGS,
     FALLBACK_VISION_MODEL_CONFIG_KEY,
-    DEEP_SEARCH_MODEL_CONFIG_KEY,
 )
 from ..bot.commands import get_user_model_preference
 
@@ -43,54 +41,9 @@ def determine_final_model(
     provider_slash_model = get_user_model_preference(user_id, default_model_str)
     final_provider_slash_model = provider_slash_model
 
-    # --- Override Model based on Keywords (e.g., deepsearch) ---
-    # Check if 'googlelens' keyword was already processed and removed from initial_cleaned_content
-    # For this function, we assume initial_cleaned_content is *before* Google Lens keyword removal
-    # if Google Lens is active, deep search override might be skipped by the caller.
-    # Here, we just check for deep search keywords.
-
-    if any(
-        keyword in initial_cleaned_content.lower() for keyword in DEEP_SEARCH_KEYWORDS
-    ):
-        target_model_str = config.get(
-            DEEP_SEARCH_MODEL_CONFIG_KEY,
-            "x-ai/grok-1",  # Default deep search model
-        )
-        try:
-            target_provider, target_model_name = target_model_str.split("/", 1)
-            provider_exists = target_provider in config.get("providers", {})
-            keys_exist = bool(
-                config.get("providers", {}).get(target_provider, {}).get("api_keys")
-            )
-            is_target_available_in_constants = (
-                target_provider in AVAILABLE_MODELS
-                and target_model_name in AVAILABLE_MODELS.get(target_provider, [])
-            )
-
-            if provider_exists and keys_exist and is_target_available_in_constants:
-                final_provider_slash_model = target_model_str
-                logging.info(
-                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected. Overriding model to {final_provider_slash_model} for user {user_id}."
-                )
-            else:
-                reason = (
-                    "config or keys missing"
-                    if not (provider_exists and keys_exist)
-                    else "not in AVAILABLE_MODELS"
-                )
-                logging.warning(
-                    f"Keywords {DEEP_SEARCH_KEYWORDS} detected, but cannot use '{target_model_str}' ({reason}). Using original: {provider_slash_model}"
-                )
-                user_warnings.add(
-                    f"⚠️ Deep search requested, but model '{target_model_str}' unavailable ({reason})."
-                )
-        except ValueError:
-            logging.error(
-                f"Invalid format for DEEP_SEARCH_MODEL_CONFIG_KEY: '{target_model_str}'"
-            )
-            user_warnings.add(
-                f"⚠️ Deep search model misconfigured. Using '{provider_slash_model}'."
-            )
+    # DeepSearch functionality has been removed. Any 'deepsearch' or related keywords
+    # in user input will no longer trigger a model override. The bot will continue
+    # using the user's preferred or default model selection without modification.
 
     # --- Validate Final Model Selection (after potential keyword override) ---
     try:

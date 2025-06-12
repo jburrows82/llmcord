@@ -70,6 +70,9 @@ serpapi_api_keys:
   # Optional: Additional SerpAPI key for rotation. Comment out to disable.
   - ...
 
+tavily_api_keys:
+  - YOUR_TAVILY_KEY_1
+
 # --- Proxy Configuration for YouTube Transcripts (Optional) ---
 # See: https://github.com/jdepoix/youtube-transcript-api#working-around-ip-bans-requestblocked-or-ipblocked-exception
 # Uncomment and configure ONE of the types below if you experience transcript fetch errors.
