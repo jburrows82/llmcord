@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import Dict
+from datetime import datetime
 
 import discord
 from discord import app_commands
@@ -16,9 +17,8 @@ from ..core.constants import (
     MAX_PLAIN_TEXT_LENGTH,
     GEMINI_USE_THINKING_BUDGET_CONFIG_KEY,
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
-    EMBED_COLOR_ERROR,
-    # New config keys
     MAX_MESSAGE_NODES_CONFIG_KEY,
+    EMBED_COLOR_INCOMPLETE,
 )
 
 from ..core import models
@@ -56,6 +56,7 @@ from ..messaging.response_sender import (
     resend_imgur_urls,  # Also import this helper if direct calls are made from bot.py for exceptions outside stream
 )
 from ..messaging.history_utils import build_message_history
+from ..research.deep_research import perform_deep_research_async  # Added import
 
 
 # --- Discord Client Setup ---
@@ -76,7 +77,9 @@ class LLMCordClient(discord.Client):
         # Use the **shared** HTTPX client for the whole application
         from ..core.http_client import get_httpx_client
 
-        self.httpx_client = get_httpx_client(self.config)  # HTTP client for attachments/web
+        self.httpx_client = get_httpx_client(
+            self.config
+        )  # HTTP client for attachments/web
 
         # Initialize content fetcher modules that need config
         from ..content.fetchers.youtube import (
@@ -387,155 +390,175 @@ class LLMCordClient(discord.Client):
             except (discord.NotFound, discord.HTTPException, Exception):
                 pass  # If we can't fetch the message, just continue without it
 
-        # --- LLM Provider/Model Selection using the new selector function ---
-        (
-            final_provider_slash_model,
-            provider,
-            model_name,
-            provider_config,
-            all_api_keys,
-            is_gemini,
-            is_grok_model,
-            keys_required,
-            accept_files,
-        ) = determine_final_model(
-            user_id=user_id,
-            initial_cleaned_content=cleaned_content,  # Pass content before lens keyword removal
-            image_attachments=image_attachments,
-            has_potential_image_urls_in_text=has_potential_image_urls_in_text,
-            config=self.config,
-            user_warnings=user_warnings,
-        )
+        # --- Deepsearch Integration ---
+        is_deep_search_query = cleaned_content.lower().strip().startswith("deepsearch")
+        if is_deep_search_query:
+            # Get current date in ISO format (UTC) to append to the query/topic
+            current_date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
-        # If Google Lens was triggered, it might have modified cleaned_content.
-        # The model selection should ideally happen *before* lens keyword removal if lens influences model choice.
-        # For now, determine_final_model uses initial_cleaned_content.
-        # If deep_search was triggered by determine_final_model, and lens was also triggered,
-        # the model_selector's logic for deep_search might need to be aware of lens to avoid conflict,
-        # or the bot.py logic needs to ensure lens doesn't run if deep_search model is chosen and incompatible.
-        # Current determine_final_model doesn't explicitly disable lens if deep_search is chosen.
-        # We might need to re-evaluate `use_google_lens` if `determine_final_model` chose a non-vision model due to deep_search.
-        if (
-            use_google_lens and not accept_files
-        ):  # If lens was on, but final model is not vision capable
-            logging.warning(
-                f"Google Lens was active, but final model '{final_provider_slash_model}' does not support vision. Disabling Lens for this request."
+            # Extract the actual topic after the keyword and append the date
+            topic_for_research_raw = (
+                cleaned_content[len("deepsearch") :].strip() or "general"
             )
-            use_google_lens = False  # Turn off lens if the final model (e.g. deep search override) can't use it.
-            # Remove lens keyword from content if it wasn't already by check_google_lens_trigger
-            # This is a bit redundant if check_google_lens_trigger already did it, but safe.
-            if GOOGLE_LENS_PATTERN.match(
-                cleaned_content
-            ):  # Check again on potentially already modified content
-                cleaned_content = GOOGLE_LENS_PATTERN.sub(
-                    "", cleaned_content
-                ).strip()  # Corrected indentation
+            topic_for_research = f"{topic_for_research_raw} {current_date_str}"
 
-        # --- Configuration Values based on final model selection ---
-        max_files_per_message = self.config.get("max_images", 5)
-        # Use the new helper function to get model-specific max_text
-        max_tokens_for_text_config = get_max_text_for_model(
-            self.config, final_provider_slash_model
-        )
-        max_messages = self.config.get("max_messages", 25)
-        use_plain_responses = self.config.get("use_plain_responses", False)
-        split_limit = (
-            MAX_EMBED_DESCRIPTION_LENGTH
-            if not use_plain_responses
-            else MAX_PLAIN_TEXT_LENGTH
-        )
-
-        is_text_empty = not cleaned_content.strip()
-        has_meaningful_attachments_final = any(
-            att.content_type
-            and (
-                (
-                    att.content_type.startswith("image/")
-                    and (accept_files or use_google_lens)
-                )
-                or att.content_type.startswith("text/")
-                or (
-                    att.content_type == "application/pdf"
-                    and ((is_gemini and accept_files) or not is_gemini)
-                )
-            )
-            for att in new_msg.attachments
-        )
-        if (
-            is_text_empty
-            and not has_meaningful_attachments_final
-            and not new_msg.reference
-        ):
-            logging.info(
-                f"Empty query received from user {new_msg.author.id} in channel {new_msg.channel.id}. Message ID: {new_msg.id}"
-            )
-            error_message_text = "Your query is empty. Please reply to a message to reference it or don't send an empty query."
-            use_plain = self.config.get("use_plain_responses", False)
-
+            # --- Update initial status message to indicate a deep search is running (before the potentially long operation) ---
             try:
-                if processing_msg:
-                    if use_plain:
-                        await processing_msg.edit(
-                            content=error_message_text, embed=None, view=None
-                        )
+                deepsearch_status_text = (
+                    "⏳ Performing deep search, this may take a while..."
+                )
+                if processing_msg:  # Ensure the initial status message exists
+                    if _use_plain_for_initial_status:
+                        await processing_msg.edit(content=deepsearch_status_text)
                     else:
-                        error_embed = discord.Embed(
-                            description=error_message_text, color=EMBED_COLOR_ERROR
+                        deepsearch_embed = discord.Embed(
+                            description=deepsearch_status_text,
+                            color=EMBED_COLOR_INCOMPLETE,
                         )
-                        await processing_msg.edit(embed=error_embed, view=None)
-                else:
-                    # Fallback if processing_msg couldn't be sent
-                    if use_plain:
-                        await new_msg.reply(
-                            error_message_text,
-                            mention_author=False,
-                            suppress_embeds=True,
-                        )
-                    else:
-                        error_embed = discord.Embed(
-                            description=error_message_text, color=EMBED_COLOR_ERROR
-                        )
-                        await new_msg.reply(embed=error_embed, mention_author=False)
+                        await processing_msg.edit(embed=deepsearch_embed)
             except discord.HTTPException as e:
-                logging.error(f"Failed to send/edit empty query error message: {e}")
+                logging.warning(
+                    f"Failed to update processing message for deep search request: {e}"
+                )
             except Exception as e:
                 logging.error(
-                    f"Unexpected error sending/editing empty query error message: {e}",
+                    f"Unexpected error updating deep search processing message: {e}",
                     exc_info=True,
                 )
-            return
 
-        # --- Content Processing and Grounding ---
-        (
-            formatted_user_urls_content,
-            formatted_google_lens_content,
-            searxng_derived_context_str,
-            url_fetch_results,  # Contains results from fetch_external_content
-            custom_search_queries_generated_flag,
-            successful_api_results_count,
-            cleaned_content,  # Potentially modified by content_processor if image URLs were removed
-        ) = await process_content_and_grounding(
-            new_msg=new_msg,
-            cleaned_content=cleaned_content,  # Pass the already cleaned content
-            image_attachments=image_attachments,
-            use_google_lens=use_google_lens,
-            provider=provider,  # Pass current provider
-            model_name=model_name,  # Pass current model name
-            is_gemini_provider=is_gemini,  # Pass boolean for current provider
-            is_grok_model=is_grok_model,  # Pass boolean for current model
-            config=self.config,
-            user_warnings=user_warnings,
-            httpx_client=self.httpx_client,
-            max_messages=max_messages,
-            max_tokens_for_text_config=max_tokens_for_text_config,
-            max_files_per_message_config=max_files_per_message,
-            current_model_accepts_files=accept_files,
-            msg_nodes_cache=self.msg_nodes,
-            bot_user_obj=self.user,
-            models_module=models,
-            google_types_module=google_types,
-        )
-        # `cleaned_content` is updated by the call above if image URLs were processed and removed.
+            # Run the asynchronous deep research workflow
+            deep_research_output = await perform_deep_research_async(
+                topic_for_research, self.config
+            )
+
+            # Also append the date to the user query that will be sent to the LLM
+            user_query_with_date = f"{new_msg.content.strip()} {current_date_str}"
+
+            # Build the new prompt expected by the downstream LLM
+            cleaned_content = (
+                "Answer the query based on the deep research report.\n\n"
+                f"user query:\n{user_query_with_date}\n\n"
+                "deep research output:\n"
+                f"{deep_research_output}"
+            )
+
+            # Select provider/model for the final answer
+            (
+                final_provider_slash_model,
+                provider,
+                model_name,
+                provider_config,
+                all_api_keys,
+                is_gemini,
+                is_grok_model,
+                keys_required,
+                accept_files,
+            ) = determine_final_model(
+                user_id=user_id,
+                initial_cleaned_content=cleaned_content,
+                image_attachments=image_attachments,
+                has_potential_image_urls_in_text=has_potential_image_urls_in_text,
+                config=self.config,
+                user_warnings=user_warnings,
+            )
+
+            # Basic configuration derived from the chosen model
+            max_files_per_message = self.config.get("max_images", 5)
+            max_tokens_for_text_config = get_max_text_for_model(
+                self.config, final_provider_slash_model
+            )
+            max_messages = self.config.get("max_messages", 25)
+            use_plain_responses = self.config.get("use_plain_responses", False)
+            split_limit = (
+                MAX_EMBED_DESCRIPTION_LENGTH
+                if not use_plain_responses
+                else MAX_PLAIN_TEXT_LENGTH
+            )
+
+            # Disable unrelated grounding/tools for deepsearch
+            use_google_lens = False
+            formatted_user_urls_content = ""
+            formatted_google_lens_content = ""
+            searxng_derived_context_str = ""
+            url_fetch_results: Dict[str, models.UrlFetchResult] = {}
+            custom_search_queries_generated_flag = False
+            successful_api_results_count = 0
+
+        else:
+            # --- Standard flow (no deepsearch) ---
+            (
+                final_provider_slash_model,
+                provider,
+                model_name,
+                provider_config,
+                all_api_keys,
+                is_gemini,
+                is_grok_model,
+                keys_required,
+                accept_files,
+            ) = determine_final_model(
+                user_id=user_id,
+                initial_cleaned_content=cleaned_content,  # Pass content before lens keyword removal
+                image_attachments=image_attachments,
+                has_potential_image_urls_in_text=has_potential_image_urls_in_text,
+                config=self.config,
+                user_warnings=user_warnings,
+            )
+
+            # If Google Lens was triggered but final model can't handle images, disable lens
+            if use_google_lens and not accept_files:
+                logging.warning(
+                    f"Google Lens was active, but final model '{final_provider_slash_model}' does not support vision. Disabling Lens for this request."
+                )
+                use_google_lens = False
+                if GOOGLE_LENS_PATTERN.match(cleaned_content):
+                    cleaned_content = GOOGLE_LENS_PATTERN.sub(
+                        "", cleaned_content
+                    ).strip()
+
+            # Basic config assignments
+            max_files_per_message = self.config.get("max_images", 5)
+            max_tokens_for_text_config = get_max_text_for_model(
+                self.config, final_provider_slash_model
+            )
+            max_messages = self.config.get("max_messages", 25)
+            use_plain_responses = self.config.get("use_plain_responses", False)
+            split_limit = (
+                MAX_EMBED_DESCRIPTION_LENGTH
+                if not use_plain_responses
+                else MAX_PLAIN_TEXT_LENGTH
+            )
+
+            # --- Content Processing and Grounding ---
+            (
+                formatted_user_urls_content,
+                formatted_google_lens_content,
+                searxng_derived_context_str,
+                url_fetch_results,  # Contains results from fetch_external_content
+                custom_search_queries_generated_flag,
+                successful_api_results_count,
+                cleaned_content,  # Potentially modified by content_processor if image URLs were removed
+            ) = await process_content_and_grounding(
+                new_msg=new_msg,
+                cleaned_content=cleaned_content,
+                image_attachments=image_attachments,
+                use_google_lens=use_google_lens,
+                provider=provider,
+                model_name=model_name,
+                is_gemini_provider=is_gemini,
+                is_grok_model=is_grok_model,
+                config=self.config,
+                user_warnings=user_warnings,
+                httpx_client=self.httpx_client,
+                max_messages=max_messages,
+                max_tokens_for_text_config=max_tokens_for_text_config,
+                max_files_per_message_config=max_files_per_message,
+                current_model_accepts_files=accept_files,
+                msg_nodes_cache=self.msg_nodes,
+                bot_user_obj=self.user,
+                models_module=models,
+                google_types_module=google_types,
+            )
 
         history_for_llm = await build_message_history(
             new_msg=new_msg,
@@ -621,6 +644,7 @@ class LLMCordClient(discord.Client):
             split_limit_config=split_limit,
             custom_search_queries_generated=custom_search_queries_generated_flag,  # New
             successful_api_results_count=successful_api_results_count,  # New
+            deep_search_used=is_deep_search_query,
         )
 
         try:

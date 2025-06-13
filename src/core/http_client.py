@@ -1,4 +1,5 @@
-from __future__ import annotations
+# NOTE: Module docstring must precede any future-import statements for PEP 236 compliance.
+# The `annotations` future import is now placed immediately after the docstring.
 
 """Shared HTTPX client utilities.
 
@@ -24,6 +25,8 @@ which can optionally be overridden by passing in a configuration dict containing
 `http_client_use_http2` (bool).  Subsequent calls always return the **same**
 instance, ignoring further config values.
 """
+
+from __future__ import annotations
 
 from typing import Optional, Dict, Any
 
@@ -89,4 +92,4 @@ async def close_httpx_client() -> None:
         try:
             await _shared_async_client.aclose()
         finally:
-            _shared_async_client = None 
+            _shared_async_client = None

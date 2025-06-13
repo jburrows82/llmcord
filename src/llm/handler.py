@@ -98,12 +98,9 @@ async def generate_response_stream(
         all_api_keys = provider_config.get("api_keys", [])
     base_url = provider_config.get("base_url")
     is_gemini = provider == "google"
-    is_image_generation_model = (
-        is_gemini
-        and (
-            model_name == "gemini-2.0-flash-preview-image-generation"
-            or model_name.startswith("imagen-")
-        )
+    is_image_generation_model = is_gemini and (
+        model_name == "gemini-2.0-flash-preview-image-generation"
+        or model_name.startswith("imagen-")
     )
 
     # Check if keys are required for this provider

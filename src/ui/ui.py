@@ -27,7 +27,9 @@ class ResponseActionView(ui.View):
         model_name: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,  # Added app_config
         original_user_message: Optional[discord.Message] = None,  # Add original message
-        internet_used: Optional[bool] = None,  # Indicates whether last answer used the internet
+        internet_used: Optional[
+            bool
+        ] = None,  # Indicates whether last answer used the internet
         timeout=3600,  # 1 hour
     ):
         super().__init__(timeout=timeout)

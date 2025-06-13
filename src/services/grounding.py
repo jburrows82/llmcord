@@ -66,7 +66,9 @@ Config = Dict[str, Any]  # For type hinting and accessing config
 # Simple in-memory cache for API responses
 _api_response_cache: Dict[str, Tuple[Dict[str, Any], datetime, int]] = {}
 
-MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS = 10  # Hard-limit to avoid saturating the local API server
+MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS = (
+    10  # Hard-limit to avoid saturating the local API server
+)
 
 
 def _get_cache_key(
@@ -173,7 +175,10 @@ async def _fetch_batch_queries_from_web_content_api(
             )
 
     # Kick off tasks for every unique uncached query.
-    fetch_tasks = {query: asyncio.create_task(_sem_fetch(query)) for query in uncached_query_to_indices}
+    fetch_tasks = {
+        query: asyncio.create_task(_sem_fetch(query))
+        for query in uncached_query_to_indices
+    }
 
     # Wait for all tasks to finish (preserving errors for logging below).
     await asyncio.gather(*fetch_tasks.values(), return_exceptions=True)
@@ -187,16 +192,16 @@ async def _fetch_batch_queries_from_web_content_api(
 
         exc = task.exception()
         if exc is not None:
-            logging.error(
-                f"Exception during API call for query '{query}': {exc}"
-            )
+            logging.error(f"Exception during API call for query '{query}': {exc}")
             continue  # Leave corresponding indices as None
 
         result_payload: Optional[Dict[str, Any]] = task.result()
 
         if result_payload is not None:
             # Cache the successful response so future batches can reuse it.
-            cache_key = _get_cache_key(query, api_url, api_max_results, max_char_per_url)
+            cache_key = _get_cache_key(
+                query, api_url, api_max_results, max_char_per_url
+            )
             _cache_response(cache_key, result_payload, cache_ttl_minutes)
 
         # Assign the fetched result (whatever it is) to every original index

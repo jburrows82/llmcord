@@ -128,7 +128,9 @@ async def generate_imagen_image_stream(
                 mime_type = "image/png"
 
             if not image_bytes:
-                logging.warning("Received a generated_image without image bytes – skipping this entry.")
+                logging.warning(
+                    "Received a generated_image without image bytes – skipping this entry."
+                )
                 continue
 
             logging.info(
@@ -144,4 +146,4 @@ async def generate_imagen_image_stream(
         yield None, None, None, f"Imagen API Error: {type(e).__name__}", None, None
     except Exception as e:
         logging.exception("Unexpected error in generate_imagen_image_stream")
-        yield None, None, None, f"Unexpected error: {type(e).__name__}", None, None 
+        yield None, None, None, f"Unexpected error: {type(e).__name__}", None, None

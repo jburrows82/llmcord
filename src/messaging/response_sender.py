@@ -11,46 +11,8 @@ from google.genai import types as google_types  # For finish_reason comparison
 from contextlib import asynccontextmanager
 
 # ---------------------------------------------------------------------------
-# Utility: safe_typing
+# Project-internal imports (placed here to comply with Ruff's E402 rule)
 # ---------------------------------------------------------------------------
-# Discord may occasionally reject the `CHANNEL_TYPING` request with a 403 error
-# (for example, when Cloudflare blocks the request and returns error code
-# 40333 "internal network error").
-#
-# When this happens we don't want the whole response flow to crash – the typing
-# indicator is purely cosmetic.  The helper below mirrors the behaviour of
-# `channel.typing()` but silently degrades to a no-op if Discord responds with
-# *Forbidden* or any 403 error.  It lets the rest of the coroutine continue
-# unaffected.
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def safe_typing(channel: discord.abc.Messageable):
-    """A drop-in replacement for `channel.typing()` that swallows 403 errors."""
-
-    try:
-        async with channel.typing():
-            yield
-    except discord.Forbidden as e:
-        # Missing permission or Cloudflare block (error code 40333).
-        logging.warning(
-            "Typing indicator failed with Forbidden (likely 403/40333). "
-            "Continuing without it."
-        )
-        yield
-    except discord.HTTPException as e:
-        # Catch any other 403 response that does not raise the concrete
-        # Forbidden subtype (discord.py sometimes raises raw HTTPException).
-        if getattr(e, "status", None) == 403 or getattr(e, "code", None) == 40333:
-            logging.warning(
-                f"Typing indicator blocked (HTTP 403). Continuing without it: {e}"
-            )
-            yield
-        else:
-            # Re-raise unexpected HTTP errors so they are still surfaced.
-            raise
-
 from ..core import models  # Use relative import
 from ..core.constants import (
     EMBED_COLOR_COMPLETE,
@@ -123,6 +85,7 @@ async def handle_llm_response_stream(
     split_limit_config: int,
     custom_search_queries_generated: bool,  # New parameter
     successful_api_results_count: int,  # New parameter
+    deep_search_used: bool = False,  # Indicates a Deepsearch workflow was used
 ):
     """Handles the streaming, editing, and sending of LLM responses."""
     response_msgs: List[discord.Message] = []
@@ -379,12 +342,9 @@ async def handle_llm_response_stream(
         grounding_metadata_for_this_attempt = None
 
         # Special handling for image generation model
-        is_image_generation_model = (
-            current_provider == "google"
-            and (
-                current_model_name == "gemini-2.0-flash-preview-image-generation"
-                or current_model_name.startswith("imagen-")
-            )
+        is_image_generation_model = current_provider == "google" and (
+            current_model_name == "gemini-2.0-flash-preview-image-generation"
+            or current_model_name.startswith("imagen-")
         )
         accumulated_image_data = None
         accumulated_image_mime_type = None
@@ -722,6 +682,12 @@ async def handle_llm_response_stream(
 
                                     internet_info_parts = []
 
+                                    # If Deepsearch was used, override footer info
+                                    if deep_search_used:
+                                        internet_info_parts.append(
+                                            "Deepsearch was used"
+                                        )
+
                                     # --- Begin Gemini-specific grounding logic for footer ---
                                     is_gemini = (
                                         current_provider == "google"
@@ -775,9 +741,10 @@ async def handle_llm_response_stream(
                                                     f"{num_results} search result{'s' if num_results != 1 else ''} processed"
                                                 )
                                         else:
-                                            internet_info_parts.append(
-                                                "Internet not used"
-                                            )
+                                            if not deep_search_used:
+                                                internet_info_parts.append(
+                                                    "Internet not used"
+                                                )
                                     else:
                                         # Non-Gemini: keep existing logic
                                         if custom_search_queries_generated:
@@ -786,9 +753,10 @@ async def handle_llm_response_stream(
                                                 f"{successful_api_results_count} search result{'s' if successful_api_results_count != 1 else ''} processed"
                                             )
                                         else:
-                                            internet_info_parts.append(
-                                                "Internet not used"
-                                            )
+                                            if not deep_search_used:
+                                                internet_info_parts.append(
+                                                    "Internet not used"
+                                                )
                                     # --- End Gemini-specific grounding logic for footer ---
 
                                     if internet_info_parts:
@@ -825,7 +793,8 @@ async def handle_llm_response_stream(
                                         # Determine whether the response used the internet.
                                         internet_used_flag = (
                                             has_sources
-                                            if current_provider == "google"  # Gemini grounding implies web usage
+                                            if current_provider
+                                            == "google"  # Gemini grounding implies web usage
                                             else custom_search_queries_generated
                                         )
 
@@ -1341,3 +1310,45 @@ async def resend_imgur_urls(
                 logging.error(
                     f"Unexpected error resending Imgur URL chunk {i + 1}: {e}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Utility: safe_typing
+# ---------------------------------------------------------------------------
+# Discord may occasionally reject the `CHANNEL_TYPING` request with a 403 error
+# (for example, when Cloudflare blocks the request and returns error code
+# 40333 "internal network error").
+#
+# When this happens we don't want the whole response flow to crash – the typing
+# indicator is purely cosmetic.  The helper below mirrors the behaviour of
+# `channel.typing()` but silently degrades to a no-op if Discord responds with
+# *Forbidden* or any 403 error.  It lets the rest of the coroutine continue
+# unaffected.
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def safe_typing(channel: discord.abc.Messageable):
+    """A drop-in replacement for `channel.typing()` that swallows 403 errors."""
+
+    try:
+        async with channel.typing():
+            yield
+    except discord.Forbidden:
+        # Missing permission or Cloudflare block (error code 40333).
+        logging.warning(
+            "Typing indicator failed with Forbidden (likely 403/40333). "
+            "Continuing without it."
+        )
+        yield
+    except discord.HTTPException as e:
+        # Catch any other 403 response that does not raise the concrete
+        # Forbidden subtype (discord.py sometimes raises raw HTTPException).
+        if getattr(e, "status", None) == 403 or getattr(e, "code", None) == 40333:
+            logging.warning(
+                f"Typing indicator blocked (HTTP 403). Continuing without it: {e}"
+            )
+            yield
+        else:
+            # Re-raise unexpected HTTP errors so they are still surfaced.
+            raise
