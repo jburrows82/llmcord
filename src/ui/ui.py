@@ -619,7 +619,7 @@ class ResponseActionView(ui.View):
                 # Use the bot's retry method with web search suffix
                 if hasattr(bot_client, "retry_with_modified_content"):
                     await bot_client.retry_with_modified_content(
-                        view.original_user_message, "SEARCH THE NET"
+                        view.original_user_message, "SEARCH THE NET FOR THE USER QUERY"
                     )
                 else:
                     await interaction.followup.send(
@@ -653,7 +653,7 @@ class ResponseActionView(ui.View):
                     # Use the bot's retry method with web search suffix
                     if hasattr(bot_client, "retry_with_modified_content"):
                         await bot_client.retry_with_modified_content(
-                            view.original_user_message, "SEARCH THE NET"
+                            view.original_user_message, "SEARCH THE NET FOR THE USER QUERY"
                         )
                     else:
                         await interaction.followup.send(
@@ -718,7 +718,7 @@ class ResponseActionView(ui.View):
                 # Use the bot's retry method with no web search suffix
                 if hasattr(bot_client, "retry_with_modified_content"):
                     await bot_client.retry_with_modified_content(
-                        view.original_user_message, "DO NOT SEARCH THE NET"
+                        view.original_user_message, "DO NOT SEARCH THE NET FOR THE USER QUERY"
                     )
                 else:
                     await interaction.followup.send(
@@ -752,7 +752,7 @@ class ResponseActionView(ui.View):
                     # Use the bot's retry method with no web search suffix
                     if hasattr(bot_client, "retry_with_modified_content"):
                         await bot_client.retry_with_modified_content(
-                            view.original_user_message, "DO NOT SEARCH THE NET"
+                            view.original_user_message, "DO NOT SEARCH THE NET FOR THE USER QUERY"
                         )
                     else:
                         await interaction.followup.send(

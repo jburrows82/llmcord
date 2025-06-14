@@ -715,19 +715,19 @@ class LLMCordClient(discord.Client):
         await super().close()
 
     async def retry_with_modified_content(
-        self, original_message: discord.Message, content_suffix: str
+        self, original_message: discord.Message, content_prefix: str
     ):
         """
-        Retry processing a message with additional content appended.
+        Retry processing a message with additional content prepended.
 
         Args:
             original_message: The original Discord message to retry
-            content_suffix: Text to append to the original message content
+            content_prefix: Text to prepend to the original message content
         """
         try:
             # Create a new message-like object with modified content
             # We'll reuse the original message but with modified content for processing
-            modified_content = f"{original_message.content} {content_suffix}"
+            modified_content = f"user query: {original_message.content}\n\n{content_prefix}"
 
             # Create a temporary message object that mimics the original
             # but with the modified content
