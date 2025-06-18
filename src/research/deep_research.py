@@ -34,7 +34,7 @@ def _compile_graph():
 
 
 async def _handle_interrupt(res: dict):
-    """If the graph asks for feedback, use GPT-4.1 to decide.
+    """If the graph asks for feedback, use gpt-4o to decide.
 
     Current heuristic: if an interrupt with a report plan is returned, automatically
     approve (resume=True). This bypasses manual feedback but fulfils the user's
@@ -57,12 +57,12 @@ async def _invoke_graph(topic: str) -> Optional[str]:
     thread_cfg = {
         "configurable": {
             "thread_id": str(uuid.uuid4()),
-            # Force Tavily search & GPT-4.1 for all stages
+            # Force Tavily search & gpt-4o for all stages
             "search_api": "tavily",
             "planner_provider": "openai",
-            "planner_model": "gpt-4.1",
+            "planner_model": "gpt-4o",
             "writer_provider": "openai",
-            "writer_model": "gpt-4.1",
+            "writer_model": "gpt-4o",
             "max_search_depth": 10,
         }
     }
