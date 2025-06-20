@@ -21,7 +21,7 @@ from ..ui.ui import ResponseActionView  # For the button
 logger = logging.getLogger(__name__)
 
 
-# --- ADDED: Helper functions for loading and saving user preferences ---
+
 async def _load_user_preferences(filename: str) -> Dict[int, Any]:
     """Loads user preferences from a JSON file asynchronously."""
     if not await aio_os.path.exists(filename):
@@ -33,14 +33,13 @@ async def _load_user_preferences(filename: str) -> Dict[int, Any]:
         async with aiofiles.open(filename, "r", encoding="utf-8") as f:
             content = await f.read()
             data = json.loads(content)
-            # Convert string keys from JSON back to integers
+
             return {int(k): v for k, v in data.items()}
     except json.JSONDecodeError:
         logger.error(
             f"Error decoding JSON from '{filename}'. Starting with empty preferences."
         )
-        # Optionally, create a backup of the corrupted file here
-        # await aio_os.rename(filename, filename + ".corrupted")
+
         return {}
     except IOError as e:
         logger.error(
@@ -57,7 +56,7 @@ async def _load_user_preferences(filename: str) -> Dict[int, Any]:
 async def _save_user_preferences(filename: str, data: Dict[int, Any]):
     """Saves user preferences to a JSON file asynchronously."""
     try:
-        # Ensure the directory exists
+
         directory = os.path.dirname(filename)
         if directory and not await aio_os.path.exists(directory):
             await aio_os.makedirs(directory)
@@ -71,14 +70,13 @@ async def _save_user_preferences(filename: str, data: Dict[int, Any]):
         logger.error(f"Unexpected error saving preferences to '{filename}': {e}")
 
 
-# These dictionaries will store user preferences.
-# They will be loaded asynchronously during bot setup.
+
 user_model_preferences: Dict[int, str] = {}
 user_system_prompt_preferences: Dict[int, Optional[str]] = {}
 user_gemini_thinking_budget_preferences: Dict[int, bool] = {}
 
 
-# --- ADDED: Function to load all preferences ---
+
 async def load_all_preferences():
     """Loads all user preferences from their respective files."""
     global \
@@ -87,7 +85,7 @@ async def load_all_preferences():
         user_gemini_thinking_budget_preferences
 
     loaded_model_prefs = await _load_user_preferences(USER_MODEL_PREFS_FILENAME)
-    if loaded_model_prefs:  # Only update if loading was successful and returned data
+    if loaded_model_prefs:
         user_model_preferences.update(loaded_model_prefs)
 
     loaded_system_prompts = await _load_user_preferences(USER_SYSTEM_PROMPTS_FILENAME)
@@ -103,7 +101,7 @@ async def load_all_preferences():
     logger.info("User preferences loaded.")
 
 
-# --- Slash Command Autocomplete Functions ---
+
 async def model_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> List[Choice[str]]:
@@ -114,12 +112,7 @@ async def model_autocomplete(
             full_model_name = f"{provider_name}/{model_name}"
             if current.lower() in full_model_name.lower():
                 choices.append(Choice(name=full_model_name, value=full_model_name))
-    return choices[:25]  # Limit to 25 choices
-
-
-# --- Slash Command Definition ---
-# Note: The command registration (@discord_client.tree.command) happens in bot.py
-# This file just defines the command function and its logic.
+    return choices[:25]
 
 
 @app_commands.autocomplete(model_full_name=model_autocomplete)
@@ -141,7 +134,7 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
         )
         return
 
-    # Validate provider
+
     if provider not in AVAILABLE_MODELS:
         await interaction.response.send_message(
             f"Invalid provider: `{provider}`. Please choose from the suggestions.",
@@ -149,7 +142,7 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
         )
         return
 
-    # Validate model against the selected provider
+
     if model_name not in AVAILABLE_MODELS.get(provider, []):
         await interaction.response.send_message(
             f"Invalid model: `{model_name}` for provider `{provider}`. Please choose from the suggestions.",
@@ -163,7 +156,7 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
         f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}"
     )
 
-    # --- ADDED: Save model preferences ---
+
     await _save_user_preferences(USER_MODEL_PREFS_FILENAME, user_model_preferences)
 
     await interaction.response.send_message(
@@ -176,7 +169,7 @@ def get_user_model_preference(user_id: int, default_model: str) -> str:
     return user_model_preferences.get(user_id, default_model)
 
 
-# --- ADDED: Slash Command for Setting System Prompt ---
+
 @app_commands.describe(
     prompt="Your custom system prompt. Use 'reset' to use the default prompt from config.yaml."
 )
@@ -191,9 +184,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
 
     try:
         if prompt.lower() == "reset":
-            user_system_prompt_preferences[user_id] = (
-                None  # None signifies using the default
-            )
+            user_system_prompt_preferences[user_id] = None
             logger.info(
                 f"User {user_id} ({interaction.user.name}) reset their system prompt to default."
             )
@@ -211,7 +202,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
                 ephemeral=False,
             )
 
-        # --- ADDED: Save preferences after modification ---
+
         await _save_user_preferences(
             USER_SYSTEM_PROMPTS_FILENAME, user_system_prompt_preferences
         )
@@ -221,15 +212,14 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
             f"Error in set_system_prompt_command for user {user_id} (Interaction ID: {interaction.id}): {e}"
         )
         try:
-            # Try to send an error message if the interaction hasn't been responded to yet.
+
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while setting your system prompt. Please check the bot logs for more details.",
                     ephemeral=False,
                 )
             else:
-                # If already responded (e.g., error happened during _save_user_preferences, though less likely to be caught here)
-                # or if interaction is too old, try a followup.
+
                 await interaction.followup.send(
                     "An error occurred after the initial response while processing your system prompt. Please check the bot logs.",
                     ephemeral=False,
@@ -238,7 +228,7 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
             logger.error(
                 f"Failed to send error message followup for set_system_prompt_command (Interaction ID: {interaction.id}): {http_err}"
             )
-        # The command will now complete from Discord's perspective, showing the error message.
+
 
 
 def get_user_system_prompt_preference(
@@ -251,17 +241,17 @@ def get_user_system_prompt_preference(
     """
     user_specific_prompt = user_system_prompt_preferences.get(user_id)
     if user_specific_prompt is None and user_id in user_system_prompt_preferences:
-        # User explicitly set to reset, so use default
+
         return default_prompt
     elif user_specific_prompt is not None:
-        # User has a custom prompt set
+
         return user_specific_prompt
     else:
-        # User has not set any preference, use default
+
         return default_prompt
 
 
-# --- ADDED: Slash Command for Setting Gemini Thinking Budget Usage ---
+
 @app_commands.describe(
     enabled="Set to 'True' to use the thinking budget for Gemini, 'False' to disable it for your interactions."
 )
@@ -321,7 +311,7 @@ def get_user_gemini_thinking_budget_preference(
     return user_gemini_thinking_budget_preferences.get(user_id, default_enabled)
 
 
-# --- ADDED: Slash Command for Help ---
+
 async def help_command(interaction: discord.Interaction):
     """Displays all available commands and how to use them."""
     embed = discord.Embed(
@@ -366,14 +356,14 @@ async def help_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, ephemeral=False)
     except discord.HTTPException as e:
         logger.error(f"Failed to send help message: {e}")
-        # Fallback if embed fails or is too large, though unlikely for this content
+
         await interaction.response.send_message(
             "Could not display help information. Please check bot logs.",
             ephemeral=True,
         )
 
 
-# --- ADDED: Slash Command for Enhancing Prompts ---
+
 
 
 async def _execute_enhance_prompt_logic(
@@ -398,9 +388,7 @@ async def _execute_enhance_prompt_logic(
         if isinstance(response_target, discord.Interaction)
         else response_target.author
     )
-    app_config = client_obj.config  # Assumes client_obj has a .config attribute
-
-    # Determine how to send messages
+    app_config = client_obj.config
     async def send_response(
         content: Optional[str] = None,
         view: Optional[discord.ui.View] = None,
@@ -414,8 +402,7 @@ async def _execute_enhance_prompt_logic(
             if view is not None:
                 _kwargs["view"] = view
 
-            # The original conditional for 'initial' existed, though both branches made the same type of call.
-            # We'll maintain the conditional structure but use the corrected kwargs.
+
             if (
                 initial
                 and hasattr(response_target, "response")
@@ -424,20 +411,18 @@ async def _execute_enhance_prompt_logic(
                 return await response_target.followup.send(**_kwargs)
             return await response_target.followup.send(**_kwargs)
         elif isinstance(response_target, discord.Message):
-            # For message commands, typically reply or send to channel.
-            # Let's use reply for subsequent messages if an initial one was sent, else channel.send or reply.
-            # For simplicity now, always reply.
+
             send_kwargs = {"mention_author": False}
             if content:
                 send_kwargs["content"] = content
             if view:
                 send_kwargs["view"] = view
-            # ephemeral not directly supported for message.reply, user sees it.
+
             return await response_target.reply(**send_kwargs)
         return None
 
     try:
-        # Load prompt enhancement documents
+
         doc_path_base = os.path.join("data", "prompt_data")
         strategies_doc_path = os.path.join(doc_path_base, "prompt_design_strategies.md")
         guide_2_doc_path = os.path.join(doc_path_base, "prompt_guide_2.md")

@@ -20,19 +20,16 @@ async def _async_shorten_url_tinyurl(
     try:
         api_url = f"http://tinyurl.com/api-create.php?url={long_url}"
 
-        # Use provided client or create a temporary one
         if httpx_client:
             response = await httpx_client.get(api_url, timeout=10.0)
             response.raise_for_status()
         else:
-            # Fallback: reuse the shared client to avoid extra connection overhead
             from ..core.http_client import get_httpx_client
 
             client = get_httpx_client()
             response = await client.get(api_url, timeout=10.0)
             response.raise_for_status()
         short_url = response.text.strip()
-        # Basic validation: check if it looks like a URL
         if short_url.startswith("http://") or short_url.startswith("https://"):
             logging.info(
                 f"Successfully shortened {long_url} to {short_url} using TinyURL."
@@ -67,19 +64,17 @@ async def share_to_textis(
     """
     base_url = "https://text.is/"
     try:
-        # Use provided client or create optimized temporary one
         if httpx_client:
             client = httpx_client
             should_close = False
         else:
-            # Fallback: reuse the shared client to avoid spawning a new pool
             from ..core.http_client import get_httpx_client
 
             client = get_httpx_client()
             should_close = False
 
         try:
-            # 1. GET the page to obtain CSRF token
+
             logging.debug(f"Fetching initial page from {base_url} to get CSRF token.")
             response_get = await client.get(base_url)
             response_get.raise_for_status()
@@ -93,7 +88,7 @@ async def share_to_textis(
             csrf_token = csrf_token_input["value"]
             logging.debug(f"Found CSRF token: {csrf_token}")
 
-            # 2. POST the content
+
             payload = {
                 "csrfmiddlewaretoken": csrf_token,
                 "text": text_content,
@@ -103,12 +98,7 @@ async def share_to_textis(
             response_post = await client.post(base_url, data=payload)
             response_post.raise_for_status()
 
-            # 3. Extract the canonical URL from the response page
-
             final_url = str(response_post.url)
-
-            # Check if the final_url is the base_url. If so, the redirect might not have happened as expected,
-            # or the POST didn't result in a new paste. Try to parse from HTML as a fallback.
             if final_url == base_url:
                 logging.warning(
                     f"Response URL {final_url} is the same as the base URL. Attempting to parse canonical link from HTML."
@@ -128,8 +118,7 @@ async def share_to_textis(
                     f"Determined final URL from response_post.url (after potential redirects): {final_url}"
                 )
 
-            # Final validation of the extracted URL:
-            # It must start with the base_url and be longer than the base_url itself (i.e., have a path component).
+
             if (
                 not final_url.startswith(base_url)
                 or len(final_url) <= len(base_url)
@@ -144,7 +133,6 @@ async def share_to_textis(
             return final_url
 
         finally:
-            # Close temporary client if we created one
             if should_close and client:
                 await client.aclose()
 
@@ -192,7 +180,7 @@ async def share_text_content(
 
     logging.info(f"Successfully shared to text.is: {public_url}")
 
-    # URL Shortening
+
     shortener_enabled = output_sharing_cfg.get(URL_SHORTENER_ENABLED_CONFIG_KEY, False)
     shortener_service = output_sharing_cfg.get(
         URL_SHORTENER_SERVICE_CONFIG_KEY, "tinyurl"
