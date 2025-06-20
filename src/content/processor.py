@@ -10,6 +10,8 @@ from ..core.constants import (
     PROVIDERS_SUPPORTING_USERNAMES,  # For build_message_history call
     GROUNDING_SYSTEM_PROMPT_CONFIG_KEY,
     GROUNDING_MODEL_CONFIG_KEY,
+    GROUNDING_FORCE_STOP_OPTIMIZATION_CONFIG_KEY,
+    DEFAULT_GROUNDING_FORCE_STOP_OPTIMIZATION,
 )
 from ..core import models
 from ..core.utils import (
@@ -25,6 +27,7 @@ from .external_content import (
 )
 from ..services.grounding import (
     get_web_search_queries_from_gemini,
+    get_web_search_queries_from_gemini_force_stop,
     fetch_and_format_searxng_results,
     generate_search_queries_with_custom_prompt,
 )
@@ -338,12 +341,26 @@ async def process_content_and_grounding(
                     grounding_provider_for_history,
                     config.get(GROUNDING_SYSTEM_PROMPT_CONFIG_KEY),
                 )
-                web_search_queries = await get_web_search_queries_from_gemini(
-                    history_for_gemini_grounding,
-                    system_prompt_for_grounding,
-                    config,
-                    generate_response_stream,
+                # Choose between immediate return (default) or force-stop (aggressive)
+                use_force_stop = config.get(
+                    GROUNDING_FORCE_STOP_OPTIMIZATION_CONFIG_KEY, 
+                    DEFAULT_GROUNDING_FORCE_STOP_OPTIMIZATION
                 )
+                
+                if use_force_stop:
+                    web_search_queries = await get_web_search_queries_from_gemini_force_stop(
+                        history_for_gemini_grounding,
+                        system_prompt_for_grounding,
+                        config,
+                        generate_response_stream,
+                    )
+                else:
+                    web_search_queries = await get_web_search_queries_from_gemini(
+                        history_for_gemini_grounding,
+                        system_prompt_for_grounding,
+                        config,
+                        generate_response_stream,
+                    )
                 if web_search_queries:
                     custom_search_queries_generated_flag = (
                         True  # Indicates internet was used
