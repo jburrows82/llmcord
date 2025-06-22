@@ -361,6 +361,9 @@ async def generate_response_stream(
                                 if current_api_key != "dummy_key":
                                     await llm_db_manager.add_key(current_api_key)
                                 last_error_type = "rate_limit"
+                            # Handle JSON decode errors and timeouts specifically  
+                            elif error_msg_chunk.lower() in ["jsondecodeerror", "stream timeout error"]:
+                                last_error_type = "stream_corruption"
 
                             break  # Break from stream consumption, try next key
 
@@ -464,6 +467,9 @@ async def generate_response_stream(
                                 if current_api_key != "dummy_key":
                                     await llm_db_manager.add_key(current_api_key)
                                 last_error_type = "rate_limit"  # Be more specific if it's a rate limit
+                            # Handle JSON decode errors and timeouts specifically  
+                            elif error_msg_chunk.lower() in ["jsondecodeerror", "stream timeout error"]:
+                                last_error_type = "stream_corruption"
 
                             break  # Break from stream consumption, try next compression or key
 
