@@ -241,6 +241,7 @@ async def get_web_search_queries_from_gemini(
 ) -> Optional[List[str]]:
     """
     Calls Gemini to get web search queries from its grounding metadata.
+    Returns search queries immediately when found, without waiting for full response.
     """
     logging.info("Attempting to get web search queries from Gemini for grounding...")
     grounding_model_str = config.get(
@@ -337,17 +338,187 @@ async def get_web_search_queries_from_gemini(
                             logging.debug(
                                 f"Gemini grounding produced search query: '{query.strip()}'"
                             )
+                    
+                    # Return search queries immediately when found
+                    if all_web_search_queries:
+                        logging.info(
+                            f"Gemini grounding produced {len(all_web_search_queries)} unique search queries. Returning immediately without waiting for full response."
+                        )
+                        return list(all_web_search_queries)
 
-        if all_web_search_queries:
-            logging.info(
-                f"Gemini grounding produced {len(all_web_search_queries)} unique search queries."
+        # If we get here, no search queries were found
+        logging.info(
+            "Gemini grounding call completed but found no web_search_queries in metadata."
+        )
+        return None
+
+    except (
+        AllKeysFailedError
+    ) as e:  # Make sure AllKeysFailedError is accessible or handled
+        logging.error(
+            f"All API keys failed for Gemini grounding model ({grounding_provider}/{grounding_model_name}): {e}"
+        )
+        return None
+    except Exception:
+        logging.exception(
+            "Unexpected error during Gemini grounding call to get search queries:"
+        )
+        return None
+
+
+async def get_web_search_queries_from_gemini_force_stop(
+    history_for_gemini_grounding: List[Dict[str, Any]],
+    system_prompt_text_for_grounding: Optional[str],
+    config: Dict[str, Any],
+    # Pass the generate_response_stream function as a callable
+    generate_response_stream_func: Callable[
+        [
+            str,
+            str,
+            List[Dict[str, Any]],
+            Optional[str],
+            Dict[str, Any],
+            Dict[str, Any],
+            Dict[str, Any],
+        ],
+        AsyncGenerator[
+            Tuple[
+                Optional[str],
+                Optional[str],
+                Optional[Any],
+                Optional[str],
+                Optional[bytes],
+                Optional[str],
+            ],
+            None,
+        ],
+    ],
+) -> Optional[List[str]]:
+    """
+    Calls Gemini to get web search queries from its grounding metadata.
+    Forcefully stops the stream immediately after getting search queries to minimize API usage.
+    """
+    logging.info("Attempting to get web search queries from Gemini for grounding (force-stop mode)...")
+    grounding_model_str = config.get(
+        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+    )
+    try:
+        grounding_provider, grounding_model_name = grounding_model_str.split("/", 1)
+    except ValueError:
+        logging.error(
+            f"Invalid format for '{GROUNDING_MODEL_CONFIG_KEY}': {grounding_model_str}. Expected 'provider/model_name'."
+        )
+        return None
+
+    gemini_provider_config = config.get("providers", {}).get(grounding_provider, {})
+    if not gemini_provider_config or not gemini_provider_config.get("api_keys"):
+        logging.warning(
+            f"Cannot perform Gemini grounding step: Provider '{grounding_provider}' (from '{GROUNDING_MODEL_CONFIG_KEY}') not configured with API keys."
+        )
+        return None
+
+    all_web_search_queries = set()  # Use a set to store unique queries
+
+    try:
+        # Parameters for the grounding model call.
+        # These are fetched from the application config, with defaults.
+        grounding_temperature = config.get(
+            GROUNDING_MODEL_TEMPERATURE_CONFIG_KEY, DEFAULT_GROUNDING_MODEL_TEMPERATURE
+        )
+        grounding_top_k = config.get(
+            GROUNDING_MODEL_TOP_K_CONFIG_KEY, DEFAULT_GROUNDING_MODEL_TOP_K
+        )
+        grounding_top_p = config.get(
+            GROUNDING_MODEL_TOP_P_CONFIG_KEY, DEFAULT_GROUNDING_MODEL_TOP_P
+        )
+
+        grounding_extra_params = {
+            "temperature": grounding_temperature,
+            "top_k": grounding_top_k,
+            "top_p": grounding_top_p,
+        }
+        # Add thinking budget if configured and model is Gemini
+        grounding_use_thinking_budget = config.get(
+            GROUNDING_MODEL_USE_THINKING_BUDGET_CONFIG_KEY,
+            GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET,
+        )
+        if grounding_use_thinking_budget and grounding_provider == "google":
+            grounding_thinking_budget_value = config.get(
+                GROUNDING_MODEL_THINKING_BUDGET_VALUE_CONFIG_KEY,
+                GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE,
             )
-            return list(all_web_search_queries)
-        else:
-            logging.info(
-                "Gemini grounding call completed but found no web_search_queries in metadata."
-            )
+            # Ensure the model is Flash, as thinkingBudget is only supported in Gemini 2.5 Flash
+            if "flash" in grounding_model_name.lower():
+                grounding_extra_params["thinking_budget"] = (
+                    grounding_thinking_budget_value
+                )
+                logging.info(
+                    f"Applying thinking_budget: {grounding_thinking_budget_value} to Gemini grounding model {grounding_model_name}"
+                )
+            else:
+                logging.warning(
+                    f"Thinking budget is configured for grounding model {grounding_model_name}, but it's not a Gemini Flash model. Ignoring thinking_budget."
+                )
+
+        stream_generator = generate_response_stream_func(
+            provider=grounding_provider,
+            model_name=grounding_model_name,
+            history_for_llm=history_for_gemini_grounding,
+            system_prompt_text=system_prompt_text_for_grounding,
+            provider_config=gemini_provider_config,
+            extra_params=grounding_extra_params,
+            app_config=config,  # Pass app_config
+        )
+
+        # Use asyncio.wait_for with a timeout to force-stop if queries are found
+        try:
+            async for (
+                _,
+                _,
+                chunk_grounding_metadata,
+                error_message,
+                _,
+                _,
+            ) in stream_generator:
+                if error_message:
+                    logging.error(f"Error during Gemini grounding call: {error_message}")
+                    return None  # Abort on first error
+
+                if chunk_grounding_metadata:
+                    if (
+                        hasattr(chunk_grounding_metadata, "web_search_queries")
+                        and chunk_grounding_metadata.web_search_queries
+                    ):
+                        for query in chunk_grounding_metadata.web_search_queries:
+                            if isinstance(query, str) and query.strip():
+                                all_web_search_queries.add(query.strip())
+                                logging.debug(
+                                    f"Gemini grounding produced search query: '{query.strip()}'"
+                                )
+                        
+                        # Force stop by breaking and closing the generator
+                        if all_web_search_queries:
+                            logging.info(
+                                f"Gemini grounding produced {len(all_web_search_queries)} unique search queries. Force-stopping stream immediately."
+                            )
+                            # Try to close the generator to stop the stream
+                            try:
+                                await stream_generator.aclose()
+                            except Exception as e:
+                                logging.debug(f"Error closing stream generator: {e}")
+                            return list(all_web_search_queries)
+
+        except asyncio.CancelledError:
+            logging.info("Gemini grounding stream was cancelled after getting search queries.")
+            if all_web_search_queries:
+                return list(all_web_search_queries)
             return None
+
+        # If we get here, no search queries were found
+        logging.info(
+            "Gemini grounding call completed but found no web_search_queries in metadata."
+        )
+        return None
 
     except (
         AllKeysFailedError

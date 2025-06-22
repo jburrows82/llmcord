@@ -1,5 +1,5 @@
 import logging
-import json  # Added for payload printing
+import json
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 
 from openai import (
@@ -8,24 +8,23 @@ from openai import (
     APIConnectionError,
     BadRequestError,
     UnprocessableEntityError,
-)  # Removed RateLimitError
+)
 
-from ...core.constants import PROVIDERS_SUPPORTING_USERNAMES  # Relative import
+from ...core.constants import PROVIDERS_SUPPORTING_USERNAMES
 from ...core.utils import (
     _truncate_base64_in_payload,
     default_serializer,
-)  # Added for payload printing
+)
 
 
 async def generate_openai_stream(
-    api_key: Optional[str],  # Key can be None for keyless local providers
+    api_key: Optional[str],
     base_url: str,
     model_name: str,
-    history_for_api_call: List[Dict[str, Any]],  # Already formatted for OpenAI
+    history_for_api_call: List[Dict[str, Any]],
     system_prompt_text: Optional[str],
     extra_params: Dict[str, Any],
-    current_provider_name: str,  # To check against PROVIDERS_SUPPORTING_USERNAMES
-    # app_config is not strictly needed here unless there are OpenAI specific global settings
+    current_provider_name: str,
 ) -> AsyncGenerator[
     Tuple[
         Optional[str],
@@ -73,13 +72,10 @@ async def generate_openai_stream(
 
     openai_messages = [msg.copy() for msg in history_for_api_call]
     if system_prompt_text:
-        # Ensure system prompt is at the beginning
         if not openai_messages or openai_messages[0].get("role") != "system":
             openai_messages.insert(0, {"role": "system", "content": system_prompt_text})
         elif openai_messages[0].get("role") == "system":
-            openai_messages[0]["content"] = system_prompt_text  # Update if exists
-
-    # Remove "name" field if provider doesn't support it
+            openai_messages[0]["content"] = system_prompt_text
     if current_provider_name not in PROVIDERS_SUPPORTING_USERNAMES:
         for msg_data in openai_messages:
             if msg_data.get("role") == "user" and "name" in msg_data:
@@ -89,17 +85,13 @@ async def generate_openai_stream(
                 )
 
     api_call_params = extra_params.copy()
-    api_call_params["stream"] = True  # Ensure streaming is enabled
-
-    # --- Payload Logging ---
+    api_call_params["stream"] = True
     try:
-        # Construct the payload that will be sent to the API
         payload_to_log = {
             "model": model_name,
             "messages": openai_messages,
-            **api_call_params,  # Spread other parameters like temperature, max_tokens, etc.
+            **api_call_params,
         }
-        # The 'stream' parameter is already in api_call_params if set, otherwise defaults in create()
 
         truncated_payload = _truncate_base64_in_payload(payload_to_log)
         logging.info(
@@ -109,7 +101,6 @@ async def generate_openai_stream(
         )
     except Exception as e_log:
         logging.error(f"Error during OpenAI payload logging: {e_log}", exc_info=True)
-    # --- End Payload Logging ---
 
     try:
         stream_response = await llm_client.chat.completions.create(
@@ -136,19 +127,16 @@ async def generate_openai_stream(
                 error_msg_chunk,
                 None,
                 None,
-            )  # No grounding metadata or images for OpenAI
+            )
             if finish_reason_str:
                 return
 
-    except (
-        APIError
-    ) as e:  # Catches various OpenAI API errors including 413, RateLimitError
+    except APIError as e:
         logging.error(f"OpenAI API Error: {type(e).__name__} - {e}")
         error_detail = str(e)
         if hasattr(e, "status_code"):
             error_detail = f"Status {e.status_code}: {e}"
 
-        # Specific handling for 413 to allow compression retry by the caller
         if hasattr(e, "status_code") and e.status_code == 413:
             yield (
                 None,
@@ -157,7 +145,7 @@ async def generate_openai_stream(
                 "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE",
                 None,
                 None,
-            )  # Signal for compression
+            )
             return
 
         yield (
@@ -171,7 +159,7 @@ async def generate_openai_stream(
     except APIConnectionError as e:
         logging.error(f"OpenAI Connection Error: {e}")
         yield None, None, None, f"OpenAI Connection Error: {e}", None, None
-    except UnprocessableEntityError as e:  # Specific for 422
+    except UnprocessableEntityError as e:
         logging.error(f"OpenAI Unprocessable Entity Error (422): {e}")
         yield (
             None,
@@ -180,8 +168,8 @@ async def generate_openai_stream(
             "OPENAI_UNPROCESSABLE_ENTITY_422",
             None,
             None,
-        )  # Specific signal
-    except BadRequestError as e:  # Specific for 400
+        )
+    except BadRequestError as e:
         logging.error(f"OpenAI Bad Request Error (400): {e}")
         error_body = str(e.body) if hasattr(e, "body") else str(e)
         yield (

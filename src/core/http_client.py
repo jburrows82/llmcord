@@ -1,5 +1,4 @@
-# NOTE: Module docstring must precede any future-import statements for PEP 236 compliance.
-# The `annotations` future import is now placed immediately after the docstring.
+
 
 """Shared HTTPX client utilities.
 
@@ -32,14 +31,14 @@ from typing import Optional, Dict, Any
 
 import httpx
 
-# Internal module-level cache for the singleton client
+
 _shared_async_client: Optional[httpx.AsyncClient] = None
 
-# Default performance-oriented settings – these were tuned empirically
+
 _LIMITS = httpx.Limits(
     max_keepalive_connections=60,
     max_connections=300,
-    keepalive_expiry=45.0,  # seconds
+    keepalive_expiry=45.0,
 )
 _TIMEOUT = httpx.Timeout(
     connect=10.0,
@@ -63,7 +62,6 @@ def get_httpx_client(config: Optional[Dict[str, Any]] = None) -> httpx.AsyncClie
     if _shared_async_client is None:
         use_http2 = True
         if config is not None:
-            # Local import to avoid a hard dependency cycle at import time.
             from src.core.constants import (
                 HTTP_CLIENT_USE_HTTP2_CONFIG_KEY,
                 DEFAULT_HTTP_CLIENT_USE_HTTP2,
