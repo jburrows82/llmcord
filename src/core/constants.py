@@ -208,9 +208,9 @@ Do not apologize for the previous model. Focus on fulfilling the user's request 
 
 AVAILABLE_MODELS = {
     "google": [
-        "gemini-2.5-flash-preview-05-20",
+        "gemini-2.5-flash",
         "gemini-2.0-flash-preview-image-generation",
-        "imagen-3.0-generate-002",
+        "imagen-4.0-ultra-generate-preview-06-06",
         # Add other Gemini models as needed/supported
     ],
     "openai": [
