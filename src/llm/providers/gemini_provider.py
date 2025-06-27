@@ -241,9 +241,9 @@ async def generate_gemini_stream(
         # --- End Payload Logging ---
 
         try:
-            # Add timeout to prevent hanging
-            stream_response = await asyncio.wait_for(
-                llm_client.aio.models.generate_content_stream(
+            # Use non-streaming to avoid JSON decode errors in the streaming implementation
+            response = await asyncio.wait_for(
+                llm_client.aio.models.generate_content(
                     model=model_name,
                     contents=gemini_contents,
                     config=api_generation_config,
@@ -251,119 +251,112 @@ async def generate_gemini_stream(
                 timeout=300.0  # 5 minute timeout
             )
 
-            async for chunk in stream_response:
-                text_chunk = None
-                finish_reason_str = None
-                grounding_meta = None
-                error_msg_chunk = None
-
-                if (
-                    hasattr(chunk, "prompt_feedback")
-                    and chunk.prompt_feedback
-                    and chunk.prompt_feedback.block_reason
-                ):
-                    error_msg_chunk = (
-                        f"Prompt Blocked ({chunk.prompt_feedback.block_reason})"
-                    )
-                    finish_reason_str = "safety"  # Treat as a safety finish
-                    yield (
-                        text_chunk,
-                        finish_reason_str,
-                        grounding_meta,
-                        error_msg_chunk,
-                        None,
-                        None,
-                    )
-                    return  # Stop generation
-
-                if hasattr(chunk, "text") and chunk.text:
-                    text_chunk = chunk.text
-
-                if hasattr(chunk, "candidates") and chunk.candidates:
-                    candidate = chunk.candidates[0]
-                    if (
-                        hasattr(candidate, "finish_reason")
-                        and candidate.finish_reason
-                        and candidate.finish_reason
-                        != google_types.FinishReason.FINISH_REASON_UNSPECIFIED
-                    ):
-                        reason_map = {
-                            google_types.FinishReason.STOP: "stop",
-                            google_types.FinishReason.MAX_TOKENS: "length",
-                            google_types.FinishReason.SAFETY: "safety",
-                            google_types.FinishReason.RECITATION: "recitation",
-                            google_types.FinishReason.OTHER: "other",
-                        }
-                        finish_reason_str = reason_map.get(
-                            candidate.finish_reason, str(candidate.finish_reason)
-                        )
-
-                    if (
-                        hasattr(candidate, "grounding_metadata")
-                        and candidate.grounding_metadata
-                    ):
-                        grounding_meta = candidate.grounding_metadata
-
-                    if hasattr(candidate, "safety_ratings") and candidate.safety_ratings:
-                        for rating in candidate.safety_ratings:
-                            if rating.probability in (
-                                google_types.HarmProbability.MEDIUM,
-                                google_types.HarmProbability.HIGH,
-                            ):
-                                if not text_chunk:  # If blocked before any content
-                                    error_msg_chunk = f"Response Blocked (Safety Rating: {rating.category}={rating.probability})"
-                                    finish_reason_str = "safety"
-                                    yield (
-                                        None,
-                                        finish_reason_str,
-                                        grounding_meta,
-                                        error_msg_chunk,
-                                        None,
-                                        None,
-                                    )
-                                    return  # Stop generation
-
-                # Detect and handle whitespace spam
-                if not hasattr(generate_gemini_stream, "_whitespace_chunk_limit"):
-                    generate_gemini_stream._whitespace_chunk_limit = (
-                        5  # static var for threshold
-                    )
-                if not hasattr(generate_gemini_stream, "_whitespace_chunk_count"):
-                    generate_gemini_stream._whitespace_chunk_count = 0
-
-                if text_chunk is not None and text_chunk.strip() == "":
-                    generate_gemini_stream._whitespace_chunk_count += 1
-                    if (
-                        generate_gemini_stream._whitespace_chunk_count
-                        >= generate_gemini_stream._whitespace_chunk_limit
-                    ):
-                        warning_msg = (
-                            "⚠️ Gemini API is sending repeated whitespace-only chunks (possible spam). "
-                            "Output stopped to prevent flooding. Please check Gemini API status or try again later."
-                        )
-                        yield None, "spam_warning", None, warning_msg, None, None
-                        return
-                    continue  # Do not yield whitespace-only chunks
-                else:
-                    generate_gemini_stream._whitespace_chunk_count = 0
-
+            # Check for prompt feedback blocking
+            if (
+                hasattr(response, "prompt_feedback")
+                and response.prompt_feedback
+                and response.prompt_feedback.block_reason
+            ):
+                error_msg_chunk = (
+                    f"Prompt Blocked ({response.prompt_feedback.block_reason})"
+                )
                 yield (
-                    text_chunk,
-                    finish_reason_str,
-                    grounding_meta,
+                    None,
+                    "safety",
+                    None,
                     error_msg_chunk,
                     None,
                     None,
                 )
-                if finish_reason_str:  # If a finish reason is determined, stop.
-                    return
+                return
+
+            # Process the complete response
+            finish_reason_str = None
+            grounding_meta = None
+            full_text = ""
+
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                
+                if hasattr(candidate, "content") and candidate.content:
+                    if hasattr(candidate.content, "parts") and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                full_text += part.text
+
+                if (
+                    hasattr(candidate, "finish_reason")
+                    and candidate.finish_reason
+                    and candidate.finish_reason
+                    != google_types.FinishReason.FINISH_REASON_UNSPECIFIED
+                ):
+                    reason_map = {
+                        google_types.FinishReason.STOP: "stop",
+                        google_types.FinishReason.MAX_TOKENS: "length",
+                        google_types.FinishReason.SAFETY: "safety",
+                        google_types.FinishReason.RECITATION: "recitation",
+                        google_types.FinishReason.OTHER: "other",
+                    }
+                    finish_reason_str = reason_map.get(
+                        candidate.finish_reason, str(candidate.finish_reason)
+                    )
+
+                if (
+                    hasattr(candidate, "grounding_metadata")
+                    and candidate.grounding_metadata
+                ):
+                    grounding_meta = candidate.grounding_metadata
+
+                if hasattr(candidate, "safety_ratings") and candidate.safety_ratings:
+                    for rating in candidate.safety_ratings:
+                        if rating.probability in (
+                            google_types.HarmProbability.MEDIUM,
+                            google_types.HarmProbability.HIGH,
+                        ):
+                            if not full_text:  # If blocked before any content
+                                error_msg_chunk = f"Response Blocked (Safety Rating: {rating.category}={rating.probability})"
+                                yield (
+                                    None,
+                                    "safety",
+                                    grounding_meta,
+                                    error_msg_chunk,
+                                    None,
+                                    None,
+                                )
+                                return
+
+            # Simulate streaming by yielding the text in chunks
+            if full_text:
+                chunk_size = 50  # Adjust this for desired chunk size
+                for i in range(0, len(full_text), chunk_size):
+                    text_chunk = full_text[i:i + chunk_size]
+                    is_final_chunk = i + chunk_size >= len(full_text)
+                    
+                    yield (
+                        text_chunk,
+                        finish_reason_str if is_final_chunk else None,
+                        grounding_meta if is_final_chunk else None,
+                        None,
+                        None,
+                        None,
+                    )
+                    
+                    # Small delay to simulate streaming
+                    await asyncio.sleep(0.01)
+            else:
+                # No text content, just yield the finish reason
+                yield (
+                    None,
+                    finish_reason_str or "stop",
+                    grounding_meta,
+                    None,
+                    None,
+                    None,
+                )
 
         except asyncio.TimeoutError:
-            logging.error("Gemini stream timed out after 5 minutes")
-            yield None, None, None, "Stream timeout error", None, None
-        except json.JSONDecodeError as json_err:
-            logging.error(f"JSON decode error in Gemini stream: {json_err}", exc_info=True)
-            yield None, None, None, "JSONDecodeError", None, None
+            logging.error("Gemini request timed out after 5 minutes")
+            yield None, None, None, "Request timeout error", None, None
         except google_api_exceptions.GoogleAPIError as e:
             logging.error(f"Gemini API Error: {type(e).__name__} - {e}")
             yield None, None, None, f"Gemini API Error: {type(e).__name__}", None, None
@@ -580,9 +573,9 @@ async def generate_gemini_image_stream(
         # --- End Payload Logging ---
 
         try:
-            # Add timeout to prevent hanging
-            stream_response = await asyncio.wait_for(
-                llm_client.aio.models.generate_content_stream(
+            # Use non-streaming to avoid JSON decode errors in the streaming implementation
+            response = await asyncio.wait_for(
+                llm_client.aio.models.generate_content(
                     model=model_name,
                     contents=gemini_contents,
                     config=api_generation_config,
@@ -590,47 +583,40 @@ async def generate_gemini_image_stream(
                 timeout=300.0  # 5 minute timeout
             )
 
-            async for chunk in stream_response:
-                text_chunk = None
-                finish_reason_str = None
-                error_msg_chunk = None
-                image_data = None
-                image_mime_type = None
+            # Check for prompt feedback blocking
+            if (
+                hasattr(response, "prompt_feedback")
+                and response.prompt_feedback
+                and response.prompt_feedback.block_reason
+            ):
+                error_msg_chunk = (
+                    f"Prompt Blocked ({response.prompt_feedback.block_reason})"
+                )
+                yield (
+                    None,
+                    "safety",
+                    None,
+                    error_msg_chunk,
+                    None,
+                    None,
+                )
+                return
 
-                if (
-                    hasattr(chunk, "prompt_feedback")
-                    and chunk.prompt_feedback
-                    and chunk.prompt_feedback.block_reason
-                ):
-                    error_msg_chunk = (
-                        f"Prompt Blocked ({chunk.prompt_feedback.block_reason})"
-                    )
-                    finish_reason_str = "safety"
-                    yield (
-                        text_chunk,
-                        finish_reason_str,
-                        None,
-                        error_msg_chunk,
-                        image_data,
-                        image_mime_type,
-                    )
-                    return
+            # Process the complete response
+            finish_reason_str = None
+            full_text = ""
+            image_data = None
+            image_mime_type = None
 
-                if hasattr(chunk, "text") and chunk.text:
-                    text_chunk = chunk.text
-
-                # Check for image data in the response
-                if hasattr(chunk, "candidates") and chunk.candidates:
-                    candidate = chunk.candidates[0]
-
-                    if (
-                        hasattr(candidate, "content")
-                        and candidate.content
-                        and hasattr(candidate.content, "parts")
-                        and candidate.content.parts
-                    ):
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                
+                if hasattr(candidate, "content") and candidate.content:
+                    if hasattr(candidate.content, "parts") and candidate.content.parts:
                         for part in candidate.content.parts:
-                            if hasattr(part, "inline_data") and part.inline_data:
+                            if hasattr(part, "text") and part.text:
+                                full_text += part.text
+                            elif hasattr(part, "inline_data") and part.inline_data:
                                 image_data = part.inline_data.data
                                 image_mime_type = part.inline_data.mime_type
                                 logging.info(
@@ -660,12 +646,11 @@ async def generate_gemini_image_stream(
                             google_types.HarmProbability.MEDIUM,
                             google_types.HarmProbability.HIGH,
                         ):
-                            if not text_chunk and not image_data:
+                            if not full_text and not image_data:
                                 error_msg_chunk = f"Response Blocked (Safety Rating: {rating.category}={rating.probability})"
-                                finish_reason_str = "safety"
                                 yield (
                                     None,
-                                    finish_reason_str,
+                                    "safety",
                                     None,
                                     error_msg_chunk,
                                     None,
@@ -673,23 +658,20 @@ async def generate_gemini_image_stream(
                                 )
                                 return
 
-                yield (
-                    text_chunk,
-                    finish_reason_str,
-                    None,
-                    error_msg_chunk,
-                    image_data,
-                    image_mime_type,
-                )
-                if finish_reason_str:
-                    return
+            # For image generation, yield the complete response at once
+            # since images don't benefit from chunked streaming
+            yield (
+                full_text if full_text else None,
+                finish_reason_str or "stop",
+                None,
+                None,
+                image_data,
+                image_mime_type,
+            )
 
         except asyncio.TimeoutError:
-            logging.error("Gemini image generation stream timed out after 5 minutes")
-            yield None, None, None, "Stream timeout error", None, None
-        except json.JSONDecodeError as json_err:
-            logging.error(f"JSON decode error in Gemini image generation stream: {json_err}", exc_info=True)
-            yield None, None, None, "JSONDecodeError", None, None
+            logging.error("Gemini image generation request timed out after 5 minutes")
+            yield None, None, None, "Request timeout error", None, None
         except google_api_exceptions.GoogleAPIError as e:
             logging.error(f"Gemini Image Generation API Error: {type(e).__name__} - {e}")
             yield (
