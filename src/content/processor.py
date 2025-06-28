@@ -298,7 +298,7 @@ async def process_content_and_grounding(
             )
             # History for Gemini grounding
             grounding_model_for_history = config.get(
-                GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+                GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash"
             )
             grounding_provider_for_history, grounding_model_name_for_history = (
                 grounding_model_for_history.split("/", 1)

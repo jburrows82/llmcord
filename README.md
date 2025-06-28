@@ -47,7 +47,7 @@ Or run a local model with:
 
 ### Slash Commands
 llmcord offers slash commands for user-specific customizations:
-- **`/model <provider/model_name>`**: Set your preferred LLM provider and model (e.g., `openai/gpt-4.1`, `google/gemini-2.5-flash-preview-05-20`). This preference is saved and used for your future messages.
+- **`/model <provider/model_name>`**: Set your preferred LLM provider and model (e.g., `openai/gpt-4.1`, `google/gemini-2.5-flash`). This preference is saved and used for your future messages.
 - **`/systemprompt <prompt_text | "reset">`**: Set a custom system prompt for your interactions with the bot. Use `reset` to revert to the default system prompt defined in `config.yaml`.
 - **`/setgeminithinking <True|False>`**: Enable or disable the `thinkingBudget` parameter for Gemini models for your interactions. This can potentially improve response quality for complex queries but may increase latency. The actual budget value is set globally in `config.yaml`.
 - **`/help`**: Displays a help message listing all available commands and their usage.
@@ -88,9 +88,9 @@ User preferences for these commands are saved locally in JSON files (e.g., `user
 ### Advanced Query Handling & Context Enhancement
 llmcord employs several strategies to enrich the context provided to the LLM:
 - **Deep Search Keyword**: Including `deepsearch` or `deepersearch` (case-insensitive) in your query automatically attempts to switch to a pre-configured powerful model (default: `x-ai/grok-3`) for that specific request, if the model and its API keys are configured.
-- **Vision Model Fallback**: If your message includes images but your currently selected model doesn't support vision, the bot will automatically switch to a pre-configured fallback vision model (default: `google/gemini-2.5-flash-preview-05-20`) for that request, if available. A warning will inform you of the switch.
+- **Vision Model Fallback**: If your message includes images but your currently selected model doesn't support vision, the bot will automatically switch to a pre-configured fallback vision model (default: `google/gemini-2.5-flash`) for that request, if available. A warning will inform you of the switch.
 - **SearXNG Integration for Grounding**: For non-Gemini/non-Grok models, if your query doesn't contain URLs, the bot can perform a pre-step:
-    1. A Gemini model (`gemini-2.5-flash-preview-05-20` by default) analyzes your query and conversation history to generate relevant web search queries.
+    1. A Gemini model (`gemini-2.5-flash` by default) analyzes your query and conversation history to generate relevant web search queries.
     2. These queries are run against your configured SearXNG instance.
     3. Content from the top SearXNG result URLs (YouTube, Reddit, general web pages) is fetched, processed (with a configurable length limit for general web content via `searxng_url_content_max_length`), and formatted.
     4. This fetched web context is then provided to your chosen LLM along with your original query.
@@ -108,7 +108,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 - **Silent Retries:** Error messages are only sent to Discord if *all* configured keys for a service have been tried and failed for a single request.
 
 ### Interactive Response & Sources
-- **Gemini Grounding**: When using a compatible Gemini model (e.g., `gemini-2.5-flash-preview-05-20`), the bot can automatically use Google Search to ground its responses with up-to-date information.
+- **Gemini Grounding**: When using a compatible Gemini model (e.g., `gemini-2.5-flash`), the bot can automatically use Google Search to ground its responses with up-to-date information.
 - **Persistent Action Buttons**: If a response was enhanced by grounding or if there's a response text, action buttons will appear below the message. These buttons are persistent and do not time out.
     - **"Show Sources" Button**: If grounding was used, this button reveals the search queries the model used and the web sources it consulted. The sources are displayed in embeds, split into multiple messages if necessary.
     - **"Get response as text file" Button**: Allows you to download the bot's full response as a `.txt` file.
@@ -116,7 +116,7 @@ llmcord employs several strategies to enrich the context provided to the LLM:
 
 ### And more:
 - **Slash Commands**: `/model`, `/systemprompt`, `/setgeminithinking`, `/help` for user-specific preferences and help (see "Slash Commands" section).
-- Supports image attachments when using a vision model (like `gpt-4.1`, `claude-3`, `gemini-2.5-flash-preview-05-20`, etc.).
+- Supports image attachments when using a vision model (like `gpt-4.1`, `claude-3`, `gemini-2.5-flash`, etc.).
 - Supports text file attachments (.txt, .py, .c, etc.), PDF attachments, and DOCX attachments (see "Advanced Query Handling").
 - Customizable personality (default system prompt in `config.yaml`, user-overridable via `/systemprompt`).
 - User identity aware (OpenAI API and xAI API only, sends user's Discord ID as `name`).
@@ -200,7 +200,7 @@ This project is organized into several key directories:
 | Setting | Description |
 | --- | --- |
 | **providers** | Add the LLM providers you want to use. For OpenAI compatible APIs, provide a `base_url` and a **list** of `api_keys`. For Google Gemini, just provide a **list** of `api_keys`. For keyless providers (like Ollama, Jan), provide an empty list `[]` for `api_keys`.<br />**Gemini uses the `google-genai` library, others use OpenAI compatible APIs.**<br />The bot rotates through keys and retries on failure.<br />For OpenAI, you can add `disable_vision: true` to prevent image processing even if the model supports it. |
-| **model** | Set the default model to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.5-flash-preview-05-20`<br />-`ollama/llama3`<br />-`openrouter/anthropic/claude-3.5-sonnet`<br />Users can override this with the `/model` command. |
+| **model** | Set the default model to `<provider name>/<model name>`, e.g:<br />-`openai/gpt-4.1`<br />-`google/gemini-2.5-flash`<br />-`ollama/llama3`<br />-`openrouter/anthropic/claude-3.5-sonnet`<br />Users can override this with the `/model` command. |
 | **searxng_base_url** | **Optional, for SearXNG grounding.** The base URL of your SearXNG instance (e.g., `http://localhost:18088`). Required if you want non-Gemini/non-Grok models to have web search capabilities. |
 | **searxng_url_content_max_length** | **Optional, for SearXNG grounding.** Maximum character length for text extracted from each URL fetched via SearXNG results. (Default: `20000`) |
 | **grounding_system_prompt** | **Optional, for SearXNG grounding.** The system prompt used for the Gemini model that generates search queries for SearXNG. |

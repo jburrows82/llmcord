@@ -37,6 +37,7 @@ from ..services.prompt_utils import prepare_system_prompt  # <-- ADDED
 from ..bot.commands import (
     get_user_gemini_thinking_budget_preference,
 )
+from ..content.table_renderer import process_and_send_table_images
 
 # Forward declaration for LLMCordClient to resolve circular import for type hinting if needed
 # However, it's better to pass necessary attributes directly if possible.
@@ -178,7 +179,7 @@ async def handle_llm_response_stream(
 
             fallback_model_str = client.config.get(
                 FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
-                "google/gemini-2.5-flash-preview-05-20",
+                "google/gemini-2.5-flash",
             )
             if should_retry_with_gemini_signal:
                 warning_message = f"⚠️ Original model ({original_model_name_param}) stream incomplete. Retrying with `{fallback_model_str}`..."
@@ -1083,6 +1084,18 @@ async def handle_llm_response_stream(
                         reply_target_plain = response_msg_plain
 
                     response_msgs = temp_response_msgs_plain
+                    
+                    # Process and send table images for plain text responses
+                    if (final_text_to_return and 
+                        client.config.get("auto_render_markdown_tables", True)):
+                        try:
+                            await process_and_send_table_images(
+                                final_text_to_return, response_msgs, new_msg
+                            )
+                        except Exception as e:
+                            logging.error(f"Error processing table images in plain text response: {e}")
+                            # Don't let table processing errors affect the main response
+                            
                 break  # type: ignore
         except AllKeysFailedError as e:
             logging.error(
@@ -1125,6 +1138,17 @@ async def handle_llm_response_stream(
             )
             llm_call_successful_final = False  # type: ignore
             break  # type: ignore
+
+    # Process and send table images if the LLM call was successful and feature is enabled
+    if (llm_call_successful_final and final_text_to_return and 
+        app_config.get("auto_render_markdown_tables", True)):
+        try:
+            await process_and_send_table_images(
+                final_text_to_return, response_msgs, new_msg
+            )
+        except Exception as e:
+            logging.error(f"Error processing table images: {e}")
+            # Don't let table processing errors affect the main response
 
     return llm_call_successful_final, final_text_to_return, response_msgs
 

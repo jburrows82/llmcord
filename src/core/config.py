@@ -82,6 +82,9 @@ from .constants import (
     GROUNDING_MODEL_DEFAULT_USE_THINKING_BUDGET,
     GROUNDING_MODEL_DEFAULT_THINKING_BUDGET_VALUE,
     PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY,  # New
+    # Table Rendering
+    AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY,
+    DEFAULT_AUTO_RENDER_MARKDOWN_TABLES,
 )
 
 # Alternative Search Query Generation Config Keys
@@ -515,7 +518,7 @@ async def get_config(filename="config/config.yaml"):
                 # Potentially exit or raise error, but for now, let main script handle it if bot_token is also missing.
 
                 config_data["model"] = (
-                    "google/gemini-2.5-flash-preview-05-20"  # A sensible default
+                    "google/gemini-2.5-flash"  # A sensible default
                 )
                 logging.warning(
                     f"Using hardcoded default model: {config_data['model']}"
@@ -529,7 +532,7 @@ async def get_config(filename="config/config.yaml"):
                     logging.error(
                         f"Invalid 'model' format: {config_data['model']}. Should be 'provider/model_name'."
                     )
-                    config_data["model"] = "google/gemini-2.5-flash-preview-05-20"
+                    config_data["model"] = "google/gemini-2.5-flash"
                     logging.warning(
                         f"Using hardcoded default model: {config_data['model']}"
                     )
@@ -538,7 +541,7 @@ async def get_config(filename="config/config.yaml"):
                 GROUNDING_MODEL_CONFIG_KEY
             ):
                 config_data[GROUNDING_MODEL_CONFIG_KEY] = (
-                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                    "google/gemini-2.5-flash"  # Default
                 )
                 logging.info(
                     f"'{GROUNDING_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[GROUNDING_MODEL_CONFIG_KEY]}"
@@ -702,7 +705,7 @@ async def get_config(filename="config/config.yaml"):
                 or not config_data.get(FALLBACK_VISION_MODEL_CONFIG_KEY)
             ):
                 config_data[FALLBACK_VISION_MODEL_CONFIG_KEY] = (
-                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                    "google/gemini-2.5-flash"  # Default
                 )
                 logging.info(
                     f"'{FALLBACK_VISION_MODEL_CONFIG_KEY}' not found or empty. Using default: {config_data[FALLBACK_VISION_MODEL_CONFIG_KEY]}"
@@ -713,7 +716,7 @@ async def get_config(filename="config/config.yaml"):
                 or not config_data.get(FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY)
             ):
                 config_data[FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY] = (
-                    "google/gemini-2.5-flash-preview-05-20"  # Default
+                    "google/gemini-2.5-flash"  # Default
                 )
                 logging.info(
                     f"'{FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY}' not found or empty. Using default: {config_data[FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY]}"
@@ -1265,6 +1268,22 @@ async def get_config(filename="config/config.yaml"):
                         f"'{MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY}' is not a valid integer. Using default: 1000"
                     )
                     config_data[MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN_CONFIG_KEY] = 1000
+
+            # --- Load Auto Render Markdown Tables Setting ---
+            if AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY not in config_data:
+                config_data[AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY] = (
+                    DEFAULT_AUTO_RENDER_MARKDOWN_TABLES
+                )
+                logging.info(
+                    f"'{AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY}' not found. Using default: {DEFAULT_AUTO_RENDER_MARKDOWN_TABLES}"
+                )
+            elif not isinstance(config_data[AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY], bool):
+                logging.warning(
+                    f"'{AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY}' is not a boolean. Using default: {DEFAULT_AUTO_RENDER_MARKDOWN_TABLES}"
+                )
+                config_data[AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY] = (
+                    DEFAULT_AUTO_RENDER_MARKDOWN_TABLES
+                )
 
             return config_data
 

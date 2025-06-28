@@ -245,7 +245,7 @@ async def get_web_search_queries_from_gemini(
     """
     logging.info("Attempting to get web search queries from Gemini for grounding...")
     grounding_model_str = config.get(
-        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash"
     )
     try:
         grounding_provider, grounding_model_name = grounding_model_str.split("/", 1)
@@ -400,7 +400,7 @@ async def get_web_search_queries_from_gemini_force_stop(
     """
     logging.info("Attempting to get web search queries from Gemini for grounding (force-stop mode)...")
     grounding_model_str = config.get(
-        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+        GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash"
     )
     try:
         grounding_provider, grounding_model_name = grounding_model_str.split("/", 1)

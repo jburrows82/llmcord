@@ -36,7 +36,7 @@ def determine_final_model(
     keywords, and image presence.
     """
     default_model_str = config.get(
-        "model", "google/gemini-2.5-flash-preview-05-20"
+        "model", "google/gemini-2.5-flash"
     )  # More robust default
     provider_slash_model = get_user_model_preference(user_id, default_model_str)
     final_provider_slash_model = provider_slash_model
@@ -69,7 +69,7 @@ def determine_final_model(
             f"⚠️ Invalid model format '{final_provider_slash_model}'. Using default."
         )
         final_provider_slash_model = (
-            "google/gemini-2.5-flash-preview-05-20"  # Hard fallback
+            "google/gemini-2.5-flash"  # Hard fallback
         )
         provider, model_name = final_provider_slash_model.split("/", 1)
 
@@ -121,7 +121,7 @@ def determine_final_model(
     ) and not current_model_accepts_files:
         original_model_for_warning = final_provider_slash_model
         fallback_vision_model_str = config.get(
-            FALLBACK_VISION_MODEL_CONFIG_KEY, "google/gemini-2.5-flash-preview-05-20"
+            FALLBACK_VISION_MODEL_CONFIG_KEY, "google/gemini-2.5-flash"
         )
         logging.info(
             f"Query has images, but current model '{final_provider_slash_model}' does not support vision. Attempting to switch to fallback '{fallback_vision_model_str}'."

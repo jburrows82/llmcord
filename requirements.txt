@@ -19,3 +19,6 @@ aiofiles
 Pillow
 crawl4ai
 open-deep-research>=0.0.15
+# Additional dependencies for markdown table rendering
+html2image
+weasyprint

@@ -250,6 +250,10 @@ STAY_IN_HISTORY_USER_URLS_KEY = "user_provided_urls"
 STAY_IN_HISTORY_SEARCH_RESULTS_KEY = "search_results"
 STAY_IN_HISTORY_GOOGLE_LENS_KEY = "google_lens"
 
+# --- Table Rendering Configuration ---
+AUTO_RENDER_MARKDOWN_TABLES_CONFIG_KEY = "auto_render_markdown_tables"
+DEFAULT_AUTO_RENDER_MARKDOWN_TABLES = True
+
 
 # --- Custom Exceptions ---
 class AllKeysFailedError(Exception):

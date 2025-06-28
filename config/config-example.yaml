@@ -12,7 +12,7 @@ max_text_limits:
   default: 128000 # Default max_text in tokens for LLM prompt (system, history, content, images). Uses tiktoken.
   models:
     "openai/gpt-4.1": 128000
-    "google/gemini-2.5-flash-preview-05-20": 250000
+    "google/gemini-2.5-flash": 250000
     "anthropic/claude-3.7-sonnet": 90000
     "anthropic/claude-3.7-sonnet-thought": 90000
     "anthropic/claude-sonnet-4": 80000
@@ -26,6 +26,7 @@ max_message_node_cache: 500 # Max messages stored in the internal bot cache for 
 edit_delay_seconds: 1.0 # Delay in seconds between edits for streaming responses.
 use_plain_responses: false # If true, bot responses will be plain text without Discord formatting.
 allow_dms: true          # If true, the bot will respond to direct messages.
+auto_render_markdown_tables: true # If true, markdown tables in responses will be automatically rendered as images and sent as follow-up messages.
 
 # --- Permissions ---
 # Configure user, role, and channel permissions for bot interaction.
