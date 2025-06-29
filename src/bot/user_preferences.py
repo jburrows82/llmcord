@@ -7,6 +7,8 @@ from ..core.constants import (
     USER_SYSTEM_PROMPTS_FILENAME,
     USER_GEMINI_THINKING_BUDGET_PREFS_FILENAME,
     USER_MODEL_PREFS_FILENAME,
+)
+
 # Global preference dictionaries
 user_model_preferences: Dict[int, str] = {}
 user_system_prompt_preferences: Dict[int, Optional[str]] = {}
@@ -15,7 +17,6 @@ async def _load_user_preferences(filename: str) -> Dict[int, Any]:
     """Loads user preferences from a JSON file asynchronously."""
     if not await aio_os.path.exists(filename):
         return {}
-    pass
     try:
         async with aiofiles.open(filename, "r", encoding="utf-8") as f:
             content = await f.read()

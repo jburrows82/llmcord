@@ -22,6 +22,7 @@ async def fetch_single_query_from_web_content_api(
             api_url,
             json=payload,
             timeout=httpx.Timeout(connect=8.0, read=15.0, write=8.0, pool=5.0),
+        )
         response.raise_for_status()
         api_response_json = response.json()
         # Check for API's own error field
@@ -70,6 +71,7 @@ async def fetch_batch_queries_from_web_content_api(
         async with semaphore:
             return await fetch_single_query_from_web_content_api(
                 q, client, api_url, api_max_results, max_char_per_url
+            )
     # Kick off tasks for every unique uncached query.
     fetch_tasks = {
         query: asyncio.create_task(_sem_fetch(query))
@@ -89,6 +91,7 @@ async def fetch_batch_queries_from_web_content_api(
             # Cache the successful response so future batches can reuse it.
             cache_key = get_cache_key(
                 query, api_url, api_max_results, max_char_per_url
+            )
             cache_response(cache_key, result_payload, cache_ttl_minutes)
         # Assign the fetched result (whatever it is) to every original index
         for idx in uncached_query_to_indices[query]:

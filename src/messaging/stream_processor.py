@@ -15,6 +15,7 @@ from ..core.constants import (
     FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
     FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY,
     AllKeysFailedError,
+)
 from ..core import models
 from ..llm.handler import generate_response_stream
 from ..services.prompt_utils import prepare_system_prompt
@@ -64,12 +65,10 @@ class StreamProcessor:
             retry_context = await self._setup_retry(
                 attempt_num, original_params, initial_user_warnings,
                 processing_msg, response_msgs, new_msg
-            pass
+            )
             if not retry_context:
                 break
-                pass
             current_params, should_retry_flags = retry_context
-            pass
             # Process single attempt
             attempt_result = await self._process_single_attempt(
                 new_msg, processing_msg, response_msgs,
@@ -77,10 +76,9 @@ class StreamProcessor:
                 use_plain_responses_config, split_limit_config,
                 custom_search_queries_generated, successful_api_results_count,
                 deep_search_used, history_for_llm, attempt_num
-            pass
+            )
             if attempt_result['should_retry']:
                 continue
-                pass
             llm_call_successful_final = attempt_result['success']
             final_text_to_return = attempt_result['text']
             response_msgs = attempt_result['response_msgs']
@@ -91,31 +89,27 @@ class StreamProcessor:
         """Setup retry parameters and clean up incomplete messages if needed."""
         if attempt_num == 0:
             return original_params, {}
-            pass
         # Handle retry setup
         fallback_model_str = self.client.config.get(
             FALLBACK_MODEL_INCOMPLETE_STREAM_CONFIG_KEY,
             "google/gemini-2.5-flash",
-        pass
+        )
         # Clean up incomplete messages
         await self._cleanup_incomplete_messages(processing_msg, response_msgs)
-        pass
         # Setup fallback parameters
         try:
             provider, model_name = fallback_model_str.split("/", 1)
         except ValueError:
             return None
-            pass
         provider_config = self.client.config.get("providers", {}).get(provider, {})
         if not provider_config or not provider_config.get("api_keys"):
             return None
-            pass
         extra_params = self.client.config.get("extra_api_parameters", {}).copy()
         system_prompt_text = prepare_system_prompt(
             provider == "google",
             provider,
             self.client.config.get(FALLBACK_MODEL_SYSTEM_PROMPT_CONFIG_KEY)
-        pass
+        )
         current_params = {
             'provider': provider,
             'model_name': model_name,
@@ -123,14 +117,12 @@ class StreamProcessor:
             'extra_api_params': extra_params,
             'system_prompt_text': system_prompt_text,
         }
-        pass
         return current_params, {}
     async def _cleanup_incomplete_messages(self, processing_msg, response_msgs):
         """Clean up incomplete messages before retry."""
         if response_msgs:
             temp_msgs = list(response_msgs)
             response_msgs.clear()
-            pass
             for msg_to_delete in reversed(temp_msgs):
                 try:
                     await msg_to_delete.delete()
@@ -152,12 +144,10 @@ class StreamProcessor:
         grounding_metadata = None
         success = False
         should_retry = False
-        pass
         # Check if this is an image generation model
         is_image_model = (current_params['provider'] == "google" and 
                          (current_params['model_name'] == "gemini-2.0-flash-preview-image-generation" or
                           current_params['model_name'].startswith("imagen-")))
-        pass
         try:
             # Generate response stream
             stream_generator = generate_response_stream(
@@ -168,23 +158,23 @@ class StreamProcessor:
                 provider_config=current_params['provider_config'],
                 extra_params=current_params['extra_api_params'],
                 app_config=self.app_config,
-            pass
+            )
             # Process stream
             if is_image_model:
                 result = await self.image_handler.process_image_stream(
                     stream_generator, new_msg, processing_msg, response_msgs, final_text
+                )
             else:
                 result = await self.message_editor.process_text_stream(
                     stream_generator, new_msg, processing_msg, response_msgs,
                     current_params, initial_user_warnings, use_plain_responses_config,
                     split_limit_config, custom_search_queries_generated,
                     successful_api_results_count, deep_search_used, attempt_num
-            pass
+                )
             success = result.get('success', False)
             final_text = result.get('text', '')
             response_msgs = result.get('response_msgs', response_msgs)
             should_retry = result.get('should_retry', False)
-            pass
         except AllKeysFailedError as e:
             pass
             if attempt_num == 0:
@@ -192,10 +182,11 @@ class StreamProcessor:
             else:
                 await self.error_handler.handle_all_keys_failed(
                     new_msg, processing_msg, response_msgs, e, use_plain_responses_config
+                )
         except Exception as e:
             await self.error_handler.handle_unexpected_error(
                 new_msg, processing_msg, response_msgs, e, use_plain_responses_config
-            pass
+            )
         return {
             'success': success,
             'text': final_text,

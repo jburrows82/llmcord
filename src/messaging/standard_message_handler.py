@@ -12,6 +12,7 @@ from ..core.constants import (
     GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY,
     MAX_MESSAGE_NODES_CONFIG_KEY,
     AT_AI_PATTERN,
+)
 from ..core.config_loader import get_max_text_for_model
 from ..core.utils import extract_urls_with_indices, is_image_url, extract_text_from_pdf_bytes
 from ..llm.model_selector import determine_final_model
@@ -23,7 +24,6 @@ from ..messaging.response_sender import handle_llm_response_stream, resend_imgur
 from ..messaging.history_utils import build_message_history
 class StandardMessageHandler:
     """Handles standard message processing (non-prefix, non-deep-search)."""
-    pass
     @staticmethod
     async def process_standard_message(
         message: discord.Message,
@@ -35,31 +35,29 @@ class StandardMessageHandler:
         is_deep_search: bool = False
     ) -> None:
         """Process a standard message through the full LLM pipeline."""
-        pass
         # Clean content and check for Google Lens
         cleaned_content = clean_message_content(
             original_content_for_processing,
             bot_client.user.mention if bot_client.user else None,
             isinstance(message.channel, discord.DMChannel),
-        pass
+        )
         image_attachments = [
             att for att in message.attachments 
             if att.content_type and att.content_type.startswith("image/")
         ]
         user_warnings = set()
-        pass
+        
         use_google_lens, cleaned_content, lens_warning = check_google_lens_trigger(
             cleaned_content, image_attachments, bot_client.config
+        )
         if lens_warning:
             user_warnings.add(lens_warning)
-        if use_google_lens:
-        pass
         user_id = message.author.id
-        pass
+        
         # Determine potential image URLs in text
         has_potential_image_urls_in_text = await StandardMessageHandler._check_image_urls_in_content(
             cleaned_content, message
-        pass
+        )
         # Determine final model
         (
             final_provider_slash_model,
@@ -78,13 +76,12 @@ class StandardMessageHandler:
             has_potential_image_urls_in_text=has_potential_image_urls_in_text,
             config=bot_client.config,
             user_warnings=user_warnings,
-        pass
+        )
         # If Google Lens was triggered but final model can't handle images, disable lens
         if use_google_lens and not accept_files:
             use_google_lens = False
             if GOOGLE_LENS_PATTERN.match(cleaned_content):
                 cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
-        pass
         # Basic config assignments
         max_files_per_message = bot_client.config.get("max_images", 5)
         max_tokens_for_text_config = get_max_text_for_model(bot_client.config, final_provider_slash_model)
@@ -93,7 +90,7 @@ class StandardMessageHandler:
         split_limit = (
             MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses 
             else MAX_PLAIN_TEXT_LENGTH
-        pass
+        )
         # Content processing and grounding (disable for deep search)
         if disable_grounding:
             # For deep search queries, disable grounding/tools
@@ -125,7 +122,7 @@ class StandardMessageHandler:
                 bot_user_obj=bot_client.user,
                 models_module=models,
                 google_types_module=google_types,
-            pass
+            )
             (
                 formatted_user_urls_content,
                 formatted_google_lens_content,
@@ -135,7 +132,6 @@ class StandardMessageHandler:
                 successful_api_results_count,
                 cleaned_content,
             ) = grounding_results
-        pass
         # Build message history
         history_for_llm = await build_message_history(
             new_msg=message,
@@ -169,28 +165,24 @@ class StandardMessageHandler:
                 ),
             ),
             config=bot_client.config,
-        pass
+        )
         if not history_for_llm:
             return
-        pass
-            f"history length: {len(history_for_llm)}, "
-            f"google_lens: {use_google_lens}, warnings: {user_warnings}):\n{message.content}"
-        pass
         # Prepare system prompt and API parameters
         default_system_prompt_from_config = bot_client.config.get("system_prompt")
         base_system_prompt_text = get_user_system_prompt_preference(
             message.author.id, default_system_prompt_from_config
+        )
         system_prompt_text = prepare_system_prompt(is_gemini, provider, base_system_prompt_text)
         extra_api_params = bot_client.config.get("extra_api_parameters", {}).copy()
-        pass
         if is_gemini:
             global_use_thinking_budget = bot_client.config.get(GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False)
             global_thinking_budget_value = bot_client.config.get(GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0)
             user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(
                 message.author.id, global_use_thinking_budget
+            )
             if user_wants_thinking_budget:
                 extra_api_params["thinking_budget"] = global_thinking_budget_value
-        pass
         # Handle LLM response
         (
             llm_call_successful,
@@ -213,22 +205,20 @@ class StandardMessageHandler:
             custom_search_queries_generated=custom_search_queries_generated_flag,
             successful_api_results_count=successful_api_results_count,
             deep_search_used=is_deep_search,
-        pass
+        )
         # Cleanup and finalization
         await StandardMessageHandler._cleanup_and_finalize(
             bot_client, message, response_msgs, llm_call_successful, 
             final_text, start_time
-    pass
+        )
     @staticmethod
     async def _check_image_urls_in_content(cleaned_content: str, message: discord.Message) -> bool:
         """Check if there are potential image URLs in the content or replied messages."""
         has_potential_image_urls_in_text = False
-        pass
         if cleaned_content:
             urls_in_text_for_image_check = extract_urls_with_indices(cleaned_content)
             if any(is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check):
                 has_potential_image_urls_in_text = True
-        pass
         # Also check for image URLs in replied-to messages
         if (
             not has_potential_image_urls_in_text and 
@@ -246,9 +236,7 @@ class StandardMessageHandler:
                         has_potential_image_urls_in_text = True
             except (discord.NotFound, discord.HTTPException, Exception):
                 pass
-        pass
         return has_potential_image_urls_in_text
-    pass
     @staticmethod
     async def _cleanup_and_finalize(
         bot_client,
@@ -264,15 +252,12 @@ class StandardMessageHandler:
         finally:
             if llm_call_successful and final_text:
                 await resend_imgur_urls(message, response_msgs, final_text)
-            pass
             for response_msg in response_msgs:
                 if response_msg and response_msg.id in bot_client.msg_nodes:
                     node = bot_client.msg_nodes[response_msg.id]
                     if llm_call_successful:
                         async with node.lock:
                             node.full_response_text = final_text
-                elif response_msg:
-            pass
             max_nodes_from_config = bot_client.config.get(MAX_MESSAGE_NODES_CONFIG_KEY, 500)
             if (num_nodes := len(bot_client.msg_nodes)) > max_nodes_from_config:
                 nodes_to_delete = sorted(bot_client.msg_nodes.keys())[
@@ -280,5 +265,4 @@ class StandardMessageHandler:
                 ]
                 for msg_id in nodes_to_delete:
                     bot_client.msg_nodes.pop(msg_id, None)
-            pass
             end_time = time.time()

@@ -8,10 +8,10 @@ from ..core.constants import (
     IMGUR_URL_PATTERN,
     IMGUR_URL_PREFIX,
     MAX_PLAIN_TEXT_LENGTH,
+)
 from ..core import models
 class ImageHandler:
     """Handles image generation and Imgur URL processing."""
-    pass
     def __init__(self, client, app_config: Dict[str, Any]):
         self.client = client
         self.app_config = app_config
@@ -24,7 +24,6 @@ class ImageHandler:
         success = False
         async for (text_chunk, finish_reason, chunk_grounding_metadata,
                    error_message, image_data, image_mime_type) in stream_generator:
-            pass
             if error_message:
                 return {'success': False, 'text': final_text, 'response_msgs': response_msgs}
             if text_chunk:
@@ -39,6 +38,7 @@ class ImageHandler:
             await self._send_generated_image(
                 new_msg, processing_msg, response_msgs, 
                 accumulated_image_data, accumulated_image_mime_type, final_text
+            )
         return {
             'success': success,
             'text': final_text,
@@ -71,10 +71,12 @@ class ImageHandler:
                     content="✅ Image generated successfully!",
                     embed=None,
                     view=None,
+                )
                 response_msg = await processing_msg.reply(
                     content=content_to_send,
                     file=discord_file,
                     mention_author=False,
+                )
             else:
                 # Send as a new reply
                 reply_target = response_msgs[-1] if response_msgs else new_msg
@@ -82,6 +84,7 @@ class ImageHandler:
                     content=content_to_send,
                     file=discord_file,
                     mention_author=False,
+                )
             response_msgs.append(response_msg)
             # Update msg_nodes cache
             if response_msg.id not in self.client.msg_nodes:
@@ -94,6 +97,7 @@ class ImageHandler:
                     content=f"Generated image but failed to send: {str(e)}",
                     embed=None,
                     view=None,
+                )
     async def resend_imgur_urls(
         self,
         new_msg: discord.Message,
@@ -106,14 +110,12 @@ class ImageHandler:
         lines = final_text.strip().split("\n")
         imgur_urls_to_resend = []
         found_header = False
-        pass
         for line in lines:
             stripped_line = line.strip()
             if stripped_line == IMGUR_HEADER:
                 found_header = True
                 continue
             if found_header and stripped_line.startswith(IMGUR_URL_PREFIX):
-                pass
                 if IMGUR_URL_PATTERN.match(stripped_line):
                     imgur_urls_to_resend.append(stripped_line)
                 else:
@@ -133,25 +135,24 @@ class ImageHandler:
         for url_str in imgur_urls:
             needed_len = len(url_str) + (2 if current_message_content else 0)
             if len(current_message_content) + needed_len > max_chars:
-                pass
                 if current_message_content:
                     messages_to_send_content.append(current_message_content)
                 current_message_content = url_str[:max_chars] if len(url_str) > max_chars else url_str
                 if len(url_str) > max_chars:
-                    pass
+                    break
             else:
                 current_message_content += ("\n\n" if current_message_content else "") + url_str
         if current_message_content:
             messages_to_send_content.append(current_message_content)
         reply_target = response_msgs[-1] if response_msgs else new_msg
         last_sent_msg = reply_target
-        pass
         for i, msg_content in enumerate(messages_to_send_content):
             try:
                 target_to_reply_to = last_sent_msg
                 if isinstance(target_to_reply_to, discord.Message):
                     sent_msg = await target_to_reply_to.reply(
                         content=msg_content, mention_author=False
+                    )
                     last_sent_msg = sent_msg
                 else:
                     sent_msg = await new_msg.reply(content=msg_content, mention_author=False)
@@ -162,6 +163,7 @@ class ImageHandler:
                     await new_msg.reply(
                         f"(Error sending previous chunk)\n{msg_content}",
                         mention_author=False,
+                    )
                 except discord.HTTPException as fallback_err:
                     pass
             except Exception as e:
@@ -170,6 +172,5 @@ class ImageHandler:
         """Check if finish reason indicates successful completion."""
         if not finish_reason:
             return False
-            pass
         successful_reasons = {"stop", "end_turn", "content_filter", "length", "max_tokens"}
         return finish_reason.lower() in successful_reasons 

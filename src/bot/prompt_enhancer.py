@@ -58,11 +58,13 @@ async def execute_enhance_prompt_logic(
                 await send_response(
                     content="A required document for prompt enhancement is missing. Please contact the bot administrator.",
                     ephemeral=True,
+                )
                 return
             except IOError as io_err:
                 await send_response(
                     content="Could not read a required document for prompt enhancement. Please contact the bot administrator.",
                     ephemeral=True,
+                )
                 return
         # Get enhancement model configuration
         default_enhance_model = "google/gemini-1.0-pro"
@@ -77,6 +79,7 @@ async def execute_enhance_prompt_logic(
             await send_response(
                 content=f"Configuration error for enhancement model's provider '{provider}'. {final_error_message_to_user}",
                 ephemeral=True,
+            )
             return
         extra_params_from_app = app_config.get("extra_api_parameters", {}).copy()
         # Call the LLM to enhance the prompt
@@ -109,12 +112,12 @@ async def execute_enhance_prompt_logic(
             await send_response(
                 content="The LLM returned an empty enhanced prompt. Please try again.",
                 ephemeral=True,
+            )
             return
         # Format and send the response
         await _send_enhanced_prompt_response(
             send_response, enhanced_prompt_text_from_llm, provider, model_name
-        logger.info(
-            f'User {user_obj.id} ({user_obj.name}) successfully used enhanceprompt for: "{original_prompt_text[:50]}..." with model {provider}/{model_name}'
+        )
     except Exception as e:
         try:
             if isinstance(response_target, discord.Interaction):

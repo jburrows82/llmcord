@@ -87,6 +87,7 @@ class LLMCordClient(discord.Client):
     async def on_ready(self):
         """Called when the bot is ready and logged in."""
         logging.info(f"Logged in as {self.user}")
+        print(f"✅ LLMCord bot is now running as {self.user}!")
         await check_and_perform_global_reset(self.config)
 
     async def on_message(self, new_msg: discord.Message):

@@ -11,11 +11,11 @@ from ..core.constants import (
     EDIT_DELAY_SECONDS_CONFIG_KEY,
     MAX_EMBED_DESCRIPTION_LENGTH,
     MAX_PLAIN_TEXT_LENGTH,
+)
 from ..core import models
 from ..ui.ui import ResponseActionView
 class MessageEditor:
     """Handles Discord message creation and editing for LLM responses."""
-    pass
     def __init__(self, client, app_config: Dict[str, Any]):
         self.client = client
         self.app_config = app_config
@@ -29,11 +29,14 @@ class MessageEditor:
             if use_plain_responses:
                 processing_msg = await new_msg.reply(
                     "⏳ Processing request...", mention_author=False, suppress_embeds=True
+                )
             else:
                 processing_embed = discord.Embed(
                     description="⏳ Processing request...", color=EMBED_COLOR_INCOMPLETE
+                )
                 processing_msg = await new_msg.reply(
                     embed=processing_embed, mention_author=False
+                )
         except discord.HTTPException as e:
             pass
         except Exception as e:
@@ -55,7 +58,6 @@ class MessageEditor:
             base_embed.add_field(name=warning_text, value="", inline=False)
         async for (text_chunk, finish_reason, chunk_grounding_metadata, 
                    error_message, image_data, image_mime_type) in stream_generator:
-            pass
             # Handle retry signals
             if error_message in ["RETRY_WITH_GEMINI_NO_FINISH_REASON", 
                                "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY"]:
@@ -87,6 +89,7 @@ class MessageEditor:
                     error_message = None
                 except Exception as e:
                     # Continue with normal processing if parsing fails
+                    pass
             if error_message:
                 return {'success': False, 'text': final_text, 'response_msgs': response_msgs}
             if chunk_grounding_metadata:
@@ -100,6 +103,7 @@ class MessageEditor:
                     split_limit_config, base_embed, finish_reason,
                     current_params, grounding_metadata, custom_search_queries_generated,
                     successful_api_results_count, deep_search_used, attempt_num
+                )
             if finish_reason:
                 success = self._is_successful_finish(finish_reason, current_params['provider'])
                 break
@@ -110,6 +114,7 @@ class MessageEditor:
             await self._send_plain_text_response(
                 new_msg, processing_msg, response_msgs, final_text, split_limit_config,
                 current_params, grounding_metadata, custom_search_queries_generated
+            )
         return {
             'success': success,
             'text': final_text,
@@ -127,13 +132,12 @@ class MessageEditor:
             return
         current_msg_idx = (len(final_text) - 1) // split_limit_config if final_text else 0
         start_next_msg = current_msg_idx >= len(response_msgs)
-        pass
         ready_to_edit = (self.edit_task is None or self.edit_task.done()) and (
             dt.now().timestamp() - self.client.last_task_time
             >= self.client.config.get(EDIT_DELAY_SECONDS_CONFIG_KEY, 1.0)
+        )
         is_final_chunk = finish_reason is not None
         if start_next_msg or ready_to_edit or is_final_chunk:
-            pass
             if self.edit_task and not self.edit_task.done():
                 try:
                     await self.edit_task
@@ -146,6 +150,7 @@ class MessageEditor:
                 finish_reason, current_params, grounding_metadata,
                 custom_search_queries_generated, successful_api_results_count,
                 deep_search_used, attempt_num, is_final_chunk
+            )
             # Create view for final successful chunk
             view_to_attach = None
             if is_final_chunk:
@@ -154,10 +159,12 @@ class MessageEditor:
                     view_to_attach = self._create_response_action_view(
                         new_msg, final_text, current_params, grounding_metadata,
                         custom_search_queries_generated, successful_api_results_count
+                    )
             # Send or edit message
             await self._send_or_edit_message(
                 new_msg, processing_msg, response_msgs, current_embed,
                 current_msg_idx, start_next_msg, is_final_chunk, final_text, view_to_attach
+            )
             self.client.last_task_time = dt.now().timestamp()
     async def _create_segment_embed(
         self, final_text, current_msg_idx, split_limit_config, base_embed,
@@ -174,9 +181,9 @@ class MessageEditor:
             current_embed.add_field(name=field.name, value=field.value, inline=field.inline)
         stripped_text = current_display_text.strip() if current_display_text else ""
         effective_text = stripped_text or "..."
-        pass
         current_embed.description = (
             effective_text if is_final_chunk else f"{effective_text}{STREAMING_INDICATOR}"
+        )
         is_successful = self._is_successful_finish(finish_reason, current_params['provider']) if finish_reason else False
         is_blocked = finish_reason and finish_reason.lower() in ("safety", "recitation", "other")
         if is_final_chunk and is_blocked:
@@ -188,12 +195,13 @@ class MessageEditor:
             current_embed.color = (
                 EMBED_COLOR_COMPLETE if is_final_chunk and is_successful
                 else EMBED_COLOR_INCOMPLETE
-            pass
+            )
             if is_final_chunk and is_successful:
                 footer_text = self._create_footer_text(
                     current_params, attempt_num, grounding_metadata,
                     custom_search_queries_generated, successful_api_results_count,
                     deep_search_used
+                )
                 current_embed.set_footer(text=footer_text)
         return current_embed
     async def _send_or_edit_message(
@@ -202,9 +210,7 @@ class MessageEditor:
     ):
         """Send new message or edit existing one."""
         target_msg_for_node_update = None
-        pass
         if start_next_msg:
-            pass
             if not response_msgs and processing_msg:
                 await processing_msg.edit(content=None, embed=current_embed, view=view_to_attach)
                 response_msg = processing_msg
@@ -215,19 +221,19 @@ class MessageEditor:
                 reply_target = new_msg if not response_msgs else response_msgs[-1]
                 response_msg = await reply_target.reply(
                     embed=current_embed, view=view_to_attach, mention_author=False
+                )
                 target_msg_for_node_update = response_msg
                 if view_to_attach:
                     view_to_attach.message = response_msg
             response_msgs.append(response_msg)
-            pass
             if response_msg.id not in self.client.msg_nodes:
                 self.client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
-                pass
         elif response_msgs and current_msg_idx < len(response_msgs):
             target_msg = response_msgs[current_msg_idx]
             if target_msg:
                 self.edit_task = asyncio.create_task(
                     target_msg.edit(embed=current_embed, view=view_to_attach)
+                )
                 if view_to_attach:
                     view_to_attach.message = target_msg
                 target_msg_for_node_update = target_msg
@@ -236,6 +242,7 @@ class MessageEditor:
             if processing_msg:
                 await processing_msg.edit(
                     content=None, embed=current_embed, view=view_to_attach
+                )
                 response_msg = processing_msg
                 target_msg_for_node_update = response_msg
                 if view_to_attach:
@@ -243,6 +250,7 @@ class MessageEditor:
             else:
                 response_msg = await new_msg.reply(
                     embed=current_embed, view=view_to_attach, mention_author=False
+                )
                 target_msg_for_node_update = response_msg
                 if view_to_attach:
                     view_to_attach.message = response_msg
@@ -268,15 +276,16 @@ class MessageEditor:
         if processing_msg and (not response_msgs or processing_msg.id == response_msgs[0].id):
             await processing_msg.edit(
                 content=final_messages_content[0] or "...", embed=None, view=None
+            )
             temp_response_msgs.append(processing_msg)
             if processing_msg.id not in self.client.msg_nodes:
                 self.client.msg_nodes[processing_msg.id] = models.MsgNode(
                     parent_msg=new_msg, full_response_text=final_text
+                )
             start_index = 1
         reply_target = temp_response_msgs[-1] if temp_response_msgs else new_msg
         for i in range(start_index, len(final_messages_content)):
             content_chunk = final_messages_content[i]
-            pass
             # Create view for the final message chunk
             view_to_attach = None
             if i == len(final_messages_content) - 1:  # Last chunk
@@ -288,17 +297,16 @@ class MessageEditor:
                     app_config=self.app_config,
                     original_user_message=new_msg,
                     internet_used=custom_search_queries_generated,
-            pass
+                )
             response_msg = await reply_target.reply(
                 content=content_chunk or "...",
                 suppress_embeds=True,
                 view=view_to_attach,
                 mention_author=False,
+            )
             temp_response_msgs.append(response_msg)
-            pass
             if view_to_attach:
                 view_to_attach.message = response_msg
-                pass
             self.client.msg_nodes[response_msg.id] = models.MsgNode(parent_msg=new_msg)
             if i == len(final_messages_content) - 1:
                 self.client.msg_nodes[response_msg.id].full_response_text = final_text
@@ -308,15 +316,11 @@ class MessageEditor:
         """Check if finish reason indicates successful completion."""
         if not finish_reason:
             return False
-            pass
         successful_reasons = {"stop", "end_turn", "content_filter", "length", "max_tokens"}
-        pass
         if finish_reason.lower() in successful_reasons:
             return True
-            pass
         if provider == "google" and finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED):
             return True
-            pass
         return False
     def _get_block_message(self, finish_reason: str) -> str:
         """Get appropriate message for blocked responses."""
@@ -333,11 +337,9 @@ class MessageEditor:
     ) -> str:
         """Create footer text for final message."""
         footer_parts = [f"Model: {current_params['model_name']}"]
-        pass
         if attempt_num == 1:
             footer_parts.append("(Retried)")
         internet_info = []
-        pass
         if deep_search_used:
             internet_info.append("Deepsearch was used")
         elif grounding_metadata:
@@ -364,9 +366,9 @@ class MessageEditor:
                 getattr(grounding_metadata, "web_search_queries", None)
                 or getattr(grounding_metadata, "grounding_chunks", None)
                 or getattr(grounding_metadata, "search_entry_point", None)
-        pass
+            )
+        )
         has_text_content = bool(final_text)
-        pass
         # Only create view if there's content to show or sources to display
         if has_sources or has_text_content:
             # Determine whether the response used the internet
@@ -374,6 +376,7 @@ class MessageEditor:
                 has_sources
                 if current_params['provider'] == "google"  # Gemini grounding implies web usage
                 else custom_search_queries_generated
+            )
             return ResponseActionView(
                 grounding_metadata=grounding_metadata,
                 full_response_text=final_text,
@@ -381,5 +384,5 @@ class MessageEditor:
                 app_config=self.app_config,
                 original_user_message=new_msg,
                 internet_used=internet_used_flag,
-        pass
+            )
         return None 

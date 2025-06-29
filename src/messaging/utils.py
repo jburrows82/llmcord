@@ -8,7 +8,7 @@ async def safe_typing(channel: discord.abc.Messageable):
             yield
     except discord.Forbidden:
         # Missing permission or Cloudflare block (error code 40333).
-            "Continuing without it."
+        # Continuing without it.
         yield
     except discord.HTTPException as e:
         # Catch any other 403 response that does not raise the concrete

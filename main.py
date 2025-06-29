@@ -1,17 +1,22 @@
 import asyncio
 import logging
 
+# Disable all logging immediately for maximum performance
+logging.disable(logging.CRITICAL)
+
 from src.core.logging_config import setup_logging
 from src.core.app_lifecycle import AppLifecycleManager
 
 
 async def main():
     """Main entry point for the LLMCord bot."""
-    # Initialize logging first
+    # Initialize logging first (but it's already disabled for performance)
     setup_logging()
     
     logger = logging.getLogger(__name__)
     logger.info("Starting LLMCord bot...")
+    
+    print("🤖 LLMCord bot is starting...")
     
     lifecycle_manager = AppLifecycleManager()
     

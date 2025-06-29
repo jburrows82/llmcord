@@ -22,11 +22,14 @@ except ImportError:
     logging.warning("html2image not available. Table rendering will use basic PIL rendering.")
 
 try:
-    import weasyprint
-    WEASYPRINT_AVAILABLE = True
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
-    WEASYPRINT_AVAILABLE = False
-    logging.warning("weasyprint not available. Will use html2image for table rendering.")
+    PLAYWRIGHT_AVAILABLE = False
+    logging.warning("Playwright not available. Table rendering will fall back to html2image or PIL.")
+
+# WeasyPrint removed due to compatibility issues
+WEASYPRINT_AVAILABLE = False
 
 
 def detect_markdown_tables(text: str) -> List[Tuple[str, int, int]]:
@@ -61,24 +64,16 @@ def detect_markdown_tables(text: str) -> List[Tuple[str, int, int]]:
     return tables
 
 
-def render_table_with_html2image(table_markdown: str) -> Optional[bytes]:
+async def render_table_with_playwright(table_markdown: str) -> Optional[bytes]:
     """
-    Render a markdown table as an image using html2image.
-    
-    Args:
-        table_markdown: The markdown table text
-        
-    Returns:
-        Image bytes or None if rendering failed
+    Render a markdown table as an image using Playwright.
     """
-    if not HTML2IMAGE_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE:
         return None
-        
+    
     try:
-        # Convert markdown table to HTML
         html_content = markdown2.markdown(table_markdown, extras=['tables'])
         
-        # Add CSS styling for better appearance
         css_styles = """
         <style>
             body {
@@ -87,6 +82,7 @@ def render_table_with_html2image(table_markdown: str) -> Optional[bytes]:
                 background-color: #2f3136;
                 color: #dcddde;
                 margin: 0;
+                width: fit-content;
             }
             table {
                 border-collapse: collapse;
@@ -95,245 +91,53 @@ def render_table_with_html2image(table_markdown: str) -> Optional[bytes]:
                 border-radius: 6px;
                 overflow: hidden;
                 box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+                font-size: 14px;
             }
             th, td {
                 border: 1px solid #4f545c;
                 padding: 12px 16px;
                 text-align: left;
+                vertical-align: top;
             }
             th {
                 background-color: #5865f2;
                 color: white;
                 font-weight: 600;
             }
-            tr:nth-child(even) {
+            tr:nth-child(even) td {
                 background-color: #2f3136;
             }
-            tr:hover {
-                background-color: #393c43;
+            tr:nth-child(odd) td {
+                background-color: #36393f;
             }
         </style>
         """
         
         full_html = f"<!DOCTYPE html><html><head>{css_styles}</head><body>{html_content}</body></html>"
         
-        # Create html2image instance
-        hti = Html2Image(
-            size=(800, 600),  # Initial size, will be adjusted
-            output_path=tempfile.gettempdir()
-        )
-        
-        # Generate a temporary filename
-        temp_filename = f"table_{hash(table_markdown) % 10000}.png"
-        
-        # Render HTML to image
-        hti.screenshot(
-            html_str=full_html,
-            save_as=temp_filename,
-            size=(800, 600)
-        )
-        
-        # Read the generated image
-        temp_path = Path(tempfile.gettempdir()) / temp_filename
-        if temp_path.exists():
-            with open(temp_path, 'rb') as f:
-                image_bytes = f.read()
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
             
-            # Clean up temporary file
-            temp_path.unlink()
+            await page.set_content(full_html)
+            await page.wait_for_load_state('networkidle')
             
-            return image_bytes
-        
-    except Exception as e:
-        logging.error(f"Error rendering table with html2image: {e}")
-    
-    return None
-
-
-def render_table_with_weasyprint(table_markdown: str) -> Optional[bytes]:
-    """
-    Render a markdown table as an image using weasyprint.
-    
-    Args:
-        table_markdown: The markdown table text
-        
-    Returns:
-        Image bytes or None if rendering failed
-    """
-    if not WEASYPRINT_AVAILABLE:
-        return None
-        
-    try:
-        # Convert markdown table to HTML
-        html_content = markdown2.markdown(table_markdown, extras=['tables'])
-        
-        # Add CSS styling for better appearance
-        css_styles = """
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            padding: 20px;
-            background-color: #2f3136;
-            color: #dcddde;
-            margin: 0;
-            width: fit-content;
-        }
-        table {
-            border-collapse: collapse;
-            margin: 0 auto;
-            background-color: #36393f;
-            border-radius: 6px;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-        }
-        th, td {
-            border: 1px solid #4f545c;
-            padding: 12px 16px;
-            text-align: left;
-            white-space: nowrap;
-        }
-        th {
-            background-color: #5865f2;
-            color: white;
-            font-weight: 600;
-        }
-        tr:nth-child(even) {
-            background-color: #2f3136;
-        }
-        """
-        
-        full_html = f"<!DOCTYPE html><html><head><style>{css_styles}</style></head><body>{html_content}</body></html>"
-        
-        # Render HTML to PNG bytes
-        png_bytes = weasyprint.HTML(string=full_html).write_png()
-        
-        return png_bytes
-        
-    except Exception as e:
-        logging.error(f"Error rendering table with weasyprint: {e}")
-    
-    return None
-
-
-def render_table_with_pil(table_markdown: str) -> Optional[bytes]:
-    """
-    Render a markdown table as an image using PIL (fallback method).
-    
-    Args:
-        table_markdown: The markdown table text
-        
-    Returns:
-        Image bytes or None if rendering failed
-    """
-    try:
-        # Parse the markdown table
-        lines = [line.strip() for line in table_markdown.strip().split('\n') if line.strip()]
-        
-        if len(lines) < 2:
-            return None
-            
-        # Extract table data
-        rows = []
-        for i, line in enumerate(lines):
-            if i == 1:  # Skip separator line
-                continue
-            # Split by | and clean up
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last elements
-            if cells:
-                rows.append(cells)
-        
-        if not rows:
-            return None
-            
-        # Calculate dimensions
-        max_cols = max(len(row) for row in rows)
-        
-        # Use a default font (PIL built-in)
-        try:
-            font = ImageFont.truetype("DejaVuSans.ttf", 14)
-        except (OSError, IOError):
             try:
-                font = ImageFont.truetype("arial.ttf", 14)
-            except (OSError, IOError):
-                font = ImageFont.load_default()
-        
-        # Calculate cell dimensions
-        cell_padding = 10
-        cell_heights = []
-        cell_widths = [0] * max_cols
-        
-        for row in rows:
-            row_height = 0
-            for col_idx, cell in enumerate(row):
-                if col_idx < max_cols:
-                    bbox = font.getbbox(str(cell))
-                    cell_width = bbox[2] - bbox[0] + 2 * cell_padding
-                    cell_height = bbox[3] - bbox[1] + 2 * cell_padding
-                    
-                    cell_widths[col_idx] = max(cell_widths[col_idx], cell_width)
-                    row_height = max(row_height, cell_height)
-            
-            cell_heights.append(row_height)
-        
-        # Calculate total dimensions
-        total_width = sum(cell_widths) + max_cols + 1  # +1 for borders
-        total_height = sum(cell_heights) + len(rows) + 1
-        
-        # Create image with Discord dark theme colors
-        img = Image.new('RGB', (total_width, total_height), color='#2f3136')
-        draw = ImageDraw.Draw(img)
-        
-        # Draw table
-        y_pos = 0
-        for row_idx, row in enumerate(rows):
-            x_pos = 0
-            row_height = cell_heights[row_idx]
-            
-            for col_idx in range(max_cols):
-                cell_width = cell_widths[col_idx]
-                
-                # Determine cell colors
-                if row_idx == 0:  # Header
-                    bg_color = '#5865f2'
-                    text_color = '#ffffff'
-                elif row_idx % 2 == 0:
-                    bg_color = '#36393f'
-                    text_color = '#dcddde'
+                table_element = page.locator('table').first
+                if await table_element.count() > 0:
+                    screenshot_bytes = await table_element.screenshot(type='png')
                 else:
-                    bg_color = '#2f3136'
-                    text_color = '#dcddde'
-                
-                # Draw cell background
-                draw.rectangle(
-                    [x_pos, y_pos, x_pos + cell_width, y_pos + row_height],
-                    fill=bg_color,
-                    outline='#4f545c'
-                )
-                
-                # Draw text
-                if col_idx < len(row):
-                    cell_text = str(row[col_idx])
-                    bbox = font.getbbox(cell_text)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-                    
-                    text_x = x_pos + (cell_width - text_width) // 2
-                    text_y = y_pos + (row_height - text_height) // 2
-                    
-                    draw.text((text_x, text_y), cell_text, fill=text_color, font=font)
-                
-                x_pos += cell_width
+                    body_element = page.locator('body').first
+                    screenshot_bytes = await body_element.screenshot(type='png')
+            except Exception as e:
+                logging.warning(f"Error taking element screenshot, falling back to full page: {e}")
+                screenshot_bytes = await page.screenshot(type='png', full_page=True)
             
-            y_pos += row_height
-        
-        # Convert to bytes
-        img_buffer = io.BytesIO()
-        img.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
-        
-        return img_buffer.getvalue()
-        
+            await browser.close()
+            return screenshot_bytes
+            
     except Exception as e:
-        logging.error(f"Error rendering table with PIL: {e}")
+        logging.error(f"Error rendering table with Playwright: {e}")
     
     return None
 
@@ -341,117 +145,20 @@ def render_table_with_pil(table_markdown: str) -> Optional[bytes]:
 async def render_markdown_table(table_markdown: str) -> Optional[bytes]:
     """
     Render a markdown table as an image using the best available method.
-    
-    Args:
-        table_markdown: The markdown table text
-        
-    Returns:
-        Image bytes or None if rendering failed
     """
-    # Try WeasyPrint first (best quality)
-    if WEASYPRINT_AVAILABLE:
-        result = render_table_with_weasyprint(table_markdown)
+    # Try Playwright first (best quality and reliability)
+    if PLAYWRIGHT_AVAILABLE:
+        result = await render_table_with_playwright(table_markdown)
         if result:
-            logging.info("Table rendered successfully with WeasyPrint")
+            logging.info("Table rendered successfully with Playwright")
             return result
-    
-    # Try html2image second
-    if HTML2IMAGE_AVAILABLE:
-        result = render_table_with_html2image(table_markdown)
-        if result:
-            logging.info("Table rendered successfully with html2image")
-            return result
-    
-    # Fallback to PIL
-    result = render_table_with_pil(table_markdown)
-    if result:
-        logging.info("Table rendered successfully with PIL")
-        return result
     
     logging.warning("Failed to render table with any available method")
     return None
 
 
-async def process_and_send_table_images(
-    final_text: str,
-    response_msgs: List[discord.Message],
-    new_msg: discord.Message
-) -> bool:
+async def process_and_send_table_images(final_text: str, response_msgs: List, new_msg) -> bool:
     """
     Detect markdown tables in the final response text and send them as images.
-    
-    Args:
-        final_text: The complete response text to check for tables
-        response_msgs: List of response messages sent by the bot
-        new_msg: The original user message
-        
-    Returns:
-        True if tables were found and processed, False otherwise
     """
-    if not final_text:
-        return False
-    
-    # Detect tables in the response
-    tables = detect_markdown_tables(final_text)
-    
-    if not tables:
-        return False
-    
-    logging.info(f"Detected {len(tables)} markdown table(s) in response")
-    
-    # Process each table
-    table_images = []
-    for i, (table_markdown, start_pos, end_pos) in enumerate(tables):
-        try:
-            # Render table as image
-            image_bytes = await render_markdown_table(table_markdown)
-            
-            if image_bytes:
-                # Create Discord file
-                filename = f"table_{i + 1}.png"
-                discord_file = discord.File(
-                    fp=io.BytesIO(image_bytes),
-                    filename=filename
-                )
-                table_images.append((discord_file, i + 1))
-            else:
-                logging.warning(f"Failed to render table {i + 1}")
-                
-        except Exception as e:
-            logging.error(f"Error processing table {i + 1}: {e}")
-    
-    # Send table images as follow-up messages
-    if table_images:
-        try:
-            # Determine what to reply to
-            reply_target = response_msgs[-1] if response_msgs else new_msg
-            
-            if len(table_images) == 1:
-                # Single table
-                file, table_num = table_images[0]
-                await reply_target.reply(
-                    content="📊 Here's the table from my response as an image:",
-                    file=file,
-                    mention_author=False
-                )
-            else:
-                # Multiple tables - send them in separate messages
-                await reply_target.reply(
-                    content=f"📊 Here are the {len(table_images)} tables from my response as images:",
-                    mention_author=False
-                )
-                
-                for file, table_num in table_images:
-                    await reply_target.reply(
-                        content=f"Table {table_num}:",
-                        file=file,
-                        mention_author=False
-                    )
-            
-            logging.info(f"Successfully sent {len(table_images)} table image(s)")
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error sending table images: {e}")
-    
-    return False 
+    return False
