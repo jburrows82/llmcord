@@ -1,64 +1,66 @@
 import discord
-from typing import Optional
 from ..core.utils import extract_text_from_docx_bytes
 from ..bot.prompt_enhancer import execute_enhance_prompt_logic
 
 
 class PrefixCommandHandler:
     """Handles prefix-based commands like !enhanceprompt."""
-    
+
     ENHANCE_CMD_PREFIX = "!enhanceprompt"
-    
+
     @classmethod
     async def handle_enhance_prompt_command(
-        cls, 
-        message: discord.Message, 
-        bot_client
+        cls, message: discord.Message, bot_client
     ) -> bool:
         """
         Handle the !enhanceprompt prefix command.
-        
+
         Returns:
             True if the command was handled, False otherwise
         """
         if not message.content.startswith(cls.ENHANCE_CMD_PREFIX):
             return False
-            
+
         # Extract text after the command prefix
-        text_content = message.content[len(cls.ENHANCE_CMD_PREFIX):].strip()
-        
+        text_content = message.content[len(cls.ENHANCE_CMD_PREFIX) :].strip()
+
         prompt_text = ""
         processed_from_file = False
         attachment_filename = None
         initial_status_message = "⏳ Enhancing your prompt..."
-        
+
         # Process attachments if present
         if message.attachments:
-            prompt_text, processed_from_file, attachment_filename, initial_status_message = (
-                await cls._process_attachments(message.attachments, cls.ENHANCE_CMD_PREFIX)
+            (
+                prompt_text,
+                processed_from_file,
+                attachment_filename,
+                initial_status_message,
+            ) = await cls._process_attachments(
+                message.attachments, cls.ENHANCE_CMD_PREFIX
             )
             if prompt_text is None:  # Error occurred
                 return True  # Command was handled (even if it failed)
-        
+
         # Use text content if no file was processed
         if not processed_from_file:
             prompt_text = text_content
-        
+
         # Validate that we have a prompt
         if not prompt_text.strip():
             await cls._send_prompt_required_message(message, processed_from_file)
             return True
-        
+
         # Send initial status message
         try:
             await message.reply(initial_status_message, mention_author=False)
-        except discord.HTTPException as e:
+        except discord.HTTPException:
             pass
-        
+
         # Execute the enhancement logic
         await execute_enhance_prompt_logic(message, prompt_text, bot_client)
         return True
-    
+
     @staticmethod
     async def _process_attachments(attachments, command_prefix):
         """Process message attachments for text extraction."""
@@ -66,28 +68,26 @@ class PrefixCommandHandler:
         processed_from_file = False
         attachment_filename = None
         initial_status_message = "⏳ Enhancing your prompt..."
-        
+
         for attachment in attachments:
             # Check for text files
             is_text_content_type = (
-                attachment.content_type and 
-                attachment.content_type.startswith("text/")
+                attachment.content_type and attachment.content_type.startswith("text/")
             )
-            is_common_text_extension = attachment.filename.lower().endswith((
-                ".txt", ".md", ".py", ".js", ".html", ".css", 
-                ".json", ".xml", ".csv"
-            ))
-            
+            is_common_text_extension = attachment.filename.lower().endswith(
+                (".txt", ".md", ".py", ".js", ".html", ".css", ".json", ".xml", ".csv")
+            )
+
             # Check for DOCX files
             is_docx_file = (
-                attachment.content_type == 
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or
-                attachment.filename.lower().endswith(".docx")
+                attachment.content_type
+                == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                or attachment.filename.lower().endswith(".docx")
             )
-            
+
             if is_text_content_type or (
-                attachment.content_type == "application/octet-stream" and 
-                is_common_text_extension
+                attachment.content_type == "application/octet-stream"
+                and is_common_text_extension
             ):
                 try:
                     file_bytes = await attachment.read()
@@ -99,10 +99,10 @@ class PrefixCommandHandler:
                         f"`{discord.utils.escape_markdown(attachment_filename)}`..."
                     )
                     break
-                except Exception as e:
+                except Exception:
                     # Return None to indicate error
                     return None, False, None, None
-                    
+
             elif is_docx_file:
                 try:
                     file_bytes = await attachment.read()
@@ -115,14 +115,21 @@ class PrefixCommandHandler:
                             f"`{discord.utils.escape_markdown(attachment_filename)}`..."
                         )
                         break
-                except Exception as e:
+                except Exception:
                     # Return None to indicate error
                     return None, False, None, None
-        
-        return prompt_text, processed_from_file, attachment_filename, initial_status_message
-    
+
+        return (
+            prompt_text,
+            processed_from_file,
+            attachment_filename,
+            initial_status_message,
+        )
+
     @staticmethod
-    async def _send_prompt_required_message(message: discord.Message, had_attachments: bool):
+    async def _send_prompt_required_message(
+        message: discord.Message, had_attachments: bool
+    ):
         """Send appropriate error message when no prompt is provided."""
         if had_attachments:
             error_msg = (
@@ -135,5 +142,5 @@ class PrefixCommandHandler:
                 f"Please provide a prompt to enhance (either as text after "
                 f"`{PrefixCommandHandler.ENHANCE_CMD_PREFIX}` or as a text file attachment)."
             )
-        
-        await message.reply(error_msg, mention_author=False) 
+
+        await message.reply(error_msg, mention_author=False)

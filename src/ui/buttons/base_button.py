@@ -1,11 +1,17 @@
 import discord
 from discord import ui
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from ..ui import ResponseActionView
+
+
 class BaseResponseButton(ui.Button):
     """Base class for response action buttons with common functionality."""
-    async def handle_interaction_error(self, interaction: discord.Interaction, error_msg: str, ephemeral: bool = False):
+
+    async def handle_interaction_error(
+        self, interaction: discord.Interaction, error_msg: str, ephemeral: bool = False
+    ):
         """Handle interaction errors consistently."""
         try:
             if interaction.response.is_done():
@@ -14,6 +20,7 @@ class BaseResponseButton(ui.Button):
                 await interaction.response.send_message(error_msg, ephemeral=ephemeral)
         except discord.HTTPException:
             pass
+
     async def disable_button_and_respond(self, interaction: discord.Interaction):
         """Disable this button and update the view."""
         self.disabled = True
@@ -26,4 +33,4 @@ class BaseResponseButton(ui.Button):
         except discord.NotFound:
             # Message not found, defer for followup
             await interaction.response.defer()
-            return False  # Need to use followup 
+            return False  # Need to use followup

@@ -1,39 +1,39 @@
 import asyncio
 import logging
 
-# Disable all logging immediately for maximum performance
-logging.disable(logging.CRITICAL)
-
 from src.core.logging_config import setup_logging
 from src.core.app_lifecycle import AppLifecycleManager
+
+# Disable all logging immediately for maximum performance
+logging.disable(logging.CRITICAL)
 
 
 async def main():
     """Main entry point for the LLMCord bot."""
     # Initialize logging first (but it's already disabled for performance)
     setup_logging()
-    
+
     logger = logging.getLogger(__name__)
     logger.info("Starting LLMCord bot...")
-    
+
     print("🤖 LLMCord bot is starting...")
-    
+
     lifecycle_manager = AppLifecycleManager()
-    
+
     try:
         # Initialize configuration
         if not await lifecycle_manager.initialize_config():
             return 1
-        
-        # Create and configure Discord client
-        client = lifecycle_manager.create_discord_client()
-        
+
+        # Create and configure Discord client (stored in lifecycle_manager)
+        lifecycle_manager.create_discord_client()
+
         # Log invite URL
         lifecycle_manager.log_invite_url()
-        
+
         # Start the bot
         await lifecycle_manager.start_bot()
-        
+
     except KeyboardInterrupt:
         logger.info("Bot stopped by user (KeyboardInterrupt)")
     except Exception as e:
@@ -42,7 +42,7 @@ async def main():
     finally:
         # Graceful shutdown
         await lifecycle_manager.shutdown()
-    
+
     return 0
 
 

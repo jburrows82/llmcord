@@ -1,6 +1,7 @@
 """
 Configuration defaults and template values for LLMCord.
 """
+
 # Alternative Search Query Generation Defaults
 ALT_SEARCH_SECTION_KEY = "alternative_search_query_generation"
 ALT_SEARCH_ENABLED_KEY = "enabled"
@@ -142,7 +143,9 @@ DEFAULT_AUTO_RENDER_MARKDOWN_TABLES = True
 # Text Limits Defaults
 DEFAULT_MAX_TEXT_KEY = "default_max_text"
 MODEL_SPECIFIC_MAX_TEXT_KEY = "model_specific_max_text"
-DEFAULT_MAX_TEXT_SAFETY_MARGIN = 5000  # Fixed amount (not percentage) to match original behavior
+DEFAULT_MAX_TEXT_SAFETY_MARGIN = (
+    5000  # Fixed amount (not percentage) to match original behavior
+)
 DEFAULT_MIN_TOKEN_LIMIT_AFTER_SAFETY_MARGIN = 1000
 DEFAULT_MAX_TEXT_VALUE = 128000  # Match original default of 128k tokens
 # Rate Limiting Defaults
@@ -157,4 +160,4 @@ DEFAULT_OUTPUT_SHARING_CONFIG = {
     "url_shortener_enabled": False,
     "url_shortener_service": "tinyurl",
     "cleanup_on_shutdown": True,
-} 
+}

@@ -6,12 +6,17 @@ from ..core.constants import (
     MAX_EMBED_DESCRIPTION_LENGTH,
     AllKeysFailedError,
 )
+
+
 class StreamErrorHandler:
     """Handles various error scenarios during streaming."""
+
     pass
+
     def __init__(self, client, app_config: Dict[str, Any]):
         self.client = client
         self.app_config = app_config
+
     async def handle_stream_error(
         self,
         new_msg: discord.Message,
@@ -21,7 +26,11 @@ class StreamErrorHandler:
         use_plain_responses_config: bool,
     ):
         """Handles errors that occur mid-stream."""
-        if not use_plain_responses_config and response_msgs and response_msgs[-1].embeds:
+        if (
+            not use_plain_responses_config
+            and response_msgs
+            and response_msgs[-1].embeds
+        ):
             try:
                 embed = response_msgs[-1].embeds[0]
                 embed.description = (
@@ -31,7 +40,7 @@ class StreamErrorHandler:
                 embed.description = embed.description[:MAX_EMBED_DESCRIPTION_LENGTH]
                 embed.color = EMBED_COLOR_ERROR
                 await response_msgs[-1].edit(embed=embed, view=None)
-            except Exception as edit_err:
+            except Exception:
                 # Fallback reply
                 target = (
                     processing_msg
@@ -45,9 +54,12 @@ class StreamErrorHandler:
         else:
             error_text_plain = f"⚠️ Error during response generation: {error_message}"
             if processing_msg:
-                await processing_msg.edit(content=error_text_plain, embed=None, view=None)
+                await processing_msg.edit(
+                    content=error_text_plain, embed=None, view=None
+                )
             else:
                 await new_msg.reply(error_text_plain, mention_author=False)
+
     async def handle_llm_exception(
         self,
         new_msg: discord.Message,
@@ -90,7 +102,9 @@ class StreamErrorHandler:
                         view=None,
                     )
         elif (
-            not use_plain_responses_stream and response_msgs and response_msgs[-1].embeds
+            not use_plain_responses_stream
+            and response_msgs
+            and response_msgs[-1].embeds
         ):  # No processing_msg, but stream had embeds
             target_edit_msg = response_msgs[-1]
             embed_to_edit = discord.Embed.from_dict(target_edit_msg.embeds[0].to_dict())
@@ -106,6 +120,7 @@ class StreamErrorHandler:
             await target_edit_msg.edit(embed=embed_to_edit, view=None)
         else:  # Fallback: No processing_msg and no stream to edit, send new reply
             await new_msg.reply(error_text, mention_author=False)
+
     async def handle_all_keys_failed(
         self,
         new_msg: discord.Message,
@@ -127,6 +142,7 @@ class StreamErrorHandler:
             use_plain_responses_config,
             self.client.config.get("use_plain_responses", False),
         )
+
     async def handle_unexpected_error(
         self,
         new_msg: discord.Message,
@@ -145,4 +161,4 @@ class StreamErrorHandler:
             error_text,
             use_plain_responses_config,
             self.client.config.get("use_plain_responses", False),
-        ) 
+        )

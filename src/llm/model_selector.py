@@ -68,9 +68,7 @@ def determine_final_model(
         user_warnings.add(
             f"⚠️ Invalid model format '{final_provider_slash_model}'. Using default."
         )
-        final_provider_slash_model = (
-            "google/gemini-2.5-flash"  # Hard fallback
-        )
+        final_provider_slash_model = "google/gemini-2.5-flash"  # Hard fallback
         provider, model_name = final_provider_slash_model.split("/", 1)
 
     logging.info(

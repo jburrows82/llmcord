@@ -74,7 +74,6 @@ async def share_to_textis(
             should_close = False
 
         try:
-
             logging.debug(f"Fetching initial page from {base_url} to get CSRF token.")
             response_get = await client.get(base_url)
             response_get.raise_for_status()
@@ -87,7 +86,6 @@ async def share_to_textis(
                 return None
             csrf_token = csrf_token_input["value"]
             logging.debug(f"Found CSRF token: {csrf_token}")
-
 
             payload = {
                 "csrfmiddlewaretoken": csrf_token,
@@ -117,7 +115,6 @@ async def share_to_textis(
                 logging.debug(
                     f"Determined final URL from response_post.url (after potential redirects): {final_url}"
                 )
-
 
             if (
                 not final_url.startswith(base_url)
@@ -179,7 +176,6 @@ async def share_text_content(
         return None
 
     logging.info(f"Successfully shared to text.is: {public_url}")
-
 
     shortener_enabled = output_sharing_cfg.get(URL_SHORTENER_ENABLED_CONFIG_KEY, False)
     shortener_service = output_sharing_cfg.get(

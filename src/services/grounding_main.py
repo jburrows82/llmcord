@@ -38,17 +38,22 @@ from ..content.fetchers import (
 )
 from ..core.utils import is_youtube_url, is_reddit_url, extract_reddit_submission_id
 from .grounding.api_client import fetch_batch_queries_from_web_content_api
-from .grounding.query_generation import (
-    get_web_search_queries_from_gemini,
-    generate_search_queries_with_custom_prompt,
-)
+
 Config = Dict[str, Any]
-def _format_api_content(api_results_data: List[Dict[str, Any]], query_str: str) -> Optional[str]:
+
+
+def _format_api_content(
+    api_results_data: List[Dict[str, Any]], query_str: str
+) -> Optional[str]:
     """Format API results into a readable string."""
     formatted_results = []
     pass
     for idx, item in enumerate(api_results_data):
-        if not (item.get("processed_successfully") and item.get("data") and not item.get("error")):
+        if not (
+            item.get("processed_successfully")
+            and item.get("data")
+            and not item.get("error")
+        ):
             continue
             pass
         url = item.get("url", "N/A")
@@ -64,20 +69,26 @@ def _format_api_content(api_results_data: List[Dict[str, Any]], query_str: str) 
             result_parts.append(f"  Channel: {discord.utils.escape_markdown(channel)}")
             transcript = data.get("transcript")
             if transcript:
-                result_parts.append(f"  Transcript: {discord.utils.escape_markdown(transcript)}")
+                result_parts.append(
+                    f"  Transcript: {discord.utils.escape_markdown(transcript)}"
+                )
         elif source_type == "reddit":
             title = data.get("post_title", "N/A")
             result_parts.append(f"  Title: {discord.utils.escape_markdown(title)}")
             body = data.get("post_body")
             if body:
-                result_parts.append(f"  Post Body: {discord.utils.escape_markdown(body)}")
+                result_parts.append(
+                    f"  Post Body: {discord.utils.escape_markdown(body)}"
+                )
         elif source_type in ["pdf", "webpage"]:
             title = data.get("title")
             if title:
                 result_parts.append(f"  Title: {discord.utils.escape_markdown(title)}")
             content = data.get("text_content")
             if content:
-                result_parts.append(f"  Content: {discord.utils.escape_markdown(content)}")
+                result_parts.append(
+                    f"  Content: {discord.utils.escape_markdown(content)}"
+                )
         else:
             content_str = str(data)
             result_parts.append(f"  Data: {discord.utils.escape_markdown(content_str)}")
@@ -88,16 +99,32 @@ def _format_api_content(api_results_data: List[Dict[str, Any]], query_str: str) 
         return header + "\n\n---\n\n".join(formatted_results)
     pass
     return None
+
+
 async def _fetch_via_external_api(
     queries: List[str], config: Config, httpx_client: httpx.AsyncClient
 ) -> Tuple[Optional[str], int]:
     """Fetch content via external web content API."""
-    api_url = config.get(WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY, DEFAULT_WEB_CONTENT_EXTRACTION_API_URL)
-    api_max_results = config.get(WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY, DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS)
+    api_url = config.get(
+        WEB_CONTENT_EXTRACTION_API_URL_CONFIG_KEY,
+        DEFAULT_WEB_CONTENT_EXTRACTION_API_URL,
+    )
+    api_max_results = config.get(
+        WEB_CONTENT_EXTRACTION_API_MAX_RESULTS_CONFIG_KEY,
+        DEFAULT_WEB_CONTENT_EXTRACTION_API_MAX_RESULTS,
+    )
     max_char_per_url = config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY)
-    cache_ttl_minutes = config.get(WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY, DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL)
+    cache_ttl_minutes = config.get(
+        WEB_CONTENT_EXTRACTION_API_CACHE_TTL_CONFIG_KEY,
+        DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL,
+    )
     api_results = await fetch_batch_queries_from_web_content_api(
-        queries, httpx_client, api_url, api_max_results, max_char_per_url, cache_ttl_minutes
+        queries,
+        httpx_client,
+        api_url,
+        api_max_results,
+        max_char_per_url,
+        cache_ttl_minutes,
     )
     formatted_contexts = []
     successful_count = 0
@@ -113,8 +140,11 @@ async def _fetch_via_external_api(
             pass
         # Count successful results
         successful_count += sum(
-            1 for item in results_data
-            if item.get("processed_successfully") and item.get("data") and not item.get("error")
+            1
+            for item in results_data
+            if item.get("processed_successfully")
+            and item.get("data")
+            and not item.get("error")
         )
         formatted_content = _format_api_content(results_data, query_str)
         if formatted_content:
@@ -124,7 +154,11 @@ async def _fetch_via_external_api(
         final_context = header + "\n\n=====\n\n".join(formatted_contexts)
         return final_context.strip(), successful_count
     return None, successful_count
-def _format_searxng_content(content_result: models.UrlFetchResult, url_counter: int, limit: Optional[int]) -> Optional[str]:
+
+
+def _format_searxng_content(
+    content_result: models.UrlFetchResult, url_counter: int, limit: Optional[int]
+) -> Optional[str]:
     """Format a single SearxNG content result."""
     if not content_result or not content_result.content or content_result.error:
         return None
@@ -141,7 +175,9 @@ def _format_searxng_content(content_result: models.UrlFetchResult, url_counter: 
         if transcript:
             if limit and len(transcript) > limit:
                 transcript = transcript[: limit - 3] + "..."
-            content_parts.append(f"  transcript: {discord.utils.escape_markdown(transcript)}")
+            content_parts.append(
+                f"  transcript: {discord.utils.escape_markdown(transcript)}"
+            )
     elif content_result.type == "reddit" and isinstance(content_result.content, dict):
         data = content_result.content
         title = data.get("title", "N/A")
@@ -151,7 +187,9 @@ def _format_searxng_content(content_result: models.UrlFetchResult, url_counter: 
         if selftext:
             if limit and len(selftext) > limit:
                 selftext = selftext[: limit - 3] + "..."
-            content_parts.append(f"  content: {discord.utils.escape_markdown(selftext)}")
+            content_parts.append(
+                f"  content: {discord.utils.escape_markdown(selftext)}"
+            )
     elif content_result.type == "general" and isinstance(content_result.content, str):
         content_str = discord.utils.escape_markdown(content_result.content)
         content_parts.append(content_str)
@@ -165,8 +203,13 @@ def _format_searxng_content(content_result: models.UrlFetchResult, url_counter: 
         return f"URL {url_counter}: {content_result.url}\nURL {url_counter} content:\n{content_body.strip()}\n"
     pass
     return None
+
+
 async def _fetch_via_searxng(
-    queries: List[str], user_query_for_log: str, config: Config, httpx_client: httpx.AsyncClient
+    queries: List[str],
+    user_query_for_log: str,
+    config: Config,
+    httpx_client: httpx.AsyncClient,
 ) -> Tuple[Optional[str], int]:
     """Fetch content via SearxNG and direct content fetchers."""
     searxng_base_url = config.get(SEARXNG_BASE_URL_CONFIG_KEY)
@@ -175,7 +218,12 @@ async def _fetch_via_searxng(
     content_limit = config.get(SEARXNG_URL_CONTENT_MAX_LENGTH_CONFIG_KEY)
     # Fetch SearxNG URLs for all queries concurrently
     searxng_tasks = [
-        fetch_searxng_results(query, httpx_client, searxng_base_url, config.get(SEARXNG_NUM_RESULTS_CONFIG_KEY, 5))
+        fetch_searxng_results(
+            query,
+            httpx_client,
+            searxng_base_url,
+            config.get(SEARXNG_NUM_RESULTS_CONFIG_KEY, 5),
+        )
         for query in queries
     ]
     try:
@@ -196,29 +244,50 @@ async def _fetch_via_searxng(
     content_tasks = []
     for idx, url in enumerate(list(unique_urls)):
         if is_youtube_url(url):
-            content_tasks.append(fetch_youtube_data(url, idx, config.get("youtube_api_key")))
+            content_tasks.append(
+                fetch_youtube_data(url, idx, config.get("youtube_api_key"))
+            )
         elif is_reddit_url(url):
             submission_id = extract_reddit_submission_id(url)
             if submission_id:
                 content_tasks.append(
                     fetch_reddit_data(
-                        url, submission_id, idx, 
-                        config.get("reddit_client_id"), 
-                        config.get("reddit_client_secret"), 
-                        config.get("reddit_user_agent")
+                        url,
+                        submission_id,
+                        idx,
+                        config.get("reddit_client_id"),
+                        config.get("reddit_client_secret"),
+                        config.get("reddit_user_agent"),
                     )
                 )
         else:
             content_tasks.append(
                 fetch_general_url_content(
-                    url, idx, httpx_client,
-                    main_extractor=config.get(MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY, DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR),
-                    fallback_extractor=config.get(FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY, DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR),
+                    url,
+                    idx,
+                    httpx_client,
+                    main_extractor=config.get(
+                        MAIN_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+                        DEFAULT_MAIN_GENERAL_URL_CONTENT_EXTRACTOR,
+                    ),
+                    fallback_extractor=config.get(
+                        FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR_CONFIG_KEY,
+                        DEFAULT_FALLBACK_GENERAL_URL_CONTENT_EXTRACTOR,
+                    ),
                     max_text_length=content_limit,
-                    jina_engine_mode=config.get(JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE),
-                    jina_wait_for_selector=config.get(JINA_WAIT_FOR_SELECTOR_CONFIG_KEY, DEFAULT_JINA_WAIT_FOR_SELECTOR),
-                    jina_timeout=config.get(JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT),
-                    crawl4ai_cache_mode=config.get(CRAWL4AI_CACHE_MODE_CONFIG_KEY, DEFAULT_CRAWL4AI_CACHE_MODE),
+                    jina_engine_mode=config.get(
+                        JINA_ENGINE_MODE_CONFIG_KEY, DEFAULT_JINA_ENGINE_MODE
+                    ),
+                    jina_wait_for_selector=config.get(
+                        JINA_WAIT_FOR_SELECTOR_CONFIG_KEY,
+                        DEFAULT_JINA_WAIT_FOR_SELECTOR,
+                    ),
+                    jina_timeout=config.get(
+                        JINA_TIMEOUT_CONFIG_KEY, DEFAULT_JINA_TIMEOUT
+                    ),
+                    crawl4ai_cache_mode=config.get(
+                        CRAWL4AI_CACHE_MODE_CONFIG_KEY, DEFAULT_CRAWL4AI_CACHE_MODE
+                    ),
                 )
             )
     try:
@@ -244,7 +313,9 @@ async def _fetch_via_searxng(
                 continue
                 pass
             content_result = url_to_content.get(url)
-            formatted_content = _format_searxng_content(content_result, url_counter, content_limit)
+            formatted_content = _format_searxng_content(
+                content_result, url_counter, content_limit
+            )
             pass
             if formatted_content:
                 query_content_parts.append(formatted_content)
@@ -254,9 +325,14 @@ async def _fetch_via_searxng(
             formatted_blocks.append(header + "\n".join(query_content_parts))
             query_counter += 1
     if formatted_blocks:
-        final_context = "Answer the user's query based on the following:\n\n" + "\n\n".join(formatted_blocks)
+        final_context = (
+            "Answer the user's query based on the following:\n\n"
+            + "\n\n".join(formatted_blocks)
+        )
         return final_context.strip(), 0
     return None, 0
+
+
 async def fetch_and_format_searxng_results(
     queries: List[str],
     user_query_for_log: str,
@@ -270,9 +346,14 @@ async def fetch_and_format_searxng_results(
     if not queries:
         return None, 0
     # Check if External Web Content API is enabled
-    api_enabled = config.get(WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY, DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED)
+    api_enabled = config.get(
+        WEB_CONTENT_EXTRACTION_API_ENABLED_CONFIG_KEY,
+        DEFAULT_WEB_CONTENT_EXTRACTION_API_ENABLED,
+    )
     pass
     if api_enabled:
         return await _fetch_via_external_api(queries, config, httpx_client)
     else:
-        return await _fetch_via_searxng(queries, user_query_for_log, config, httpx_client) 
+        return await _fetch_via_searxng(
+            queries, user_query_for_log, config, httpx_client
+        )

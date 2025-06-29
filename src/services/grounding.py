@@ -338,7 +338,7 @@ async def get_web_search_queries_from_gemini(
                             logging.debug(
                                 f"Gemini grounding produced search query: '{query.strip()}'"
                             )
-                    
+
                     # Return search queries immediately when found
                     if all_web_search_queries:
                         logging.info(
@@ -398,7 +398,9 @@ async def get_web_search_queries_from_gemini_force_stop(
     Calls Gemini to get web search queries from its grounding metadata.
     Forcefully stops the stream immediately after getting search queries to minimize API usage.
     """
-    logging.info("Attempting to get web search queries from Gemini for grounding (force-stop mode)...")
+    logging.info(
+        "Attempting to get web search queries from Gemini for grounding (force-stop mode)..."
+    )
     grounding_model_str = config.get(
         GROUNDING_MODEL_CONFIG_KEY, "google/gemini-2.5-flash"
     )
@@ -481,7 +483,9 @@ async def get_web_search_queries_from_gemini_force_stop(
                 _,
             ) in stream_generator:
                 if error_message:
-                    logging.error(f"Error during Gemini grounding call: {error_message}")
+                    logging.error(
+                        f"Error during Gemini grounding call: {error_message}"
+                    )
                     return None  # Abort on first error
 
                 if chunk_grounding_metadata:
@@ -495,7 +499,7 @@ async def get_web_search_queries_from_gemini_force_stop(
                                 logging.debug(
                                     f"Gemini grounding produced search query: '{query.strip()}'"
                                 )
-                        
+
                         # Force stop by breaking and closing the generator
                         if all_web_search_queries:
                             logging.info(
@@ -509,7 +513,9 @@ async def get_web_search_queries_from_gemini_force_stop(
                             return list(all_web_search_queries)
 
         except asyncio.CancelledError:
-            logging.info("Gemini grounding stream was cancelled after getting search queries.")
+            logging.info(
+                "Gemini grounding stream was cancelled after getting search queries."
+            )
             if all_web_search_queries:
                 return list(all_web_search_queries)
             return None

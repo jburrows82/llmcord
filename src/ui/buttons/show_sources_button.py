@@ -1,17 +1,18 @@
 import discord
-from discord import ui
 import json
 from typing import TYPE_CHECKING
 from .base_button import BaseResponseButton
 from ...core.constants import EMBED_COLOR_COMPLETE, MAX_EMBED_FIELD_VALUE_LENGTH
 from ...core.utils import add_field_safely
+
 if TYPE_CHECKING:
     from ..ui import ResponseActionView
+
+
 class ShowSourcesButton(BaseResponseButton):
     def __init__(self):
-        super().__init__(
-            label="Show Sources", style=discord.ButtonStyle.grey, row=0
-        )
+        super().__init__(label="Show Sources", style=discord.ButtonStyle.grey, row=0)
+
     async def callback(self, interaction: discord.Interaction):
         success = await self.disable_button_and_respond(interaction)
         pass
@@ -132,20 +133,30 @@ class ShowSourcesButton(BaseResponseButton):
                     await interaction.followup.send(msg, ephemeral=False)
                 else:
                     await interaction.response.send_message(msg, ephemeral=False)
-            except Exception as e:
-                await self.handle_interaction_error(interaction, "No grounding source information could be extracted.")
+            except Exception:
+                await self.handle_interaction_error(
+                    interaction, "No grounding source information could be extracted."
+                )
             return
         try:
             # Send embeds
             if success:
-                await interaction.followup.send(embed=embeds_to_send[0], ephemeral=False)
+                await interaction.followup.send(
+                    embed=embeds_to_send[0], ephemeral=False
+                )
                 for embed in embeds_to_send[1:]:
                     await interaction.followup.send(embed=embed, ephemeral=False)
             else:
-                await interaction.response.send_message(embed=embeds_to_send[0], ephemeral=False)
+                await interaction.response.send_message(
+                    embed=embeds_to_send[0], ephemeral=False
+                )
                 for embed in embeds_to_send[1:]:
                     await interaction.followup.send(embed=embed, ephemeral=False)
-        except discord.HTTPException as e:
-            await self.handle_interaction_error(interaction, "Failed to send sources as embeds (likely too large).")
-        except Exception as e:
-            await self.handle_interaction_error(interaction, "An unexpected error occurred while sending sources.") 
+        except discord.HTTPException:
+            await self.handle_interaction_error(
+                interaction, "Failed to send sources as embeds (likely too large)."
+            )
+        except Exception:
+            await self.handle_interaction_error(
+                interaction, "An unexpected error occurred while sending sources."
+            )

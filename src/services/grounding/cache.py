@@ -1,8 +1,11 @@
 import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Tuple
+
 # Simple in-memory cache for API responses
 _api_response_cache: Dict[str, Tuple[Dict[str, Any], datetime, int]] = {}
+
+
 def get_cache_key(
     query: str,
     api_url: str,
@@ -12,6 +15,8 @@ def get_cache_key(
     """Generate a cache key for API requests."""
     key_data = f"{query}|{api_url}|{api_max_results}|{max_char_per_url}"
     return hashlib.md5(key_data.encode()).hexdigest()
+
+
 def get_cached_response(
     cache_key: str, cache_ttl_minutes: int
 ) -> Optional[Dict[str, Any]]:
@@ -25,6 +30,8 @@ def get_cached_response(
             # Remove expired cache entry
             del _api_response_cache[cache_key]
     return None
+
+
 def cache_response(
     cache_key: str, response: Dict[str, Any], cache_ttl_minutes: int
 ) -> None:
@@ -33,6 +40,8 @@ def cache_response(
     # Periodically clean up expired entries (every 100 cache operations)
     if len(_api_response_cache) > 0 and len(_api_response_cache) % 100 == 0:
         cleanup_expired_cache()
+
+
 def cleanup_expired_cache() -> None:
     """Remove expired entries from the cache."""
     current_time = datetime.now()

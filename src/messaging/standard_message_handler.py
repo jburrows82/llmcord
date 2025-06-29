@@ -1,5 +1,4 @@
-import time
-from typing import Dict, Set, Tuple, Any, List
+from typing import List
 import discord
 from google.genai import types as google_types
 from ..core import models
@@ -14,16 +13,26 @@ from ..core.constants import (
     AT_AI_PATTERN,
 )
 from ..core.config_loader import get_max_text_for_model
-from ..core.utils import extract_urls_with_indices, is_image_url, extract_text_from_pdf_bytes
+from ..core.utils import (
+    extract_urls_with_indices,
+    is_image_url,
+    extract_text_from_pdf_bytes,
+)
 from ..llm.model_selector import determine_final_model
 from ..messaging.message_parser import clean_message_content, check_google_lens_trigger
 from ..content.processor import process_content_and_grounding
-from ..bot.user_preferences import get_user_system_prompt_preference, get_user_gemini_thinking_budget_preference
+from ..bot.user_preferences import (
+    get_user_system_prompt_preference,
+    get_user_gemini_thinking_budget_preference,
+)
 from ..services.prompt_utils import prepare_system_prompt
 from ..messaging.response_sender import handle_llm_response_stream, resend_imgur_urls
 from ..messaging.history_utils import build_message_history
+
+
 class StandardMessageHandler:
     """Handles standard message processing (non-prefix, non-deep-search)."""
+
     @staticmethod
     async def process_standard_message(
         message: discord.Message,
@@ -32,7 +41,7 @@ class StandardMessageHandler:
         bot_client,
         start_time: float,
         disable_grounding: bool = False,
-        is_deep_search: bool = False
+        is_deep_search: bool = False,
     ) -> None:
         """Process a standard message through the full LLM pipeline."""
         # Clean content and check for Google Lens
@@ -42,21 +51,24 @@ class StandardMessageHandler:
             isinstance(message.channel, discord.DMChannel),
         )
         image_attachments = [
-            att for att in message.attachments 
+            att
+            for att in message.attachments
             if att.content_type and att.content_type.startswith("image/")
         ]
         user_warnings = set()
-        
+
         use_google_lens, cleaned_content, lens_warning = check_google_lens_trigger(
             cleaned_content, image_attachments, bot_client.config
         )
         if lens_warning:
             user_warnings.add(lens_warning)
         user_id = message.author.id
-        
+
         # Determine potential image URLs in text
-        has_potential_image_urls_in_text = await StandardMessageHandler._check_image_urls_in_content(
-            cleaned_content, message
+        has_potential_image_urls_in_text = (
+            await StandardMessageHandler._check_image_urls_in_content(
+                cleaned_content, message
+            )
         )
         # Determine final model
         (
@@ -84,11 +96,14 @@ class StandardMessageHandler:
                 cleaned_content = GOOGLE_LENS_PATTERN.sub("", cleaned_content).strip()
         # Basic config assignments
         max_files_per_message = bot_client.config.get("max_images", 5)
-        max_tokens_for_text_config = get_max_text_for_model(bot_client.config, final_provider_slash_model)
+        max_tokens_for_text_config = get_max_text_for_model(
+            bot_client.config, final_provider_slash_model
+        )
         max_messages = bot_client.config.get("max_messages", 25)
         use_plain_responses = bot_client.config.get("use_plain_responses", False)
         split_limit = (
-            MAX_EMBED_DESCRIPTION_LENGTH if not use_plain_responses 
+            MAX_EMBED_DESCRIPTION_LENGTH
+            if not use_plain_responses
             else MAX_PLAIN_TEXT_LENGTH
         )
         # Content processing and grounding (disable for deep search)
@@ -173,11 +188,17 @@ class StandardMessageHandler:
         base_system_prompt_text = get_user_system_prompt_preference(
             message.author.id, default_system_prompt_from_config
         )
-        system_prompt_text = prepare_system_prompt(is_gemini, provider, base_system_prompt_text)
+        system_prompt_text = prepare_system_prompt(
+            is_gemini, provider, base_system_prompt_text
+        )
         extra_api_params = bot_client.config.get("extra_api_parameters", {}).copy()
         if is_gemini:
-            global_use_thinking_budget = bot_client.config.get(GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False)
-            global_thinking_budget_value = bot_client.config.get(GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0)
+            global_use_thinking_budget = bot_client.config.get(
+                GEMINI_USE_THINKING_BUDGET_CONFIG_KEY, False
+            )
+            global_thinking_budget_value = bot_client.config.get(
+                GEMINI_THINKING_BUDGET_VALUE_CONFIG_KEY, 0
+            )
             user_wants_thinking_budget = get_user_gemini_thinking_budget_preference(
                 message.author.id, global_use_thinking_budget
             )
@@ -208,35 +229,51 @@ class StandardMessageHandler:
         )
         # Cleanup and finalization
         await StandardMessageHandler._cleanup_and_finalize(
-            bot_client, message, response_msgs, llm_call_successful, 
-            final_text, start_time
+            bot_client,
+            message,
+            response_msgs,
+            llm_call_successful,
+            final_text,
+            start_time,
         )
+
     @staticmethod
-    async def _check_image_urls_in_content(cleaned_content: str, message: discord.Message) -> bool:
+    async def _check_image_urls_in_content(
+        cleaned_content: str, message: discord.Message
+    ) -> bool:
         """Check if there are potential image URLs in the content or replied messages."""
         has_potential_image_urls_in_text = False
         if cleaned_content:
             urls_in_text_for_image_check = extract_urls_with_indices(cleaned_content)
-            if any(is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check):
+            if any(
+                is_image_url(url_info[0]) for url_info in urls_in_text_for_image_check
+            ):
                 has_potential_image_urls_in_text = True
         # Also check for image URLs in replied-to messages
         if (
-            not has_potential_image_urls_in_text and 
-            message.reference and 
-            message.reference.message_id
+            not has_potential_image_urls_in_text
+            and message.reference
+            and message.reference.message_id
         ):
             try:
                 referenced_msg = message.reference.cached_message
                 if not referenced_msg:
                     # Properly await the async fetch
-                    referenced_msg = await message.channel.fetch_message(message.reference.message_id)
+                    referenced_msg = await message.channel.fetch_message(
+                        message.reference.message_id
+                    )
                 if referenced_msg and referenced_msg.content:
-                    urls_in_replied_msg = extract_urls_with_indices(referenced_msg.content)
-                    if any(is_image_url(url_info[0]) for url_info in urls_in_replied_msg):
+                    urls_in_replied_msg = extract_urls_with_indices(
+                        referenced_msg.content
+                    )
+                    if any(
+                        is_image_url(url_info[0]) for url_info in urls_in_replied_msg
+                    ):
                         has_potential_image_urls_in_text = True
             except (discord.NotFound, discord.HTTPException, Exception):
                 pass
         return has_potential_image_urls_in_text
+
     @staticmethod
     async def _cleanup_and_finalize(
         bot_client,
@@ -244,7 +281,7 @@ class StandardMessageHandler:
         response_msgs: List[discord.Message],
         llm_call_successful: bool,
         final_text: str,
-        start_time: float
+        start_time: float,
     ) -> None:
         """Handle cleanup and finalization tasks."""
         try:
@@ -258,11 +295,12 @@ class StandardMessageHandler:
                     if llm_call_successful:
                         async with node.lock:
                             node.full_response_text = final_text
-            max_nodes_from_config = bot_client.config.get(MAX_MESSAGE_NODES_CONFIG_KEY, 500)
+            max_nodes_from_config = bot_client.config.get(
+                MAX_MESSAGE_NODES_CONFIG_KEY, 500
+            )
             if (num_nodes := len(bot_client.msg_nodes)) > max_nodes_from_config:
                 nodes_to_delete = sorted(bot_client.msg_nodes.keys())[
                     : num_nodes - max_nodes_from_config
                 ]
                 for msg_id in nodes_to_delete:
                     bot_client.msg_nodes.pop(msg_id, None)
-            end_time = time.time()

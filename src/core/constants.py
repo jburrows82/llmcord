@@ -216,7 +216,7 @@ AVAILABLE_MODELS = {
     "openai": [
         "gpt-4.1",
         "o4-mini",
-        "gpt-4o"
+        "gpt-4o",
         # Add other OpenAI models as needed/supported
     ],
     "x-ai": [

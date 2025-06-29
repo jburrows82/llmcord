@@ -1,4 +1,3 @@
-import base64
 import logging
 import random
 import json
@@ -7,35 +6,14 @@ from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple
 from datetime import date  # Specifically for enhance_prompt_with_llm
 
 # OpenAI specific imports
-from openai import (
-    APIError,
-    RateLimitError,
-    AuthenticationError,
-    APIConnectionError,
-    BadRequestError,
-    UnprocessableEntityError,
-)
 
 # Google Gemini specific imports
-from google.genai import (
-    types as google_types,
-)  # Re-add for type hints and internal logic
-from google.api_core import (
-    exceptions as google_api_exceptions,
-)  # Re-add for exception handling
 
 from ..core.constants import (
     AllKeysFailedError,
     PROMPT_ENHANCER_SYSTEM_PROMPT_CONFIG_KEY,  # New
 )
 from ..core.rate_limiter import get_db_manager, get_available_keys
-from ..core.image_utils import compress_images_in_history
-from .providers.gemini_provider import (
-    generate_gemini_stream,
-    generate_gemini_image_stream,
-)
-from .providers.imagen_provider import generate_imagen_image_stream  # NEW
-from .providers.openai_provider import generate_openai_stream
 
 from .handler_utils import (
     format_history_for_gemini,
@@ -72,22 +50,28 @@ async def generate_response_stream(
     compression_occurred = False
     final_quality = 100
     final_resize = 1.0
-    
+
     # Determine API keys and validate configuration
     is_imagen_model = provider == "google" and model_name.startswith("imagen-")
-    all_api_keys = provider_config.get("billed_api_keys" if is_imagen_model else "api_keys", [])
+    all_api_keys = provider_config.get(
+        "billed_api_keys" if is_imagen_model else "api_keys", []
+    )
     base_url = provider_config.get("base_url")
-    
+
     keys_required = provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]
-    
+
     if keys_required and not all_api_keys:
-        raise ValueError(f"No API keys configured for the selected provider '{provider}' which requires keys.")
+        raise ValueError(
+            f"No API keys configured for the selected provider '{provider}' which requires keys."
+        )
 
     available_llm_keys = await get_available_keys(provider, all_api_keys, app_config)
     llm_db_manager = await get_db_manager(provider)
 
     if keys_required and not available_llm_keys:
-        raise AllKeysFailedError(provider, ["No available (non-rate-limited) API keys."])
+        raise AllKeysFailedError(
+            provider, ["No available (non-rate-limited) API keys."]
+        )
 
     random.shuffle(available_llm_keys)
     keys_to_loop = available_llm_keys if keys_required else ["dummy_key"]
@@ -95,13 +79,23 @@ async def generate_response_stream(
 
     # Try each API key
     for key_index, current_api_key in enumerate(keys_to_loop):
-        key_display = f"...{current_api_key[-4:]}" if current_api_key != "dummy_key" else "N/A (keyless)"
-        logging.info(f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index + 1}/{len(keys_to_loop)})")
+        key_display = (
+            f"...{current_api_key[-4:]}"
+            if current_api_key != "dummy_key"
+            else "N/A (keyless)"
+        )
+        logging.info(
+            f"Attempting LLM request with provider '{provider}' using key {key_display} ({key_index + 1}/{len(keys_to_loop)})"
+        )
 
         # Format history for current provider
         is_gemini = provider == "google"
-        current_history_for_api_call = format_history_for_gemini(history_for_llm) if is_gemini else format_history_for_openai(history_for_llm)
-        
+        current_history_for_api_call = (
+            format_history_for_gemini(history_for_llm)
+            if is_gemini
+            else format_history_for_openai(history_for_llm)
+        )
+
         # Handle compression retry logic
         try:
             async for result in handle_compression_retry(
@@ -124,7 +118,7 @@ async def generate_response_stream(
                 if result is None:
                     # This key failed, try next key
                     break
-                
+
                 yield result
             else:
                 # The async for completed without breaking, meaning stream finished successfully
@@ -135,7 +129,9 @@ async def generate_response_stream(
             continue
 
     # All keys failed
-    logging.error(f"All LLM API keys failed for provider '{provider}'. Errors: {json.dumps(llm_errors)}")
+    logging.error(
+        f"All LLM API keys failed for provider '{provider}'. Errors: {json.dumps(llm_errors)}"
+    )
     raise AllKeysFailedError(provider, llm_errors)
 
 
@@ -180,7 +176,9 @@ Improved Prompt:"""
         {"role": "user", "content": enhancement_user_prompt_content}
     ]
 
-    logging.info(f"Attempting to enhance prompt using {provider}/{model_name} with instructions as user prompt.")
+    logging.info(
+        f"Attempting to enhance prompt using {provider}/{model_name} with instructions as user prompt."
+    )
 
     # Use the existing generate_response_stream function
     async for chunk_tuple in generate_response_stream(

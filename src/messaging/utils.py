@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 import discord
+
+
 @asynccontextmanager
 async def safe_typing(channel: discord.abc.Messageable):
     """A drop-in replacement for `channel.typing()` that swallows 403 errors."""
@@ -17,4 +19,4 @@ async def safe_typing(channel: discord.abc.Messageable):
             yield
         else:
             # Re-raise unexpected HTTP errors so they are still surfaced.
-            raise 
+            raise

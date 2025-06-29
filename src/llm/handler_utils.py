@@ -9,7 +9,6 @@ from openai import (
     AuthenticationError,
     APIConnectionError,
     BadRequestError,
-    UnprocessableEntityError,
 )
 
 # Google Gemini specific imports
@@ -17,20 +16,27 @@ from google.genai import types as google_types
 from google.api_core import exceptions as google_api_exceptions
 
 from ..core.image_utils import compress_images_in_history
-from .providers.gemini_provider import generate_gemini_stream, generate_gemini_image_stream
+from .providers.gemini_provider import (
+    generate_gemini_stream,
+    generate_gemini_image_stream,
+)
 from .providers.imagen_provider import generate_imagen_image_stream
 from .providers.openai_provider import generate_openai_stream
 
 
-def format_history_for_gemini(history_for_llm: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def format_history_for_gemini(
+    history_for_llm: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """Convert history format from OpenAI to Gemini format."""
     current_history_for_api_call = []
-    
+
     for msg_index, original_msg_data in enumerate(history_for_llm):
         gemini_parts_for_this_msg = []
         source_parts_or_content = None
-        
-        if "parts" in original_msg_data and isinstance(original_msg_data["parts"], list):
+
+        if "parts" in original_msg_data and isinstance(
+            original_msg_data["parts"], list
+        ):
             source_parts_or_content = original_msg_data["parts"]
         elif "content" in original_msg_data:
             openai_content = original_msg_data["content"]
@@ -39,10 +45,14 @@ def format_history_for_gemini(history_for_llm: List[Dict[str, Any]]) -> List[Dic
             elif isinstance(openai_content, list):
                 source_parts_or_content = openai_content
             else:
-                logging.warning(f"Msg {msg_index} has 'content' of unexpected type {type(openai_content)}. Skipping.")
+                logging.warning(
+                    f"Msg {msg_index} has 'content' of unexpected type {type(openai_content)}. Skipping."
+                )
                 continue
         else:
-            logging.warning(f"Msg {msg_index} has neither 'parts' nor 'content'. Skipping.")
+            logging.warning(
+                f"Msg {msg_index} has neither 'parts' nor 'content'. Skipping."
+            )
             continue
 
         for part_idx, part_item in enumerate(source_parts_or_content):
@@ -57,24 +67,42 @@ def format_history_for_gemini(history_for_llm: List[Dict[str, Any]]) -> List[Dic
                 elif part_type == "image_url":
                     image_url_dict = part_item.get("image_url", {})
                     data_url = image_url_dict.get("url")
-                    if isinstance(data_url, str) and data_url.startswith("data:image") and ";base64," in data_url:
+                    if (
+                        isinstance(data_url, str)
+                        and data_url.startswith("data:image")
+                        and ";base64," in data_url
+                    ):
                         try:
                             header, encoded_data = data_url.split(";base64,", 1)
-                            mime_type_str = header.split(":")[1] if ":" in header else "image/png"
+                            mime_type_str = (
+                                header.split(":")[1] if ":" in header else "image/png"
+                            )
                             img_bytes = base64.b64decode(encoded_data)
                             gemini_parts_for_this_msg.append(
-                                google_types.Part.from_bytes(data=img_bytes, mime_type=mime_type_str)
+                                google_types.Part.from_bytes(
+                                    data=img_bytes, mime_type=mime_type_str
+                                )
                             )
                         except Exception as e:
-                            logging.warning(f"Error converting OpenAI image_url part: {e}. Skipping part.")
+                            logging.warning(
+                                f"Error converting OpenAI image_url part: {e}. Skipping part."
+                            )
                     else:
-                        logging.warning(f"Invalid data URL in OpenAI image_url part. Skipping part.")
+                        logging.warning(
+                            "Invalid data URL in OpenAI image_url part. Skipping part."
+                        )
                 else:
-                    logging.warning(f"Unsupported OpenAI part type '{part_type}'. Skipping part.")
+                    logging.warning(
+                        f"Unsupported OpenAI part type '{part_type}'. Skipping part."
+                    )
             elif isinstance(part_item, str):
-                gemini_parts_for_this_msg.append(google_types.Part.from_text(text=part_item))
+                gemini_parts_for_this_msg.append(
+                    google_types.Part.from_text(text=part_item)
+                )
             else:
-                logging.warning(f"Unsupported part item type {type(part_item)}. Skipping part.")
+                logging.warning(
+                    f"Unsupported part item type {type(part_item)}. Skipping part."
+                )
 
         if gemini_parts_for_this_msg:
             # Map OpenAI roles to Gemini roles
@@ -84,17 +112,23 @@ def format_history_for_gemini(history_for_llm: List[Dict[str, Any]]) -> List[Dic
             elif original_msg_data["role"] == "system":
                 gemini_role = "user"  # Use "user" for system, as Gemini doesn't have a system role
 
-            current_history_for_api_call.append({
-                "role": gemini_role,
-                "parts": gemini_parts_for_this_msg,
-            })
+            current_history_for_api_call.append(
+                {
+                    "role": gemini_role,
+                    "parts": gemini_parts_for_this_msg,
+                }
+            )
         else:
-            logging.warning(f"Msg {msg_index} resulted in no valid Gemini parts. Skipping.")
-    
+            logging.warning(
+                f"Msg {msg_index} resulted in no valid Gemini parts. Skipping."
+            )
+
     return current_history_for_api_call
 
 
-def format_history_for_openai(history_for_llm: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def format_history_for_openai(
+    history_for_llm: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """Return a copy of history for OpenAI-compatible providers."""
     return [msg.copy() for msg in history_for_llm]
 
@@ -161,103 +195,122 @@ async def process_stream_chunks(
     """Process chunks from the stream generator and return status flags."""
     is_blocked_by_safety = False
     is_stopped_by_recitation = False
-    content_received = False
-    chunk_processed_successfully = False
     stream_finish_reason = None
-    stream_grounding_metadata = None
-    last_error_type = None
 
     if is_image_generation_model:
-        async for (text_chunk, chunk_finish_reason, chunk_grounding_metadata, 
-                  error_msg_chunk, image_data, image_mime_type) in stream_generator_func:
-            chunk_processed_successfully = False
-
+        async for (
+            text_chunk,
+            chunk_finish_reason,
+            chunk_grounding_metadata,
+            error_msg_chunk,
+            image_data,
+            image_mime_type,
+        ) in stream_generator_func:
             if error_msg_chunk:
-                llm_errors.append(f"Key {key_display}: Provider Stream Error - {error_msg_chunk}")
-                last_error_type = "provider_stream_error"
+                llm_errors.append(
+                    f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
+                )
 
-                if ("rate limit" in error_msg_chunk.lower() or 
-                    "resourceexhausted" in error_msg_chunk.lower()):
+                if (
+                    "rate limit" in error_msg_chunk.lower()
+                    or "resourceexhausted" in error_msg_chunk.lower()
+                ):
                     if current_api_key != "dummy_key":
                         await llm_db_manager.add_key(current_api_key)
-                    last_error_type = "rate_limit"
-                elif error_msg_chunk.lower() in ["jsondecodeerror", "stream timeout error"]:
-                    last_error_type = "stream_corruption"
+                elif error_msg_chunk.lower() in [
+                    "jsondecodeerror",
+                    "stream timeout error",
+                ]:
+                    pass
                 break
 
             if chunk_finish_reason:
                 stream_finish_reason = chunk_finish_reason
             if chunk_grounding_metadata:
-                stream_grounding_metadata = chunk_grounding_metadata
+                pass  # Grounding metadata available but not currently used
 
             if text_chunk or image_data:
-                content_received = True
                 if not is_blocked_by_safety and not is_stopped_by_recitation:
                     yield (text_chunk, None, None, None, image_data, image_mime_type)
-
-            chunk_processed_successfully = True
 
             if stream_finish_reason:
                 if stream_finish_reason.lower() == "safety":
                     is_blocked_by_safety = True
-                    last_error_type = "safety"
-                    llm_errors.append(f"Key {key_display}: Response Blocked (Safety via provider)")
+                    llm_errors.append(
+                        f"Key {key_display}: Response Blocked (Safety via provider)"
+                    )
                 elif stream_finish_reason.lower() == "recitation":
                     is_stopped_by_recitation = True
-                    last_error_type = "recitation"
-                    llm_errors.append(f"Key {key_display}: Response Stopped (Recitation via provider)")
+                    llm_errors.append(
+                        f"Key {key_display}: Response Stopped (Recitation via provider)"
+                    )
                 break
     else:
-        async for (text_chunk, chunk_finish_reason, chunk_grounding_metadata,
-                  error_msg_chunk, image_data, image_mime_type) in stream_generator_func:
-            chunk_processed_successfully = False
-
+        async for (
+            text_chunk,
+            chunk_finish_reason,
+            chunk_grounding_metadata,
+            error_msg_chunk,
+            image_data,
+            image_mime_type,
+        ) in stream_generator_func:
             if error_msg_chunk:
                 if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE":
                     if not is_gemini:
                         logging.warning(f"OpenAI API Error 413 for key {key_display}")
-                        last_error_type = "api_413"
                         break
                 elif error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422":
                     if not is_gemini:
-                        logging.warning(f"OpenAI Unprocessable Entity (422) for key {key_display}")
-                        last_error_type = "unprocessable_entity"
-                        yield (None, None, None, "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY", None, None)
+                        logging.warning(
+                            f"OpenAI Unprocessable Entity (422) for key {key_display}"
+                        )
+                        yield (
+                            None,
+                            None,
+                            None,
+                            "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY",
+                            None,
+                            None,
+                        )
                         return
 
-                llm_errors.append(f"Key {key_display}: Provider Stream Error - {error_msg_chunk}")
-                last_error_type = "provider_stream_error"
+                llm_errors.append(
+                    f"Key {key_display}: Provider Stream Error - {error_msg_chunk}"
+                )
 
-                if ("rate limit" in error_msg_chunk.lower() or 
-                    "resourceexhausted" in error_msg_chunk.lower()):
+                if (
+                    "rate limit" in error_msg_chunk.lower()
+                    or "resourceexhausted" in error_msg_chunk.lower()
+                ):
                     if current_api_key != "dummy_key":
                         await llm_db_manager.add_key(current_api_key)
-                    last_error_type = "rate_limit"
-                elif error_msg_chunk.lower() in ["jsondecodeerror", "stream timeout error"]:
-                    last_error_type = "stream_corruption"
+                elif error_msg_chunk.lower() in [
+                    "jsondecodeerror",
+                    "stream timeout error",
+                ]:
+                    pass
                 break
 
             if chunk_finish_reason:
                 stream_finish_reason = chunk_finish_reason
             if chunk_grounding_metadata:
-                stream_grounding_metadata = chunk_grounding_metadata
+                pass  # Grounding metadata available but not currently used
 
             if text_chunk:
-                content_received = True
                 if not is_blocked_by_safety and not is_stopped_by_recitation:
                     yield text_chunk, None, None, None, None, None
-
-            chunk_processed_successfully = True
 
             if stream_finish_reason:
                 if stream_finish_reason.lower() == "safety":
                     is_blocked_by_safety = True
-                    last_error_type = "safety"
-                    llm_errors.append(f"Key {key_display}: Response Blocked (Safety via provider)")
+                    llm_errors.append(
+                        f"Key {key_display}: Response Blocked (Safety via provider)"
+                    )
                 elif stream_finish_reason.lower() == "recitation":
                     is_stopped_by_recitation = True
-                    last_error_type = "recitation"
-                    llm_errors.append(f"Key {key_display}: Response Stopped (Recitation via provider)")
+                    llm_errors.append(
+                        f"Key {key_display}: Response Stopped (Recitation via provider)"
+                    )
                 break
 
     # Function ends naturally - async generator complete
@@ -285,19 +338,20 @@ async def handle_compression_retry(
     max_compression_attempts = 5
     current_compression_quality = 90
     current_resize_factor = 1.0
-    
-    history_for_current_compression_cycle = [msg.copy() for msg in current_history_for_api_call]
-    
+
+    history_for_current_compression_cycle = [
+        msg.copy() for msg in current_history_for_api_call
+    ]
+
     is_image_generation_model = is_gemini and (
-        model_name == "gemini-2.0-flash-preview-image-generation" or 
-        model_name.startswith("imagen-")
+        model_name == "gemini-2.0-flash-preview-image-generation"
+        or model_name.startswith("imagen-")
     )
 
     while compression_attempt < max_compression_attempts:
         is_blocked_by_safety = False
         is_stopped_by_recitation = False
         content_received = False
-        chunk_processed_successfully = False
         stream_finish_reason = None
         stream_grounding_metadata = None
 
@@ -331,7 +385,9 @@ async def handle_compression_retry(
                     )
             else:  # OpenAI compatible
                 stream_generator_func = generate_openai_stream(
-                    api_key=(current_api_key if current_api_key != "dummy_key" else None),
+                    api_key=(
+                        current_api_key if current_api_key != "dummy_key" else None
+                    ),
                     base_url=base_url,
                     model_name=model_name,
                     history_for_api_call=history_for_current_compression_cycle,
@@ -342,22 +398,44 @@ async def handle_compression_retry(
 
             # Process stream - yield all chunks, then handle completion
             stream_error_occurred = False
-            
-            async for (text_chunk, chunk_finish_reason, chunk_grounding_metadata,
-                      error_msg_chunk, image_data, image_mime_type) in stream_generator_func:
-                
+
+            async for (
+                text_chunk,
+                chunk_finish_reason,
+                chunk_grounding_metadata,
+                error_msg_chunk,
+                image_data,
+                image_mime_type,
+            ) in stream_generator_func:
                 if error_msg_chunk:
                     # Handle specific error conditions
-                    if error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE" and not is_gemini:
+                    if (
+                        error_msg_chunk == "OPENAI_API_ERROR_413_PAYLOAD_TOO_LARGE"
+                        and not is_gemini
+                    ):
                         stream_error_occurred = True
                         break  # Will trigger compression retry
-                    elif error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422" and not is_gemini:
-                        yield (None, None, None, "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY", None, None)
+                    elif (
+                        error_msg_chunk == "OPENAI_UNPROCESSABLE_ENTITY_422"
+                        and not is_gemini
+                    ):
+                        yield (
+                            None,
+                            None,
+                            None,
+                            "RETRY_WITH_FALLBACK_MODEL_UNPROCESSABLE_ENTITY",
+                            None,
+                            None,
+                        )
                         return
 
-                    llm_errors.append(f"Key {key_display}: Stream Error - {error_msg_chunk}")
-                    if ("rate limit" in error_msg_chunk.lower() or 
-                        "resourceexhausted" in error_msg_chunk.lower()):
+                    llm_errors.append(
+                        f"Key {key_display}: Stream Error - {error_msg_chunk}"
+                    )
+                    if (
+                        "rate limit" in error_msg_chunk.lower()
+                        or "resourceexhausted" in error_msg_chunk.lower()
+                    ):
                         if current_api_key != "dummy_key":
                             await llm_db_manager.add_key(current_api_key)
                     stream_error_occurred = True
@@ -374,50 +452,97 @@ async def handle_compression_retry(
                     content_received = True
                     if not is_blocked_by_safety and not is_stopped_by_recitation:
                         if is_image_generation_model:
-                            yield (text_chunk, None, None, None, image_data, image_mime_type)
+                            yield (
+                                text_chunk,
+                                None,
+                                None,
+                                None,
+                                image_data,
+                                image_mime_type,
+                            )
                         else:
                             yield (text_chunk, None, None, None, None, None)
-
-                chunk_processed_successfully = True
 
                 # Check for safety/recitation blocks
                 if stream_finish_reason:
                     if stream_finish_reason.lower() == "safety":
                         is_blocked_by_safety = True
-                        yield (None, "safety", stream_grounding_metadata, 
-                              "Response blocked by safety.", None, None)
+                        yield (
+                            None,
+                            "safety",
+                            stream_grounding_metadata,
+                            "Response blocked by safety.",
+                            None,
+                            None,
+                        )
                         return
                     elif stream_finish_reason.lower() == "recitation":
                         is_stopped_by_recitation = True
-                        yield (None, "recitation", stream_grounding_metadata,
-                              "Response stopped by recitation.", None, None)
+                        yield (
+                            None,
+                            "recitation",
+                            stream_grounding_metadata,
+                            "Response stopped by recitation.",
+                            None,
+                            None,
+                        )
                         return
-            
+
             # If there was a stream error, handle compression retry
             if stream_error_occurred:
                 continue  # Go to compression retry logic
 
             # After the stream processing loop, handle completion
             if stream_finish_reason and content_received:
-                is_successful_finish = stream_finish_reason.lower() in ("stop", "end_turn") or (
-                    is_gemini and stream_finish_reason == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
+                is_successful_finish = stream_finish_reason.lower() in (
+                    "stop",
+                    "end_turn",
+                ) or (
+                    is_gemini
+                    and stream_finish_reason
+                    == str(google_types.FinishReason.FINISH_REASON_UNSPECIFIED)
                 )
-                is_acceptable_with_content = stream_finish_reason.lower() in ("content_filter", "length", "max_tokens")
+                is_acceptable_with_content = stream_finish_reason.lower() in (
+                    "content_filter",
+                    "length",
+                    "max_tokens",
+                )
 
                 if is_successful_finish or is_acceptable_with_content:
                     if compression_occurred:
                         quality_pct = final_quality
                         resize_pct = int(final_resize * 100)
                         user_warning = f"⚠️ Image at {quality_pct}% quality, resized to {resize_pct}%"
-                        yield (None, None, None, None, None, f"COMPRESSION_INFO:{user_warning}")
+                        yield (
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            f"COMPRESSION_INFO:{user_warning}",
+                        )
 
-                    yield (None, stream_finish_reason, stream_grounding_metadata, None, None, None)
+                    yield (
+                        None,
+                        stream_finish_reason,
+                        stream_grounding_metadata,
+                        None,
+                        None,
+                        None,
+                    )
                     return
 
             # Handle stream ending with content but no finish reason
             if content_received and not stream_finish_reason:
                 if not is_gemini:
-                    yield (None, None, stream_grounding_metadata, "RETRY_WITH_GEMINI_NO_FINISH_REASON", None, None)
+                    yield (
+                        None,
+                        None,
+                        stream_grounding_metadata,
+                        "RETRY_WITH_GEMINI_NO_FINISH_REASON",
+                        None,
+                        None,
+                    )
                     return
                 else:
                     yield (None, "stop", stream_grounding_metadata, None, None, None)
@@ -425,17 +550,24 @@ async def handle_compression_retry(
 
             # If we get here without content or finish reason, try compression or next key
             if not content_received and not stream_finish_reason:
-                logging.warning(f"No content or finish reason for key {key_display}, trying next compression attempt or key")
+                logging.warning(
+                    f"No content or finish reason for key {key_display}, trying next compression attempt or key"
+                )
                 break
 
         except APIError as e:
             if not is_gemini and hasattr(e, "status_code") and e.status_code == 413:
                 compression_attempt += 1
                 if compression_attempt >= max_compression_attempts:
-                    llm_errors.append(f"Key {key_display}: Max compression retries failed.")
+                    llm_errors.append(
+                        f"Key {key_display}: Max compression retries failed."
+                    )
                     break
 
-                (history_for_current_compression_cycle, history_was_modified) = await compress_images_in_history(
+                (
+                    history_for_current_compression_cycle,
+                    history_was_modified,
+                ) = await compress_images_in_history(
                     history=current_history_for_api_call,
                     is_gemini_provider=False,
                     compression_quality=current_compression_quality,
@@ -446,7 +578,9 @@ async def handle_compression_retry(
                     compression_occurred = True
                     final_quality = min(final_quality, current_compression_quality)
                     final_resize = min(final_resize, current_resize_factor)
-                    current_compression_quality = max(10, current_compression_quality - 20)
+                    current_compression_quality = max(
+                        10, current_compression_quality - 20
+                    )
                     current_resize_factor = max(0.2, current_resize_factor - 0.15)
                     continue
                 else:
@@ -470,7 +604,10 @@ async def handle_compression_retry(
                 if compression_attempt >= max_compression_attempts:
                     break
 
-                (history_for_current_compression_cycle, history_was_modified) = await compress_images_in_history(
+                (
+                    history_for_current_compression_cycle,
+                    history_was_modified,
+                ) = await compress_images_in_history(
                     history=current_history_for_api_call,
                     is_gemini_provider=True,
                     compression_quality=current_compression_quality,
@@ -481,7 +618,9 @@ async def handle_compression_retry(
                     compression_occurred = True
                     final_quality = min(final_quality, current_compression_quality)
                     final_resize = min(final_resize, current_resize_factor)
-                    current_compression_quality = max(10, current_compression_quality - 20)
+                    current_compression_quality = max(
+                        10, current_compression_quality - 20
+                    )
                     current_resize_factor = max(0.2, current_resize_factor - 0.15)
                     continue
                 else:
@@ -491,30 +630,45 @@ async def handle_compression_retry(
                 break
 
         except Exception as e:
-            llm_errors.append(f"Key {key_display}: Unexpected Error - {type(e).__name__}")
+            llm_errors.append(
+                f"Key {key_display}: Unexpected Error - {type(e).__name__}"
+            )
             break
 
     yield None  # Signal that this key failed
 
 
-def handle_api_errors(e: Exception, provider: str, key_display: str, is_gemini: bool, 
-                     llm_errors: List[str], current_api_key: str, llm_db_manager) -> str:
+def handle_api_errors(
+    e: Exception,
+    provider: str,
+    key_display: str,
+    is_gemini: bool,
+    llm_errors: List[str],
+    current_api_key: str,
+    llm_db_manager,
+) -> str:
     """Handle various API errors and return error type."""
     if isinstance(e, (RateLimitError, google_api_exceptions.ResourceExhausted)):
-        logging.warning(f"Rate limit hit for provider '{provider}' with key {key_display}")
+        logging.warning(
+            f"Rate limit hit for provider '{provider}' with key {key_display}"
+        )
         if current_api_key != "dummy_key":
             llm_db_manager.add_key(current_api_key)
         llm_errors.append(f"Key {key_display}: Rate Limited")
         return "rate_limit"
     elif isinstance(e, (AuthenticationError, google_api_exceptions.PermissionDenied)):
-        logging.error(f"Authentication failed for provider '{provider}' with key {key_display}")
+        logging.error(
+            f"Authentication failed for provider '{provider}' with key {key_display}"
+        )
         llm_errors.append(f"Key {key_display}: Authentication Failed")
         return "auth_failed"
     elif isinstance(e, (APIConnectionError, google_api_exceptions.ServiceUnavailable)):
-        logging.warning(f"Connection error for provider '{provider}' with key {key_display}")
+        logging.warning(
+            f"Connection error for provider '{provider}' with key {key_display}"
+        )
         llm_errors.append(f"Key {key_display}: Connection Error")
         return "connection"
     else:
         logging.exception(f"Unexpected error with key {key_display}")
         llm_errors.append(f"Key {key_display}: Unexpected Error")
-        return "unexpected" 
+        return "unexpected"

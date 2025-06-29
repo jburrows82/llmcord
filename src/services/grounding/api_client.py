@@ -4,7 +4,10 @@ from typing import List, Dict, Any, Optional
 import httpx
 from ...core.constants import DEFAULT_WEB_CONTENT_EXTRACTION_API_CACHE_TTL
 from .cache import get_cache_key, get_cached_response, cache_response
+
 MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS = 10
+
+
 async def fetch_single_query_from_web_content_api(
     query_item_str: str,
     client: httpx.AsyncClient,
@@ -29,14 +32,16 @@ async def fetch_single_query_from_web_content_api(
         if api_response_json.get("error"):
             return None  # API indicated an error for this specific query
         return api_response_json
-    except httpx.RequestError as e:
+    except httpx.RequestError:
         return None
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPStatusError:
         return None
-    except json.JSONDecodeError as e:  # If response.json() fails
+    except json.JSONDecodeError:  # If response.json() fails
         return None
-    except Exception as e_generic:  # Catch other unexpected errors during the fetch
+    except Exception:  # Catch other unexpected errors during the fetch
         return None
+
+
 async def fetch_batch_queries_from_web_content_api(
     queries: List[str],
     client: httpx.AsyncClient,
@@ -66,12 +71,14 @@ async def fetch_batch_queries_from_web_content_api(
         return results
     # Pass 2 – perform the actual network requests, constrained by a semaphore.
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_WEB_CONTENT_API_REQUESTS)
+
     async def _sem_fetch(q: str) -> Optional[Dict[str, Any]]:
         """Wrapper that enforces the concurrency limit via *semaphore*."""
         async with semaphore:
             return await fetch_single_query_from_web_content_api(
                 q, client, api_url, api_max_results, max_char_per_url
             )
+
     # Kick off tasks for every unique uncached query.
     fetch_tasks = {
         query: asyncio.create_task(_sem_fetch(query))
@@ -89,11 +96,9 @@ async def fetch_batch_queries_from_web_content_api(
         result_payload: Optional[Dict[str, Any]] = task.result()
         if result_payload is not None:
             # Cache the successful response so future batches can reuse it.
-            cache_key = get_cache_key(
-                query, api_url, api_max_results, max_char_per_url
-            )
+            cache_key = get_cache_key(query, api_url, api_max_results, max_char_per_url)
             cache_response(cache_key, result_payload, cache_ttl_minutes)
         # Assign the fetched result (whatever it is) to every original index
         for idx in uncached_query_to_indices[query]:
             results[idx] = result_payload
-    return results 
+    return results

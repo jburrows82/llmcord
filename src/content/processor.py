@@ -343,16 +343,18 @@ async def process_content_and_grounding(
                 )
                 # Choose between immediate return (default) or force-stop (aggressive)
                 use_force_stop = config.get(
-                    GROUNDING_FORCE_STOP_OPTIMIZATION_CONFIG_KEY, 
-                    DEFAULT_GROUNDING_FORCE_STOP_OPTIMIZATION
+                    GROUNDING_FORCE_STOP_OPTIMIZATION_CONFIG_KEY,
+                    DEFAULT_GROUNDING_FORCE_STOP_OPTIMIZATION,
                 )
-                
+
                 if use_force_stop:
-                    web_search_queries = await get_web_search_queries_from_gemini_force_stop(
-                        history_for_gemini_grounding,
-                        system_prompt_for_grounding,
-                        config,
-                        generate_response_stream,
+                    web_search_queries = (
+                        await get_web_search_queries_from_gemini_force_stop(
+                            history_for_gemini_grounding,
+                            system_prompt_for_grounding,
+                            config,
+                            generate_response_stream,
+                        )
                     )
                 else:
                     web_search_queries = await get_web_search_queries_from_gemini(

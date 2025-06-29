@@ -1,5 +1,3 @@
-
-
 """Shared HTTPX client utilities.
 
 This module exposes a single `get_httpx_client` function that returns a **singleton**

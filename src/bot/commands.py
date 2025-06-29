@@ -19,7 +19,9 @@ from .prompt_enhancer import execute_enhance_prompt_logic
 logger = logging.getLogger(__name__)
 
 
-async def model_autocomplete(interaction: discord.Interaction, current: str) -> List[Choice[str]]:
+async def model_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> List[Choice[str]]:
     """Autocompletes the model argument with combined provider/model_name."""
     choices = []
     for provider_name, models in AVAILABLE_MODELS.items():
@@ -61,8 +63,10 @@ async def set_model_command(interaction: discord.Interaction, model_full_name: s
 
     user_id = interaction.user.id
     await save_model_preference(user_id, model_full_name)
-    
-    logger.info(f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}")
+
+    logger.info(
+        f"User {user_id} ({interaction.user.name}) set model preference to: {model_full_name}"
+    )
     await interaction.response.send_message(
         f"Your LLM model has been set to `{model_full_name}`.", ephemeral=False
     )
@@ -82,7 +86,9 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
     try:
         if prompt.lower() == "reset":
             await save_system_prompt_preference(user_id, None)
-            logger.info(f"User {user_id} ({interaction.user.name}) reset their system prompt to default.")
+            logger.info(
+                f"User {user_id} ({interaction.user.name}) reset their system prompt to default."
+            )
             await interaction.response.send_message(
                 "Your system prompt has been reset to the default.", ephemeral=False
             )
@@ -99,7 +105,9 @@ async def set_system_prompt_command(interaction: discord.Interaction, prompt: st
 
     except Exception as e:
         logger.exception(f"Error in set_system_prompt_command for user {user_id}: {e}")
-        await _send_error_response(interaction, "An error occurred while setting your system prompt.")
+        await _send_error_response(
+            interaction, "An error occurred while setting your system prompt."
+        )
 
 
 @app_commands.describe(
@@ -115,8 +123,10 @@ async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
 
     try:
         await save_gemini_thinking_preference(user_id, enabled)
-        logger.info(f"User {user_id} ({interaction.user.name}) set Gemini thinking budget usage to: {enabled}")
-        
+        logger.info(
+            f"User {user_id} ({interaction.user.name}) set Gemini thinking budget usage to: {enabled}"
+        )
+
         status_message = "enabled" if enabled else "disabled"
         await interaction.response.send_message(
             f"Your preference for Gemini 'thinkingBudget' has been set to **{status_message}**.",
@@ -125,7 +135,10 @@ async def setgeminithinking(interaction: discord.Interaction, enabled: bool):
 
     except Exception as e:
         logger.exception(f"Error in setgeminithinking command for user {user_id}: {e}")
-        await _send_error_response(interaction, "An error occurred while setting your Gemini thinking budget preference.")
+        await _send_error_response(
+            interaction,
+            "An error occurred while setting your Gemini thinking budget preference.",
+        )
 
 
 async def help_command(interaction: discord.Interaction):
@@ -164,7 +177,9 @@ async def help_command(interaction: discord.Interaction):
             name=cmd_info["name"], value=cmd_info["value"], inline=cmd_info["inline"]
         )
 
-    embed.set_footer(text="Use these commands to customize your interaction with the bot.")
+    embed.set_footer(
+        text="Use these commands to customize your interaction with the bot."
+    )
 
     try:
         await interaction.response.send_message(embed=embed, ephemeral=False)
@@ -179,8 +194,12 @@ async def help_command(interaction: discord.Interaction):
 async def enhance_prompt_command(interaction: discord.Interaction, prompt: str):
     """Enhances a given prompt using an LLM based on predefined strategies."""
     if not hasattr(interaction.client, "config"):
-        logger.error("Client object does not have a 'config' attribute for enhance_prompt_command.")
-        await interaction.response.send_message("Bot configuration error.", ephemeral=True)
+        logger.error(
+            "Client object does not have a 'config' attribute for enhance_prompt_command."
+        )
+        await interaction.response.send_message(
+            "Bot configuration error.", ephemeral=True
+        )
         return
 
     await interaction.response.defer(ephemeral=False, thinking=True)
@@ -201,11 +220,11 @@ async def _send_error_response(interaction: discord.Interaction, message: str):
 # Export the preference getter functions for use by other modules
 __all__ = [
     "load_all_preferences",
-    "get_user_model_preference", 
+    "get_user_model_preference",
     "get_user_system_prompt_preference",
     "get_user_gemini_thinking_budget_preference",
     "set_model_command",
-    "set_system_prompt_command", 
+    "set_system_prompt_command",
     "setgeminithinking",
     "help_command",
     "enhance_prompt_command",
