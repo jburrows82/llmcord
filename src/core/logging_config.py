@@ -27,19 +27,20 @@ def setup_logging(log_level: str = "INFO", log_file: str = "logs/llmcord_errors.
     # Clear existing handlers to avoid duplicates
     logger.handlers.clear()
 
-    # Console Handler
+    # Console Handler - only show warnings, errors, and critical messages
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(log_formatter)
     logger.addHandler(console_handler)
 
-    # File Handler for errors and warnings
+    # File Handler for warnings, errors and critical messages
     try:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        file_handler.setLevel(logging.WARNING)
+        file_handler.setLevel(logging.WARNING)  # Log warnings, errors and critical messages to file
         file_handler.setFormatter(log_formatter)
         logger.addHandler(file_handler)
     except (OSError, IOError) as e:
-        logging.warning(f"Could not create log file {log_file}: {e}")
+        print(f"Could not create log file {log_file}: {e}")  # Use print since logging might not be available yet
 
     # Suppress noisy third-party loggers
     logging.getLogger("discord.http").setLevel(logging.WARNING)

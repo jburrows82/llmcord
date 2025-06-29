@@ -4,9 +4,6 @@ import logging
 from src.core.logging_config import setup_logging
 from src.core.app_lifecycle import AppLifecycleManager
 
-# Disable all logging immediately for maximum performance
-logging.disable(logging.CRITICAL)
-
 
 async def main():
     """Main entry point for the LLMCord bot."""
@@ -36,8 +33,10 @@ async def main():
 
     except KeyboardInterrupt:
         logger.info("Bot stopped by user (KeyboardInterrupt)")
+        print("🛑 Bot stopped by user")
     except Exception as e:
-        logger.critical(f"Critical error in main: {e}", exc_info=True)
+        logger.error(f"Critical error in main: {e}", exc_info=True)
+        print(f"❌ Critical error: {e}")
         return 1
     finally:
         # Graceful shutdown
@@ -51,8 +50,10 @@ if __name__ == "__main__":
         exit_code = asyncio.run(main())
         exit(exit_code)
     except KeyboardInterrupt:
+        print("🛑 Application interrupted by user")
         logging.info("Application interrupted by user")
         exit(0)
     except Exception as e:
-        logging.critical(f"Fatal error: {e}", exc_info=True)
+        print(f"❌ Fatal error: {e}")
+        logging.error(f"Fatal error: {e}", exc_info=True)
         exit(1)
